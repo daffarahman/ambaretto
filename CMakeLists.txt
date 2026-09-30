@@ -7,16 +7,42 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(RAYLIB REQUIRED IMPORTED_TARGET raylib)
-pkg_check_modules(BULLET REQUIRED IMPORTED_TARGET bullet)
 
-add_library(vehicle_physics src/vehicle.cpp)
+# Build a pinned, static Jolt library with the same compiler as the game.
+include(FetchContent)
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+set(GENERATE_DEBUG_SYMBOLS ON CACHE BOOL "" FORCE)
+set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
+set(TARGET_HELLO_WORLD OFF CACHE BOOL "" FORCE)
+set(TARGET_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "" FORCE)
+set(TARGET_SAMPLES OFF CACHE BOOL "" FORCE)
+set(TARGET_VIEWER OFF CACHE BOOL "" FORCE)
+set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
+set(PROFILER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
+set(USE_AVX OFF CACHE BOOL "" FORCE)
+set(USE_AVX2 OFF CACHE BOOL "" FORCE)
+set(USE_AVX512 OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(Jolt
+    URL https://codeload.github.com/jrouwe/JoltPhysics/zip/refs/tags/v5.4.0
+    URL_HASH SHA256=a0d6ce05bc1be14a9e596de10abbaf4b6fbbb1237125d14afc8974b542bb2dec
+    SOURCE_SUBDIR Build
+    DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+)
+FetchContent_MakeAvailable(Jolt)
+
+add_library(vehicle_physics src/vehicle.cpp src/environment.cpp)
 target_include_directories(vehicle_physics PUBLIC include)
-target_link_libraries(vehicle_physics PUBLIC PkgConfig::BULLET)
+target_include_directories(vehicle_physics SYSTEM PUBLIC $<TARGET_PROPERTY:Jolt,INTERFACE_INCLUDE_DIRECTORIES>)
+target_link_libraries(vehicle_physics PUBLIC Jolt)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vehicle_physics PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_executable(forzaambazon src/main.cpp)
+add_executable(forzaambazon src/main.cpp src/environment_renderer.cpp)
 target_link_libraries(forzaambazon PRIVATE vehicle_physics PkgConfig::RAYLIB)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(forzaambazon PRIVATE -Wall -Wextra -Wpedantic)

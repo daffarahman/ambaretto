@@ -1,84 +1,75 @@
 #pragma once
 
-#include <btBulletDynamicsCommon.h>
+#include <Jolt/Jolt.h>
+#include <Jolt/Math/Vec3.h>
+#include <Jolt/Math/Quat.h>
+#include <Jolt/Physics/Body/BodyID.h>
 #include <array>
 #include <memory>
-#include <vector>
 
 namespace forza {
-
-inline constexpr btScalar fixed_step = btScalar(1.0 / 120.0);
-inline constexpr btScalar wheel_radius = btScalar(0.34);
-inline constexpr btScalar chassis_offset = btScalar(0.5);
+class Environment;
+using Vec3 = JPH::Vec3;
+using Quat = JPH::Quat;
+inline constexpr float fixed_step = 1.0f / 120.0f;
+inline constexpr float wheel_radius = 0.34f;
+inline constexpr float chassis_offset = 0.5f;
 
 struct Input {
-    btScalar throttle = 0;
-    btScalar steer = 0; // Positive turns left; the car faces local -Z.
+    float throttle = 0;
+    float steer = 0; // Positive turns left; the car faces local -Z.
     bool handbrake = false;
 };
-
 struct Wheel {
-    btVector3 mount{0, 0, 0};
+    Vec3 mount{0, 0, 0};
     bool front = false;
-    btVector3 center{0, 0, 0};
-    btVector3 ground_point{0, 0, 0};
-    btVector3 ground_normal{0, 1, 0};
+    Vec3 center{0, 0, 0};
+    Vec3 ground_point{0, 0, 0};
+    Vec3 ground_normal{0, 1, 0};
     bool grounded = false;
     bool skidding = false;
-    btScalar compression = 0;
-    btScalar spin = 0;
+    float compression = 0;
+    float spin = 0;
 };
-
 struct GroundHit {
-    btVector3 point{0, 0, 0};
-    btVector3 normal{0, 1, 0};
-    btScalar distance = 0;
+    Vec3 point{0, 0, 0};
+    Vec3 normal{0, 1, 0};
+    float distance = 0;
 };
 
 class PhysicsWorld {
 public:
     explicit PhysicsWorld(bool with_ridges = true);
+    explicit PhysicsWorld(const Environment& environment);
     ~PhysicsWorld();
     PhysicsWorld(const PhysicsWorld&) = delete;
     PhysicsWorld& operator=(const PhysicsWorld&) = delete;
-
-    btRigidBody& create_chassis();
-    bool cast_ground(const btVector3& origin, const btVector3& direction,
-                     btScalar distance, GroundHit& hit) const;
-    void step(btScalar dt = fixed_step);
-
+    bool cast_ground(const Vec3& origin, const Vec3& direction,
+                     float distance, GroundHit& hit) const;
+    void step(float dt = fixed_step);
 private:
-    btRigidBody& add_body(btCollisionShape* shape, const btVector3& position,
-                         btScalar mass, const btVector3& inertia = btVector3(0, 0, 0));
-    btDefaultCollisionConfiguration configuration_;
-    btCollisionDispatcher dispatcher_{&configuration_};
-    btDbvtBroadphase broadphase_;
-    btSequentialImpulseConstraintSolver solver_;
-    btDiscreteDynamicsWorld world_{&dispatcher_, &broadphase_, &solver_, &configuration_};
-    std::vector<std::unique_ptr<btCollisionShape>> shapes_;
-    std::vector<std::unique_ptr<btDefaultMotionState>> motion_states_;
-    std::vector<std::unique_ptr<btRigidBody>> bodies_;
+    friend class Car;
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+    JPH::BodyID create_chassis();
 };
 
 class Car {
 public:
     explicit Car(PhysicsWorld& world);
-    void step(Input input, btScalar dt = fixed_step);
-    const btRigidBody& body() const { return body_; }
-    btVector3 position() const { return body_.getCenterOfMassPosition(); }
-    btVector3 velocity() const { return body_.getLinearVelocity(); }
-    btVector3 rotate(const btVector3& local) const {
-        return body_.getWorldTransform().getBasis() * local;
-    }
-    btVector3 forward() const { return rotate(btVector3(0, 0, -1)); }
+    void step(Input input, float dt = fixed_step);
+    void reset(const Vec3& center_of_mass, float yaw = 0);
+    Vec3 position() const;
+    Vec3 velocity() const;
+    Quat rotation() const;
+    Vec3 rotate(const Vec3& local) const { return rotation() * local; }
+    Vec3 forward() const { return rotate(Vec3(0, 0, -1)); }
     const std::array<Wheel, 4>& wheels() const { return wheels_; }
-    btScalar steering() const { return steer_; }
-
+    float steering() const { return steer_; }
 private:
     PhysicsWorld& world_;
-    btRigidBody& body_;
+    JPH::BodyID body_;
     std::array<Wheel, 4> wheels_{};
-    btScalar steer_ = 0;
+    float steer_ = 0;
 };
-
 } // namespace forza
