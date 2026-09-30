@@ -3,11 +3,24 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace forza {
 namespace {
 constexpr float pi = 3.14159265359f;
+Texture2D load_terrain_texture(const char* filename) {
+    const std::string relative = std::string("assets/textures/") + filename;
+    const std::string bundled = std::string(GetApplicationDirectory()) + relative;
+    const std::string path = FileExists(bundled.c_str()) ? bundled : relative;
+    Texture2D texture = LoadTexture(path.c_str());
+    if (texture.id != 0) {
+        GenTextureMipmaps(&texture);
+        SetTextureFilter(texture, TEXTURE_FILTER_TRILINEAR);
+        SetTextureWrap(texture, TEXTURE_WRAP_REPEAT);
+    }
+    return texture;
+}
 struct MeshBuilder {
     std::vector<float> positions, normals;
     std::vector<unsigned char> colors;
@@ -123,11 +136,14 @@ in vec3 position;
 in vec3 normal;
 in vec4 color;
 uniform vec3 cameraPosition;
+uniform sampler2D texture0;
 out vec4 finalColor;
 void main() {
+    // World coordinates keep the four-meter tiles continuous across cells.
+    vec4 surface = texture(texture0, position.xz / 4.0) * color;
     float lighting = 0.58 + 0.42 * max(dot(normalize(normal), normalize(vec3(-0.45, 0.85, 0.30))), 0.0);
     float fog = smoothstep(450.0, 1400.0, distance(position.xz, cameraPosition.xz));
-    finalColor = vec4(mix(color.rgb * lighting, vec3(0.64, 0.80, 0.87), fog * 0.80), color.a);
+    finalColor = vec4(mix(surface.rgb * lighting, vec3(0.64, 0.80, 0.87), fog * 0.80), surface.a);
 })GLSL";
 const char* water_vertex = R"GLSL(#version 330
 in vec3 vertexPosition;
@@ -159,9 +175,23 @@ void main() {
 }
 
 EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
-    MeshBuilder ground, city, water;
-    for (const auto& t : env.triangles())
-        ground.triangle(env.vertices()[t.a], env.vertices()[t.b], env.vertices()[t.c], surface_color(t.surface));
+    grass_texture_ = load_terrain_texture("grass.png");
+    sand_texture_ = load_terrain_texture("beach-sand.png");
+    asphalt_texture_ = load_terrain_texture("asphalt.png");
+    MeshBuilder ground, grass, sand, roads, city, water;
+    const Color asphalt_tint = asphalt_texture_.id != 0 ? WHITE : Color{55, 64, 74, 255};
+    for (const auto& t : env.triangles()) {
+        MeshBuilder* surface = &ground;
+        Color tint = surface_color(t.surface);
+        if (t.surface == Surface::Grass || t.surface == Surface::Road) {
+            surface = &grass;
+            if (grass_texture_.id != 0) tint = WHITE;
+        } else if (t.surface == Surface::Sand) {
+            surface = &sand;
+            if (sand_texture_.id != 0) tint = WHITE;
+        }
+        surface->triangle(env.vertices()[t.a], env.vertices()[t.b], env.vertices()[t.c], tint);
+    }
 
     const auto street = [&](float lane, bool vertical, float start, float end) {
         const auto point = [&](float along, float offset) {
@@ -169,7 +199,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         };
         for (float s = start; s < end; s += 2) {
             const float next = std::min(s + 2, end);
-            city.ribbon(env, point(s, 0), point(next, 0), 12, {55, 64, 74, 255});
+            roads.ribbon(env, point(s, 0), point(next, 0), 12, asphalt_tint);
             const bool intersection = std::abs(s) < 130 && std::abs(s - std::round(s / 60) * 60) < 9;
             if (intersection) continue;
             if (int((s - start) / 2) % 6 < 3)
@@ -188,7 +218,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     };
     for (int i = 0; i < 480; ++i) {
         const auto a = coast_point(i * 2 * pi / 480), b = coast_point((i + 1) * 2 * pi / 480);
-        city.ribbon(env, a, b, 12, {55, 64, 74, 255});
+        roads.ribbon(env, a, b, 12, asphalt_tint);
         if (i % 8 < 4) city.ribbon(env, a, b, 0.18f, {239, 208, 110, 255}, 0.07f);
     }
     constexpr Color palette[] = {{177, 192, 198, 255}, {213, 200, 178, 255}, {123, 162, 172, 255},
@@ -248,10 +278,17 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         const Vec3 a(x * 75.0f, 0, z * 75.0f), b = a + Vec3(75, 0, 0), c = a + Vec3(0, 0, 75), d = a + Vec3(75, 0, 75);
         water.quad(a, c, d, b, WHITE);
     }
-    terrain_ = ground.upload(); city_ = city.upload(); ocean_ = water.upload();
+    terrain_ = ground.upload(); grass_ = grass.upload(); sand_ = sand.upload();
+    roads_ = roads.upload();
+    city_ = city.upload(); ocean_ = water.upload();
     land_shader_ = LoadShaderFromMemory(land_vertex, land_fragment);
     water_shader_ = LoadShaderFromMemory(water_vertex, water_fragment);
     terrain_.materials[0].shader = city_.materials[0].shader = land_shader_;
+    grass_.materials[0].shader = sand_.materials[0].shader = land_shader_;
+    roads_.materials[0].shader = land_shader_;
+    if (grass_texture_.id != 0) SetMaterialTexture(&grass_.materials[0], MATERIAL_MAP_DIFFUSE, grass_texture_);
+    if (sand_texture_.id != 0) SetMaterialTexture(&sand_.materials[0], MATERIAL_MAP_DIFFUSE, sand_texture_);
+    if (asphalt_texture_.id != 0) SetMaterialTexture(&roads_.materials[0], MATERIAL_MAP_DIFFUSE, asphalt_texture_);
     ocean_.materials[0].shader = water_shader_;
     land_camera_ = GetShaderLocation(land_shader_, "cameraPosition");
     water_camera_ = GetShaderLocation(water_shader_, "cameraPosition");
@@ -260,6 +297,11 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
 
 EnvironmentRenderer::~EnvironmentRenderer() {
     UnloadModel(terrain_); UnloadModel(city_); UnloadModel(ocean_);
+    UnloadModel(grass_); UnloadModel(sand_);
+    UnloadModel(roads_);
+    if (grass_texture_.id != 0) UnloadTexture(grass_texture_);
+    if (sand_texture_.id != 0) UnloadTexture(sand_texture_);
+    if (asphalt_texture_.id != 0) UnloadTexture(asphalt_texture_);
     UnloadShader(land_shader_); UnloadShader(water_shader_);
 }
 void EnvironmentRenderer::draw(const Camera3D& camera, float time) {
@@ -268,6 +310,9 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time) {
     SetShaderValue(water_shader_, water_time_, &time, SHADER_UNIFORM_FLOAT);
     DrawModel(ocean_, {0, 0, 0}, 1, WHITE);
     DrawModel(terrain_, {0, 0, 0}, 1, WHITE);
+    DrawModel(grass_, {0, 0, 0}, 1, WHITE);
+    DrawModel(sand_, {0, 0, 0}, 1, WHITE);
+    DrawModel(roads_, {0, 0, 0}, 1, WHITE);
     DrawModel(city_, {0, 0, 0}, 1, WHITE);
 }
 void EnvironmentRenderer::minimap(const Environment& env, const Car& car, Vec3 player_position, Vec3 player_forward, int screen_width) const {

@@ -44,6 +44,14 @@ endif()
 
 add_executable(forzaambazon src/main.cpp src/environment_renderer.cpp)
 target_link_libraries(forzaambazon PRIVATE vehicle_physics PkgConfig::RAYLIB)
+# Keep runtime assets beside the executable, including after texture edits.
+add_custom_target(forzaambazon_assets ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:forzaambazon>/assets"
+    COMMENT "Copying game assets"
+    VERBATIM
+)
+add_dependencies(forzaambazon forzaambazon_assets)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(forzaambazon PRIVATE -Wall -Wextra -Wpedantic)
 endif()

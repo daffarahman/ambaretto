@@ -69,7 +69,9 @@ The character uses Jolt's virtual capsule controller for slopes, steps, jumping,
 
 The island spans roughly 640 by 560 meters, with climbing avenues, level building plots, tree-lined parks, and a continuous coastal road. Follow the main avenues outward to reach the coastal loop and beaches. Buildings and tree trunks have solid Jolt colliders. The terrain mesh is shared by rendering and physics, so the suspension follows the visible hills and beach slopes.
 
-Water is animated scenery. Driving into the ocean automatically returns the car to its downtown spawn and clears skid marks. Press R to recover manually. The map is generated deterministically and needs no external assets.
+Water is animated scenery. Driving into the ocean automatically returns the car to its downtown spawn and clears skid marks. Press R to recover manually. The map is generated deterministically.
+
+Grass uses `assets/textures/grass.png`, beaches use `assets/textures/beach-sand.png`, and roads use `assets/textures/asphalt.png`. All three tile every four meters with mipmap filtering. Road markings are drawn above the asphalt. CMake copies `assets` beside each executable when building; the game loads that copy independently of the working directory.
 
 ## Code and physics
 
