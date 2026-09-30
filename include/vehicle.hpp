@@ -1,4 +1,5 @@
 #pragma once
+#include "car_tuning.hpp"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Math/Vec3.h>
@@ -13,7 +14,7 @@ class Character;
 using Vec3 = JPH::Vec3;
 using Quat = JPH::Quat;
 inline constexpr float fixed_step = 1.0f / 120.0f;
-inline constexpr float wheel_radius = 0.34f;
+inline constexpr float wheel_radius = CarTuning{}.wheel_radius;
 inline constexpr float chassis_offset = 0.5f;
 
 struct Input {
@@ -32,6 +33,7 @@ struct Wheel {
     bool skidding = false;
     float compression = 0;
     float spin = 0;
+    float normal_force = 0;
 };
 struct GroundHit {
     Vec3 point{0, 0, 0};
@@ -71,10 +73,15 @@ public:
     const std::array<Wheel, 4>& wheels() const { return wheels_; }
     float steering() const { return steer_; }
     JPH::BodyID body_id() const { return body_; }
+    const CarTuning& tuning() const { return tuning_; }
+    void set_tuning(CarTuning tuning);
 private:
+    void update_wheel_mounts();
+    void refresh_wheel_contacts();
     PhysicsWorld& world_;
     JPH::BodyID body_;
     std::array<Wheel, 4> wheels_{};
     float steer_ = 0;
+    CarTuning tuning_{};
 };
 } // namespace forza

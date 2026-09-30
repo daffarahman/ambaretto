@@ -34,14 +34,6 @@ constexpr JPH::ObjectLayer ground_layer = 0;
 constexpr JPH::ObjectLayer vehicle_layer = 1;
 constexpr JPH::ObjectLayer obstacle_layer = 2;
 constexpr float mass = 1100;
-constexpr float rest_length = 0.58f;
-constexpr float travel = 0.32f;
-constexpr float spring_rate = 22500;
-constexpr float damper_rate = 3000;
-constexpr float max_steer = 0.52f;
-constexpr float tire_grip = 1.6f;
-constexpr float motor_grip = 0.65f;
-constexpr float rear_drift_grip = 0.85f;
 
 float clamp(float value, float low, float high) {
     return std::clamp(value, low, high);
@@ -276,15 +268,18 @@ Vec3 Car::velocity() const { return world_.impl_->system.GetBodyInterface().GetL
 Quat Car::rotation() const { return world_.impl_->system.GetBodyInterface().GetRotation(body_); }
 
 Car::Car(PhysicsWorld& world) : world_(world), body_(world.create_chassis()) {
-    const std::array<Vec3, 4> mounts = {
-        Vec3(float(-0.82), float(0.31), float(-1.25)),
-        Vec3(float(0.82), float(0.31), float(-1.25)),
-        Vec3(float(-0.82), float(0.31), float(1.25)),
-        Vec3(float(0.82), float(0.31), float(1.25))};
+    update_wheel_mounts();
+    for (auto& wheel : wheels_)
+        wheel.center = position() + rotate(wheel.mount - Vec3(0, tuning_.rest_length, 0));
+}
+
+void Car::update_wheel_mounts() {
+    const float half_track = tuning_.track_width / 2, half_wheelbase = tuning_.wheelbase / 2;
     for (std::size_t i = 0; i < wheels_.size(); ++i) {
-        wheels_[i].mount = mounts[i];
-        wheels_[i].front = i < 2;
-        wheels_[i].center = position() + rotate(mounts[i]) - Vec3(0, rest_length, 0);
+        auto& wheel = wheels_[i];
+        wheel.front = i < 2;
+        wheel.mount = Vec3(i % 2 == 0 ? -half_track : half_track, tuning_.mount_height,
+                           wheel.front ? -half_wheelbase : half_wheelbase);
     }
 }
 
@@ -297,8 +292,45 @@ void Car::reset(const Vec3& center_of_mass, float yaw) {
     steer_ = 0;
     for (auto& wheel : wheels_) {
         wheel.grounded = wheel.skidding = false;
-        wheel.spin = wheel.compression = 0;
-        wheel.center = center_of_mass + rotation * (wheel.mount - Vec3(0, rest_length, 0));
+        wheel.spin = wheel.compression = wheel.normal_force = 0;
+        wheel.center = center_of_mass + rotation * (wheel.mount - Vec3(0, tuning_.rest_length, 0));
+    }
+}
+
+void Car::set_tuning(CarTuning tuning) {
+    const CarTuning defaults;
+    for (const auto& control : tuning_controls) {
+        auto& value = tuning.*(control.value);
+        if (!std::isfinite(value)) value = defaults.*(control.value);
+        value = clamp(value, control.min, control.max);
+    }
+    // Compressed suspension length must stay positive, even with edits to
+    // rest length and travel in either order.
+    tuning.travel = std::min(tuning.travel, tuning.rest_length - .05f);
+    tuning_ = tuning;
+    steer_ = clamp(steer_, -tuning_.max_steer, tuning_.max_steer);
+    update_wheel_mounts();
+    refresh_wheel_contacts();
+}
+
+void Car::refresh_wheel_contacts() {
+    const Vec3 up = rotate(Vec3::sAxisY());
+    const Vec3 down = -up;
+    for (auto& wheel : wheels_) {
+        const Vec3 mount = position() + rotate(wheel.mount);
+        GroundHit hit;
+        wheel.grounded = world_.cast_ground(mount, down,
+            tuning_.rest_length + tuning_.travel + tuning_.wheel_radius, hit) && hit.normal.Dot(up) > .35f;
+        wheel.skidding = false;
+        wheel.compression = wheel.normal_force = 0;
+        wheel.center = mount + down * tuning_.rest_length;
+        if (!wheel.grounded) continue;
+        const float length = clamp(hit.distance - tuning_.wheel_radius,
+            tuning_.rest_length - tuning_.travel, tuning_.rest_length + tuning_.travel);
+        wheel.center = mount + down * length;
+        wheel.ground_point = hit.point;
+        wheel.ground_normal = hit.normal;
+        wheel.compression = tuning_.rest_length - length;
     }
 }
 
@@ -308,51 +340,40 @@ void Car::step(Input input, float dt) {
     input.steer = clamp(input.steer, -1, 1);
     const auto velocity_now = velocity();
     const float speed = std::hypot(velocity_now.GetX(), velocity_now.GetZ());
-    float steer_limit = std::min(max_steer, float(std::atan(float(2.5 * 16) / std::max(speed * speed, float(1)))));
-    if (input.handbrake && speed > 4) steer_limit = std::min(max_steer, steer_limit * float(1.3));
+    float steer_limit = std::min(tuning_.max_steer, std::atan(tuning_.wheelbase * 16 / std::max(speed * speed, 1.0f)));
+    if (input.handbrake && speed > 4) steer_limit = std::min(tuning_.max_steer, steer_limit * float(1.3));
     steer_ += clamp(input.steer * steer_limit - steer_, float(-2.8) * dt, float(2.8) * dt);
 
     const Vec3 up = rotate(Vec3(0, 1, 0));
-    const Vec3 down = -up;
     const Vec3 chassis_forward = forward();
+    refresh_wheel_contacts();
     for (auto& wheel : wheels_) {
-        wheel.skidding = false;
-        const Vec3 mount = position() + rotate(wheel.mount);
-        GroundHit hit;
-        wheel.grounded = world_.cast_ground(mount, down, rest_length + travel + wheel_radius, hit)
-                         && hit.normal.Dot(up) > float(0.35);
-        wheel.compression = 0;
-        wheel.center = mount + down * rest_length;
         if (!wheel.grounded) {
-            wheel.spin += velocity().Dot(chassis_forward) / wheel_radius * dt;
+            wheel.spin += velocity().Dot(chassis_forward) / tuning_.wheel_radius * dt;
             continue;
         }
-        const float length = clamp(hit.distance - wheel_radius, rest_length - travel, rest_length + travel);
-        wheel.center = mount + down * length;
-        wheel.ground_point = hit.point;
-        wheel.ground_normal = hit.normal;
-        wheel.compression = rest_length - length;
-
-        const Vec3 point_velocity = physics.GetPointVelocity(body_, hit.point);
-        const float normal_force = clamp(spring_rate * wheel.compression + damper_rate * point_velocity.Dot(down), 0, 14000);
-        physics.AddImpulse(body_, up * (normal_force * dt), hit.point);
+        const Vec3 point_velocity = physics.GetPointVelocity(body_, wheel.ground_point);
+        const float normal_force = clamp(tuning_.spring_rate * wheel.compression - tuning_.damper_rate * point_velocity.Dot(up),
+            0, tuning_.max_spring_force);
+        wheel.normal_force = normal_force;
+        physics.AddImpulse(body_, up * (normal_force * dt), wheel.ground_point);
 
         Vec3 wheel_forward = chassis_forward;
         if (wheel.front) wheel_forward = Quat::sRotation(up, steer_) * wheel_forward;
-        wheel_forward -= hit.normal * wheel_forward.Dot(hit.normal);
+        wheel_forward -= wheel.ground_normal * wheel_forward.Dot(wheel.ground_normal);
         wheel_forward = wheel_forward.Normalized();
-        const Vec3 wheel_right = wheel_forward.Cross(hit.normal).Normalized();
+        const Vec3 wheel_right = wheel_forward.Cross(wheel.ground_normal).Normalized();
         const float long_speed = point_velocity.Dot(wheel_forward);
         const float lateral_speed = point_velocity.Dot(wheel_right);
 
         // Give steering priority in the friction circle. A rear handbrake
         // lowers the grip available to those tires so the rear can slide.
-        const float grip_scale = input.handbrake && !wheel.front ? rear_drift_grip : tire_grip;
+        const float grip_scale = input.handbrake && !wheel.front ? tuning_.rear_drift_grip : tuning_.tire_grip;
         const float grip = normal_force * grip_scale * dt;
         const float lateral_impulse = clamp(-lateral_speed * mass * float(0.25 * 0.95), -grip, grip);
         const float remaining = std::sqrt(std::max(float(0), grip * grip - lateral_impulse * lateral_impulse));
         const float desired = input.throttle * (input.throttle < 0 ? 11 : 24);
-        const float motor_limit = normal_force * motor_grip * dt;
+        const float motor_limit = normal_force * tuning_.motor_grip * dt;
         float long_impulse = clamp((desired - long_speed) * mass * float(0.25 * 0.34), -motor_limit, motor_limit);
         if (std::abs(input.throttle) < float(0.01)) long_impulse = -long_speed * mass * float(0.25 * 0.012);
         if (input.handbrake && !wheel.front) {
@@ -362,8 +383,8 @@ void Car::step(Input input, float dt) {
         if (input.parking_brake)
             long_impulse = clamp(-long_speed * mass * 0.25f, -grip, grip);
         long_impulse = clamp(long_impulse, -remaining, remaining);
-        physics.AddImpulse(body_, wheel_forward * long_impulse + wheel_right * lateral_impulse, hit.point);
-        wheel.spin += long_speed / wheel_radius * dt;
+        physics.AddImpulse(body_, wheel_forward * long_impulse + wheel_right * lateral_impulse, wheel.ground_point);
+        wheel.spin += long_speed / tuning_.wheel_radius * dt;
         wheel.skidding = !wheel.front && speed > 4 && normal_force > 100 &&
                          (input.handbrake || std::abs(lateral_speed) > 3);
     }

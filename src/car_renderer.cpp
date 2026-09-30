@@ -234,8 +234,9 @@ bool CarRenderer::draw_wheel(const Car& car, const Wheel& wheel, const Camera3D&
     const Quat steering = Quat::sRotation(Vec3::sAxisY(), wheel.front ? car.steering() : 0);
     const Quat q = car.rotation() * steering * spin * side;
     const auto& p = wheel.center;
-    const Matrix transform = MatrixMultiply(QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()}),
-        MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
+    const float size = car.tuning().wheel_radius / wheel_radius;
+    const Matrix transform = MatrixMultiply(MatrixMultiply(MatrixScale(size, size, size),
+        QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()})), MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
     draw_model(wheel_, transform, camera);
     return true;
 }

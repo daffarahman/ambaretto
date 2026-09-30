@@ -42,7 +42,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vehicle_physics PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_executable(forzaambazon src/main.cpp src/environment_renderer.cpp src/car_renderer.cpp)
+add_executable(forzaambazon src/main.cpp src/environment_renderer.cpp src/car_renderer.cpp src/tuning_panel.cpp)
 target_link_libraries(forzaambazon PRIVATE vehicle_physics PkgConfig::RAYLIB)
 # Keep runtime assets beside the executable, including after model/texture edits.
 add_custom_target(forzaambazon_assets ALL
@@ -64,4 +64,7 @@ if(BUILD_TESTING)
     add_executable(player_tests tests/player_tests.cpp)
     target_link_libraries(player_tests PRIVATE vehicle_physics)
     add_test(NAME player_behavior COMMAND player_tests)
+    add_executable(tuning_tests tests/tuning_tests.cpp src/tuning_panel.cpp)
+    target_link_libraries(tuning_tests PRIVATE vehicle_physics PkgConfig::RAYLIB)
+    add_test(NAME live_tuning COMMAND tuning_tests)
 endif()

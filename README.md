@@ -55,6 +55,7 @@ cmake --build --preset ucrt64
 | Mouse wheel | Zoom the camera |
 | R | Reset the car and skid marks |
 | F2 | Toggle the island aerial view |
+| F3 | Open / close live car tuning |
 | Escape | Release the mouse and pause |
 | Left click | Capture the mouse and resume |
 | Window close button | Exit |
@@ -64,6 +65,10 @@ Build speed before holding Space and A or D to start a slide. Use W to keep driv
 Press E while stopped or moving slowly to leave the car. Walk back within a few meters and press E to enter. The game checks for a free exit beside either door and behind the car, so buildings cannot trap the character inside a wall. The car applies its parking brake while you explore on foot.
 
 The character uses Jolt's virtual capsule controller for slopes, steps, jumping, and collision with buildings, trees, and the vehicle. Its body turns toward movement and animates while walking or running. Mouse movement orbits the camera in either mode; the driving camera gradually follows the car again after you stop moving the mouse. Camera sweeps keep the view clear of walls and terrain. Focus loss and aerial view pause gameplay and release the mouse.
+
+Press **F3** to tune the current car. The panel releases the mouse, frames the car for inspection, disables driving/character input, and applies the parking brake. Physics keeps running so suspension changes settle in front of you. Drag the sliders or scroll over a row; Up/Down selects a setting and Left/Right adjusts it. Hold Shift for finer edits. Right-drag outside the panel to orbit the car and scroll outside it to zoom. Panel clicks cannot recapture the mouse or move the camera. F3, Escape, or the Close button returns to the previous camera and mouse capture state. Losing window focus pauses the simulation and cancels slider dragging; click to recapture after closing the panel if focus was lost.
+
+The Suspension tab edits tire radius, spring rest length, suspension travel, mount height, spring stiffness, damping, and the force cap per wheel. The Handling tab edits normal grip, rear handbrake grip, drive traction, steering angle, wheelbase, and track width. Wheelbase is the front-to-rear distance between wheel centers (default 2.50 m); track width is the left-to-right distance (default 1.64 m), shared by both axles. These sliders move the wheels, suspension mounts, and ground contacts together around the fixed car body. Steering's speed limit also uses the current wheelbase. Tire size updates both the GLB wheel meshes and ground contact calculations. Settings are bounded, and travel is constrained to keep the compressed suspension length positive. Live readings show each wheel's contact, compression, and spring force. **Defaults** restores the original setup; **Reset car** recovers the car and clears skid marks while retaining your tuning. R and water recovery also retain the setup. Edits last for the current game session.
 
 ## Island map
 
@@ -81,22 +86,31 @@ The car body uses `assets/models/trueno.glb`. The exported half-body is mirrored
 - `src/vehicle.cpp`: Jolt world, chassis collisions, raycast suspension, tire grip, and handbrake behavior.
 - `src/main.cpp`: rendering, keyboard input, fixed step loop, chase camera, and a bounded skid mark buffer.
 - `src/car_renderer.cpp`: Trueno body/wheel loading, symmetry, wheel alignment, steering/spin animation, material lighting, and chassis orientation.
+- `include/car_tuning.hpp`, `src/tuning_panel.cpp`: runtime tuning defaults/limits, sliders, precision input, and wheel telemetry.
 - `include/player.hpp`, `src/player.cpp`: on-foot control and entering/exiting the vehicle; the Jolt capsule implementation lives alongside the physics world in `src/vehicle.cpp`.
 - `src/third_person_camera.cpp`: mouse orbit, zoom, and camera-relative movement.
 - `include/environment.hpp`, `src/environment.cpp`: shared terrain mesh, city layout, buildings, trees, spawn, and water recovery bounds.
 - `src/environment_renderer.cpp`: terrain lighting, road markings, building details, vegetation, beach props, animated ocean, and minimap.
 - `tests/physics_tests.cpp`: headless checks for driving behavior, terrain/collider alignment, climbing city streets, building collisions, and recovery. The original flat test track and suspension ridges remain as test fixtures.
 - `tests/player_tests.cpp`: walking, sprinting, jumping, slopes, collisions, parking, entry/exit conditions, and mouse camera movement.
+- `tests/tuning_tests.cpp`: live suspension changes, tire contact, validation, per-car isolation, setup retention, and slider input/focus behavior.
 
 Physics runs at 120 Hz independently of rendering. The chassis weighs 1100 kg and has a lowered center of mass. Steering grip receives priority in the tire friction circle, and steering angle decreases as speed rises. The handbrake reduces rear grip and brakes those tires, allowing the rear to slide while the front wheels steer and drive. Suspension rays query only ground collision objects.
 
-This is an arcade vehicle model. Wheel meshes are visual; Jolt handles the chassis rigid body and world collisions, while the controller applies suspension and tire impulses at the ground contact points. An offset-center-of-mass shape lowers the chassis center of mass by 0.5 m. Continuous collision detection protects the chassis at speed. Tuning constants are at the top of `src/vehicle.cpp`.
+This is an arcade vehicle model. Wheel meshes are visual; Jolt handles the chassis rigid body and world collisions, while the controller applies suspension and tire impulses at the ground contact points. An offset-center-of-mass shape lowers the chassis center of mass by 0.5 m. Continuous collision detection protects the chassis at speed. Runtime tuning defaults and slider limits are in `include/car_tuning.hpp`.
 
 ## Checks and debugging
 
 ```bash
 ctest --preset ucrt64
 gdb ./build/ucrt64/forzaambazon.exe
+```
+
+Open directly in tuning mode, or capture the panel:
+
+```bash
+./build/ucrt64/forzaambazon.exe --tuning
+./build/ucrt64/forzaambazon.exe --tuning --screenshot build/tuning-preview.png
 ```
 
 All source, build configuration, and checks use C++; no Go toolchain is needed.
