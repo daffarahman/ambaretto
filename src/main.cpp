@@ -1,6 +1,7 @@
 #include "vehicle.hpp"
 #include "environment.hpp"
 #include "environment_renderer.hpp"
+#include "car_renderer.hpp"
 #include "player.hpp"
 #include "third_person_camera.hpp"
 #include <string>
@@ -107,12 +108,14 @@ void draw_box(const forza::Vec3& center, const forza::Quat& rotation,
     if (outline) for (const auto& edge : edges) DrawLine3D(p[edge[0]], p[edge[1]], MAROON);
 }
 
-void draw_car(const forza::Car& car) {
-    const auto basis = car.rotation();
-    draw_box(car.position() + car.rotate(forza::Vec3(0, forza::chassis_offset, 0)), basis,
-             forza::Vec3(float(1.85), float(0.5), float(3.7)), {209, 46, 54, 255});
-    draw_box(car.position() + car.rotate(forza::Vec3(0, float(0.93), float(0.25))), basis,
-             forza::Vec3(float(1.45), float(0.55), float(1.7)), {39, 58, 73, 255});
+void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const Camera3D& camera) {
+    if (!renderer.draw_body(car, camera)) {
+        const auto basis = car.rotation();
+        draw_box(car.position() + car.rotate(forza::Vec3(0, forza::chassis_offset, 0)), basis,
+                 forza::Vec3(float(1.85), float(0.5), float(3.7)), {209, 46, 54, 255});
+        draw_box(car.position() + car.rotate(forza::Vec3(0, float(0.93), float(0.25))), basis,
+                 forza::Vec3(float(1.45), float(0.55), float(1.7)), {39, 58, 73, 255});
+    }
     for (const auto& wheel : car.wheels()) {
         const auto mount = car.position() + car.rotate(wheel.mount);
         DrawLine3D(render_vector(mount), render_vector(wheel.center), LIGHTGRAY);
@@ -214,6 +217,7 @@ int main(int argc, char** argv) {
     {
         const forza::Environment environment;
         forza::EnvironmentRenderer scenery(environment);
+        forza::CarRenderer car_renderer;
         auto scene = std::make_unique<Scene>(environment);
         if (start_on_foot) scene->player.interact();
         forza::ThirdPersonCamera orbit;
@@ -310,7 +314,7 @@ int main(int argc, char** argv) {
             BeginMode3D(view);
             scenery.draw(view, float(GetTime()));
             draw_skid_marks(scene->marks);
-            draw_car(scene->car);
+            draw_car(scene->car, car_renderer, view);
             if (!scene->player.driving()) draw_character(scene->player.character(), environment);
             EndMode3D();
             draw_hud(*scene, driving.handbrake, captured || !screenshot.empty(), aerial);
