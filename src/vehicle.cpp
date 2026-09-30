@@ -1,6 +1,7 @@
 #include "vehicle.hpp"
 #include "environment.hpp"
 #include "player.hpp"
+#include "plane.hpp"
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/TempAllocator.h>
@@ -20,6 +21,7 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
@@ -195,6 +197,137 @@ float PhysicsWorld::camera_fraction(const Vec3& origin, const Vec3& offset, JPH:
     JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> hits;
     impl_->system.GetNarrowPhaseQuery().CastShape(cast, settings, origin, hits, {}, {}, JPH::IgnoreSingleBodyFilter(ignore));
     return hits.HadHit() ? std::clamp(hits.mHit.mFraction - 0.03f / offset.Length(), 0.0f, 1.0f) : 1;
+}
+
+Plane::Plane(PhysicsWorld& world) : world_(world) {
+    JPH::StaticCompoundShapeSettings parts;
+    const auto box = [&](Vec3 center, Vec3 half) {
+        JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(half, .03f);
+        parts.AddShape(center, Quat::sIdentity(), shape);
+    };
+    box(Vec3(0, 0, -.2f), Vec3(.48f, .48f, 2.8f));
+    box(Vec3(0, .6f, -.3f), Vec3(5.5f, .09f, .75f));
+    box(Vec3(0, .35f, 2.5f), Vec3(1.8f, .08f, .55f));
+    box(Vec3(0, .95f, 2.5f), Vec3(.08f, .65f, .55f));
+    const auto result = parts.Create();
+    if (result.HasError()) throw std::runtime_error(result.GetError().c_str());
+    JPH::RefConst<JPH::Shape> shape = new JPH::OffsetCenterOfMassShape(result.Get(), -result.Get()->GetCenterOfMass());
+    JPH::BodyCreationSettings settings(shape, Vec3(0, parked_height, 0), Quat::sIdentity(),
+        JPH::EMotionType::Dynamic, vehicle_layer);
+    settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
+    settings.mMassPropertiesOverride.mMass = 850;
+    settings.mMassPropertiesOverride.mInertia = JPH::Mat44::sScale(Vec3(2100, 5500, 3300));
+    settings.mLinearDamping = .005f;
+    settings.mAngularDamping = .05f;
+    settings.mMaxLinearVelocity = 160;
+    settings.mMaxAngularVelocity = 5;
+    settings.mFriction = .6f;
+    settings.mRestitution = .05f;
+    settings.mAllowSleeping = false;
+    settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
+    settings.mEnhancedInternalEdgeRemoval = true;
+    body_ = world_.impl_->add_body(settings);
+    wheels_[0].mount = Vec3(-1.25f, -.48f, .32f);
+    wheels_[1].mount = Vec3(1.25f, -.48f, .32f);
+    wheels_[2].mount = Vec3(0, -.48f, -2);
+    wheels_[2].front = true;
+    reset(Vec3(0, parked_height, 0), 0);
+}
+Vec3 Plane::position() const { return world_.impl_->system.GetBodyInterface().GetCenterOfMassPosition(body_); }
+Vec3 Plane::velocity() const { return world_.impl_->system.GetBodyInterface().GetLinearVelocity(body_); }
+Quat Plane::rotation() const { return world_.impl_->system.GetBodyInterface().GetRotation(body_); }
+bool Plane::grounded() const {
+    return std::any_of(wheels_.begin(), wheels_.end(), [](const Wheel& w) { return w.grounded; });
+}
+void Plane::reset(const Vec3& center, float yaw, const Vec3& speed, float throttle) {
+    auto& physics = world_.impl_->system.GetBodyInterface();
+    physics.SetPositionAndRotation(body_, center, Quat::sRotation(Vec3::sAxisY(), yaw), JPH::EActivation::Activate);
+    physics.SetLinearAndAngularVelocity(body_, speed, Vec3::sZero());
+    throttle_ = clamp(throttle, 0, 1);
+    airspeed_ = speed.Length(); alpha_ = 0; propeller_angle_ = 0;
+    previous_velocity_ = speed; stalled_ = damaged_ = false;
+    for (auto& wheel : wheels_) wheel.spin = 0;
+    refresh_gear();
+}
+void Plane::refresh_gear() {
+    const Vec3 down = -rotate(Vec3::sAxisY());
+    for (auto& wheel : wheels_) {
+        const Vec3 mount = position() + rotate(wheel.mount);
+        GroundHit hit;
+        wheel.grounded = world_.cast_ground(mount, down, .66f + tire_radius, hit)
+            && hit.normal.Dot(-down) > .45f;
+        const float length = wheel.grounded ? clamp(hit.distance - tire_radius, .34f, .66f) : .66f;
+        wheel.center = mount + down * length;
+        wheel.compression = .5f - length;
+        wheel.ground_point = wheel.grounded ? hit.point : wheel.center + down * tire_radius;
+        wheel.ground_normal = wheel.grounded ? hit.normal : -down;
+        wheel.normal_force = 0;
+    }
+}
+void Plane::step(FlightInput input, float dt) {
+    auto& physics = world_.impl_->system.GetBodyInterface();
+    const Vec3 v = velocity(), center = position();
+    // Large collision decelerations disable the engine. Ordinary gear
+    // touchdowns and aerodynamic acceleration stay well below this threshold.
+    if ((v - previous_velocity_).Length() > 10) damaged_ = true;
+    previous_velocity_ = v;
+    throttle_ = input.parking_brake || damaged_ ? 0 : clamp(throttle_ + input.throttle * .4f * dt, 0, 1);
+    propeller_angle_ = std::remainder(propeller_angle_ + throttle_ * 180 * dt, 6.2831853f);
+    const auto basis = rotation();
+    const Vec3 right = basis * Vec3::sAxisX(), up = basis * Vec3::sAxisY(), fwd = forward();
+    const Vec3 local = basis.Conjugated() * v;
+    const Vec3 angular = basis.Conjugated() * physics.GetAngularVelocity(body_);
+    airspeed_ = v.Length();
+    const float forward_speed = -local.GetZ();
+    alpha_ = std::atan2(-local.GetY(), std::max(std::abs(forward_speed), .1f));
+    const float wing_alpha = alpha_ + .04f;
+    stalled_ = forward_speed > 8 && std::abs(wing_alpha) > .28f;
+    const float density = 1.225f * std::exp(-std::max(center.GetY(), 0.0f) / 8500);
+    const float q = .5f * density * airspeed_ * airspeed_;
+    const float area = 16;
+    // L = q*S*Cl; Cd includes parasite and induced drag. Beyond the stall
+    // angle, lift rolls off and drag rises, including backwards/inverted flight.
+    float cl = .25f + 5.2f * clamp(wing_alpha, -.28f, .28f) + (input.flaps ? .35f : 0);
+    if (std::abs(wing_alpha) > .28f)
+        cl *= std::max(.08f, 1 - (std::abs(wing_alpha) - .28f) / .8f);
+    if (forward_speed <= 0) cl = 0;
+    const float cd = .035f + cl * cl / (3.14159265f * .8f * 7.56f)
+        + (input.flaps ? .055f : 0) + .85f * std::sin(alpha_) * std::sin(alpha_);
+    if (airspeed_ > .5f) {
+        const Vec3 flow = v / airspeed_;
+        const Vec3 lift_direction = right.Cross(flow).NormalizedOr(up);
+        const float lift = clamp(q * area * cl, -45000, 45000);
+        physics.AddForce(body_, lift_direction * lift - flow * (q * area * cd)
+            - right * (local.GetX() * q * .08f));
+    }
+    // Fixed-pitch propeller thrust falls with forward speed.
+    physics.AddForce(body_, fwd * (throttle_ * 3200 * clamp(1 - forward_speed / 115, .15f, 1)));
+    const float authority = clamp(std::max(forward_speed, 0.0f) / 28, 0, 2);
+    const float sideslip = std::atan2(local.GetX(), std::max(std::abs(forward_speed), 1.0f));
+    const float pitch_moment = clamp(q * area * 1.45f * 1.25f * (.025f + input.pitch * .20f - alpha_), -16000, 16000);
+    const Vec3 torque(pitch_moment - angular.GetX() * (800 + 2400 * authority),
+        input.yaw * 2400 * authority - sideslip * q * 8 - angular.GetY() * (600 + 2000 * authority),
+        input.roll * 6000 * authority - angular.GetZ() * (700 + 3500 * authority));
+    physics.AddTorque(body_, basis * torque);
+    refresh_gear();
+    for (auto& wheel : wheels_) {
+        if (!wheel.grounded) continue;
+        const Vec3 point_velocity = v + (basis * angular).Cross(wheel.ground_point - center);
+        wheel.normal_force = clamp(wheel.compression * 42000 - point_velocity.Dot(up) * 5000, 0, 16000);
+        physics.AddImpulse(body_, up * (wheel.normal_force * dt), wheel.ground_point);
+        const auto steer = Quat::sRotation(up, wheel.front ? input.yaw * .45f : 0);
+        Vec3 wheel_fwd = steer * fwd;
+        wheel_fwd = (wheel_fwd - wheel.ground_normal * wheel_fwd.Dot(wheel.ground_normal)).NormalizedOr(fwd);
+        const Vec3 side = wheel_fwd.Cross(wheel.ground_normal);
+        const float speed = point_velocity.Dot(wheel_fwd);
+        const float grip = wheel.normal_force * dt;
+        const float sideways = clamp(-point_velocity.Dot(side) * (850.0f / 3), -grip, grip);
+        const float rolling = input.brake || input.parking_brake ? 1.0f : .015f;
+        const float remaining = std::sqrt(std::max(0.0f, grip * grip - sideways * sideways));
+        const float longitudinal = clamp(-speed * (850.0f / 3), -remaining * rolling, remaining * rolling);
+        physics.AddImpulse(body_, side * sideways + wheel_fwd * longitudinal, wheel.ground_point);
+        wheel.spin = std::remainder(wheel.spin + speed * dt / tire_radius, 6.2831853f);
+    }
 }
 
 struct Character::Impl {

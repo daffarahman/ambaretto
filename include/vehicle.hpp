@@ -11,6 +11,7 @@
 namespace forza {
 class Environment;
 class Character;
+class Plane;
 using Vec3 = JPH::Vec3;
 using Quat = JPH::Quat;
 inline constexpr float fixed_step = 1.0f / 120.0f;
@@ -55,6 +56,7 @@ public:
 private:
     friend class Car;
     friend class Character;
+    friend class Plane;
     struct Impl;
     std::unique_ptr<Impl> impl_;
     JPH::BodyID create_chassis();

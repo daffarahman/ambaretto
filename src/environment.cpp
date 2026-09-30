@@ -1,4 +1,5 @@
 #include "environment.hpp"
+#include "airport.hpp"
 #include <algorithm>
 #include <cmath>
 #include <random>
@@ -31,7 +32,7 @@ bool Environment::road(float x, float z) {
     const float dz = std::abs(z - std::round(z / 60) * 60);
     const bool grid = std::abs(x) <= 146 && std::abs(z) <= 146 && (dx <= 6 || dz <= 6);
     const bool connectors = std::min(std::abs(x), std::abs(z)) <= 6 && r <= 0.74f;
-    return grid || connectors || std::abs(r - 0.72f) < 0.024f;
+    return grid || connectors || std::abs(r - 0.72f) < 0.024f || Airport::pavement(x, z);
 }
 
 float Environment::elevation(float x, float z) {
@@ -47,12 +48,18 @@ float Environment::elevation(float x, float z) {
     land *= 1 - smooth(0.60f, 0.84f, r);
     land += 1.25f;
     // A long gentle beach slope continues below sea level to a seabed.
-    return land * (1 - smooth(0.83f, 1.10f, r)) - 8 * smooth(0.92f, 1.15f, r);
+    const float coast = land * (1 - smooth(0.83f, 1.10f, r)) - 8 * smooth(0.92f, 1.15f, r);
+    // A level airfield with a gradual grass/beach shoulder. The access road
+    // blends into the existing avenue rather than introducing a terrain step.
+    const float airport = (1 - smooth(182, 210, std::abs(x)))
+        * smooth(164, 196, z) * (1 - smooth(316, 354, z));
+    return coast + (Airport::elevation - coast) * airport;
 }
 
 Surface Environment::surface(float x, float z, float y) {
     if (y < -0.1f) return Surface::Seabed;
     if (road(x, z)) return Surface::Road;
+    if (Airport::contains(x, z)) return Surface::Grass;
     if (coast_radius(x, z) > 0.79f) return Surface::Sand;
     if (y > 24) return Surface::Rock;
     return Surface::Grass;
@@ -89,10 +96,19 @@ Environment::Environment() {
                 buildings_.push_back({Vec3(px, height(px, pz) + h / 2, pz), size, int(random() % 5)});
             }
         }
+    // Terminal, hangar and control tower use the same solid building shapes
+    // as the city. Keep them north of the apron and clear of the coastal road.
+    for (const auto& building : {Building{Vec3(36, 0, 216), Vec3(42, 8, 18), 5},
+            Building{Vec3(-94, 0, 216), Vec3(36, 10, 24), 6},
+            Building{Vec3(91, 0, 220), Vec3(9, 22, 9), 7}}) {
+        auto b = building;
+        b.center.SetY(height(b.center.GetX(), b.center.GetZ()) + b.size.GetY() / 2);
+        buildings_.push_back(b);
+    }
     for (int i = 0; i < 360; ++i) {
         const float x = float(int(random() % 620) - 310), z = float(int(random() % 540) - 270);
         const float r = coast_radius(x, z), y = height(x, z);
-        if (road(x, z) || y < 0.65f || r > 0.94f) continue;
+        if (road(x, z) || (std::abs(x) < 205 && z > 182) || y < 0.65f || r > 0.94f) continue;
         if (std::abs(x) < 143 && std::abs(z) < 143) {
             const float cx = std::floor(x / 60) * 60 + 30, cz = std::floor(z / 60) * 60 + 30;
             if (!((cx == 30 && cz == 30) || (cx == -90 && cz == 90))) continue;

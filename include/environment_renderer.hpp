@@ -1,5 +1,6 @@
 #pragma once
 #include "environment.hpp"
+#include "plane.hpp"
 #include <raylib.h>
 
 namespace forza {
@@ -10,7 +11,7 @@ public:
     EnvironmentRenderer(const EnvironmentRenderer&) = delete;
     EnvironmentRenderer& operator=(const EnvironmentRenderer&) = delete;
     void draw(const Camera3D& camera, float time);
-    void minimap(const Environment& environment, const Car& car, Vec3 player_position, Vec3 player_forward, int screen_width) const;
+    void minimap(const Environment& environment, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, int screen_width) const;
 private:
     Model terrain_{}, grass_{}, sand_{}, roads_{}, city_{}, ocean_{};
     Texture2D grass_texture_{}, sand_texture_{}, asphalt_texture_{};

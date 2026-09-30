@@ -1,4 +1,5 @@
 #include "environment_renderer.hpp"
+#include "airport.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -221,9 +222,70 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         roads.ribbon(env, a, b, 12, asphalt_tint);
         if (i % 8 < 4) city.ribbon(env, a, b, 0.18f, {239, 208, 110, 255}, 0.07f);
     }
+    street(0, true, 205, Airport::apron_z);
+    roads.ribbon(env, Vec3(-156, 0, Airport::apron_z), Vec3(62, 0, Airport::apron_z), 24, asphalt_tint);
+    roads.ribbon(env, Vec3(Airport::plane_x, 0, Airport::apron_z),
+        Vec3(Airport::plane_x, 0, Airport::runway_z), 10, asphalt_tint);
+    roads.ribbon(env, Vec3(-Airport::runway_half_length, 0, Airport::runway_z),
+        Vec3(Airport::runway_half_length, 0, Airport::runway_z), Airport::runway_half_width * 2, asphalt_tint);
+    constexpr Color runway_white{240, 242, 233, 255}, taxi_yellow{242, 191, 62, 255};
+    const float rz = Airport::runway_z;
+    for (float side : {-10.8f, 10.8f}) {
+        city.ribbon(env, Vec3(-168, 0, rz + side), Vec3(168, 0, rz + side), .35f, runway_white, .08f);
+        for (int x = -160; x <= 160; x += 20)
+            city.box(Vec3(float(x), Airport::elevation + .17f, rz + side + std::copysign(1, side)),
+                Vec3(.3f, .25f, .3f), {245, 233, 166, 255});
+    }
+    for (int x = -125; x < 130; x += 20)
+        city.ribbon(env, Vec3(float(x), 0, rz), Vec3(float(x + 10), 0, rz), .45f, runway_white, .08f);
+    for (float end : {-1.0f, 1.0f}) for (float stripe : {-8.0f, -5.5f, -3.0f, 3.0f, 5.5f, 8.0f})
+        city.ribbon(env, Vec3(end * 164, 0, rz + stripe), Vec3(end * 154, 0, rz + stripe), 1.4f, runway_white, .08f);
+    // Block glyphs are actual ground markings, visible from the cockpit/chase
+    // camera and the map. Rotate each threshold number toward its approach.
+    const char* digits[] = {"111101101101111", "010110010010111", "111001111100111",
+        "111001111001111", "101101111001001", "111100111001111", "111100111101111",
+        "111001001001001", "111101111101111", "111101111001111"};
+    const auto numeral = [&](int digit, float x, float z, float sign) {
+        for (int row = 0; row < 5; ++row) for (int col = 0; col < 3; ++col) if (digits[digit][row * 3 + col] == '1') {
+            const Vec3 a(x + sign * row * 1.25f, 0, z + sign * col * 1.25f);
+            city.ribbon(env, a, a + Vec3(sign * 1.1f, 0, 0), 1.1f, runway_white, .08f);
+        }
+    };
+    numeral(0, -150, rz - 4, 1); numeral(9, -150, rz + 1, 1);
+    numeral(2, 150, rz + 4, -1); numeral(7, 150, rz - 1, -1);
+    city.ribbon(env, Vec3(0, 0, Airport::apron_z), Vec3(Airport::plane_x, 0, Airport::apron_z), .25f, taxi_yellow, .085f);
+    city.ribbon(env, Vec3(Airport::plane_x, 0, Airport::apron_z), Vec3(Airport::plane_x, 0, rz), .25f, taxi_yellow, .085f);
+    for (float x : {-45.0f, -15.0f, 20.0f}) {
+        city.ribbon(env, Vec3(x, 0, 242), Vec3(x, 0, 252), .18f, taxi_yellow, .085f);
+        city.ribbon(env, Vec3(x - 6, 0, 252), Vec3(x + 6, 0, 252), .18f, taxi_yellow, .085f);
+    }
+    // Small approach lights and a windsock beside the apron.
+    city.box(Vec3(112, Airport::elevation + 3, 248), Vec3(.18f, 6, .18f), {171, 177, 184, 255});
+    for (int i = 0; i < 5; ++i)
+        city.box(Vec3(112 + .5f + i * .5f, Airport::elevation + 5.8f - i * .09f, 248),
+            Vec3(.5f, .6f - i * .075f, .6f - i * .075f), i % 2 ? runway_white : ORANGE);
     constexpr Color palette[] = {{177, 192, 198, 255}, {213, 200, 178, 255}, {123, 162, 172, 255},
         {184, 163, 148, 255}, {205, 213, 204, 255}};
     for (const auto& b : env.buildings()) {
+        if (b.style >= 5) {
+            const float base = b.center.GetY() - b.size.GetY() / 2;
+            city.box(b.center, b.size, b.style == 6 ? Color{139, 154, 164, 255} : Color{211, 216, 205, 255});
+            city.box(b.center + Vec3(0, b.size.GetY() / 2 + .3f, 0),
+                Vec3(b.size.GetX() + 1.2f, .6f, b.size.GetZ() + 1.2f), {50, 76, 93, 255});
+            if (b.style == 7) {
+                // Glazed control room, antenna and blue band on the tower.
+                city.box(Vec3(b.center.GetX(), base + 19, b.center.GetZ()), Vec3(10, 3.5f, 10), {45, 111, 142, 255});
+                city.box(Vec3(b.center.GetX(), base + 24, b.center.GetZ()), Vec3(.18f, 4, .18f), LIGHTGRAY);
+            } else {
+                const float face = b.center.GetZ() + b.size.GetZ() / 2 + .04f;
+                city.box(Vec3(b.center.GetX(), base + 4, face),
+                    Vec3(b.size.GetX() - 4, b.style == 6 ? 7.5f : 3.2f, .06f), {45, 85, 112, 255});
+                for (float x = -b.size.GetX() / 2 + 4; x < b.size.GetX() / 2; x += 4)
+                    city.box(Vec3(b.center.GetX() + x, base + 4, face + .045f), Vec3(.15f, b.style == 6 ? 7.5f : 3.2f, .1f), LIGHTGRAY);
+                if (b.style == 5) city.box(Vec3(b.center.GetX(), base + 6.6f, face), Vec3(32, .8f, .1f), {29, 120, 157, 255});
+            }
+            continue;
+        }
         city.box(b.center, b.size, palette[b.style]);
         const float bottom = b.center.GetY() - b.size.GetY() / 2;
         city.box(Vec3(b.center.GetX(), bottom + b.size.GetY() + 0.3f, b.center.GetZ()),
@@ -315,7 +377,7 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time) {
     DrawModel(roads_, {0, 0, 0}, 1, WHITE);
     DrawModel(city_, {0, 0, 0}, 1, WHITE);
 }
-void EnvironmentRenderer::minimap(const Environment& env, const Car& car, Vec3 player_position, Vec3 player_forward, int screen_width) const {
+void EnvironmentRenderer::minimap(const Environment& env, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, int screen_width) const {
     const float left = float(screen_width - 220), top = 20, scale = 0.28f;
     DrawRectangle(int(left - 8), int(top - 8), 216, 225, {22, 39, 48, 230});
     DrawRectangle(int(left), int(top), 200, 200, {43, 111, 141, 255});
@@ -326,7 +388,12 @@ void EnvironmentRenderer::minimap(const Environment& env, const Car& car, Vec3 p
     }
     const Vector2 car_dot{left + 100 + car.position().GetX() * scale, top + 100 + car.position().GetZ() * scale};
     DrawRectangle(int(car_dot.x - 3), int(car_dot.y - 3), 6, 6, SKYBLUE);
-    const Vector2 dot{left + 100 + player_position.GetX() * scale, top + 100 + player_position.GetZ() * scale};
+    const Vector2 plane_dot{std::clamp(left + 100 + plane.position().GetX() * scale, left + 4, left + 196),
+        std::clamp(top + 100 + plane.position().GetZ() * scale, top + 4, top + 196)};
+    DrawPoly(plane_dot, 3, 5, -90, YELLOW);
+    DrawText("AIRPORT", int(left + 100 - 15), int(top + 100 + 316 * scale), 10, YELLOW);
+    const Vector2 dot{std::clamp(left + 100 + player_position.GetX() * scale, left + 4, left + 196),
+        std::clamp(top + 100 + player_position.GetZ() * scale, top + 4, top + 196)};
     DrawCircleV(dot, 4, ORANGE);
     DrawLineEx(dot, {dot.x + player_forward.GetX() * 12, dot.y + player_forward.GetZ() * 12}, 2, RAYWHITE);
     DrawText("COASTAL CITY  /  N", int(left + 5), int(top + 203), 12, RAYWHITE);
