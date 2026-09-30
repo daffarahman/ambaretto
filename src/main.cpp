@@ -119,6 +119,7 @@ void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const C
     for (const auto& wheel : car.wheels()) {
         const auto mount = car.position() + car.rotate(wheel.mount);
         DrawLine3D(render_vector(mount), render_vector(wheel.center), LIGHTGRAY);
+        if (renderer.draw_wheel(car, wheel, camera)) continue;
         auto axis = car.rotate(forza::Vec3(1, 0, 0));
         if (wheel.front) axis = forza::Quat::sRotation(car.rotate(forza::Vec3(0, 1, 0)), car.steering()) * axis;
         DrawCylinderEx(render_vector(wheel.center - axis * float(0.13)),

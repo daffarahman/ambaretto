@@ -1,6 +1,8 @@
 #include "car_renderer.hpp"
 #include <raymath.h>
 #include <rlgl.h>
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -14,6 +16,12 @@ constexpr float axle_y = -0.145f;
 constexpr float scale = 2.5f / (front_axle_z - rear_axle_z);
 constexpr float axle_midpoint = (front_axle_z + rear_axle_z) / 2;
 constexpr float resting_axle_y = -0.15f; // Relative to the physics center of mass.
+
+std::string model_path(const char* filename) {
+    const std::string relative = std::string("assets/models/") + filename;
+    const std::string bundled = std::string(GetApplicationDirectory()) + relative;
+    return FileExists(bundled.c_str()) ? bundled : relative;
+}
 
 Vector3 fit_position(Vector3 p, bool mirrored) {
     p = Vector3Subtract(p, export_translation);
@@ -104,9 +112,17 @@ void main() {
 } // namespace
 
 CarRenderer::CarRenderer() {
-    const std::string relative = "assets/models/trueno.glb";
-    const std::string bundled = std::string(GetApplicationDirectory()) + relative;
-    const std::string path = FileExists(bundled.c_str()) ? bundled : relative;
+    shader_ = LoadShaderFromMemory(vertex_shader, fragment_shader);
+    shader_.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocation(shader_, "matModel");
+    shader_.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(shader_, "matNormal");
+    camera_location_ = GetShaderLocation(shader_, "cameraPosition");
+    emission_location_ = GetShaderLocation(shader_, "emissionColor");
+    load_body();
+    load_wheel();
+}
+
+void CarRenderer::load_body() {
+    const std::string path = model_path("trueno.glb");
     if (!FileExists(path.c_str())) {
         TraceLog(LOG_WARNING, "CAR: Trueno body missing; using the procedural body");
         return;
@@ -116,11 +132,6 @@ CarRenderer::CarRenderer() {
         TraceLog(LOG_WARNING, "CAR: Unexpected Trueno mesh layout; using the procedural body");
         return;
     }
-    shader_ = LoadShaderFromMemory(vertex_shader, fragment_shader);
-    shader_.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocation(shader_, "matModel");
-    shader_.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(shader_, "matNormal");
-    camera_location_ = GetShaderLocation(shader_, "cameraPosition");
-    emission_location_ = GetShaderLocation(shader_, "emissionColor");
     // The export leaves paint, trim and glass at default white. Give those
     // slots the Trueno's white paint, dark trim and tinted glass.
     constexpr Color palette[9] = {{235, 235, 224, 255}, {32, 35, 39, 255},
@@ -143,8 +154,64 @@ CarRenderer::CarRenderer() {
     TraceLog(LOG_INFO, "CAR: Loaded complete mirrored Trueno body, aligned to existing wheels");
 }
 
+void CarRenderer::load_wheel() {
+    const std::string path = model_path("trueno-wheel.glb");
+    if (!FileExists(path.c_str())) {
+        TraceLog(LOG_WARNING, "CAR: Trueno wheel missing; using the procedural wheels");
+        return;
+    }
+    wheel_ = LoadModel(path.c_str());
+    if (wheel_.meshCount != 3 || !wheel_.meshes || !wheel_.materials || !wheel_.meshMaterial) {
+        TraceLog(LOG_WARNING, "CAR: Unexpected Trueno wheel layout; using the procedural wheels");
+        return;
+    }
+    for (int i = 0; i < wheel_.meshCount; ++i) {
+        const auto& mesh = wheel_.meshes[i];
+        const int material = wheel_.meshMaterial[i];
+        if (!mesh.vertices || mesh.vertexCount <= 0 || material < 0 || material >= wheel_.materialCount) {
+            TraceLog(LOG_WARNING, "CAR: Invalid Trueno wheel geometry; using the procedural wheels");
+            return;
+        }
+    }
+    // The GLB was exported at a rear wheel's position. Recenter the entire
+    // assembly, then fit its circular YZ cross-section to the raycast radius.
+    const auto bounds = GetModelBoundingBox(wheel_);
+    const Vector3 center = Vector3Scale(Vector3Add(bounds.min, bounds.max), 0.5f);
+    float radius = 0;
+    for (int i = 0; i < wheel_.meshCount; ++i) {
+        const auto& mesh = wheel_.meshes[i];
+        for (int v = 0; v < mesh.vertexCount; ++v)
+            radius = std::max(radius, std::hypot(mesh.vertices[v * 3 + 1] - center.y,
+                                               mesh.vertices[v * 3 + 2] - center.z));
+    }
+    if (!std::isfinite(radius) || radius < 0.0001f) {
+        TraceLog(LOG_WARNING, "CAR: Invalid Trueno wheel radius; using the procedural wheels");
+        return;
+    }
+    const float wheel_scale = wheel_radius / radius;
+    // Rim, tire, and tread slots are default white in this export.
+    constexpr Color wheel_colors[3] = {{186, 193, 201, 255}, {22, 24, 27, 255}, {37, 39, 43, 255}};
+    for (int i = 0; i < wheel_.meshCount; ++i) {
+        auto& mesh = wheel_.meshes[i];
+        for (int v = 0; v < mesh.vertexCount; ++v) {
+            mesh.vertices[v * 3] = (mesh.vertices[v * 3] - center.x) * wheel_scale;
+            mesh.vertices[v * 3 + 1] = (mesh.vertices[v * 3 + 1] - center.y) * wheel_scale;
+            mesh.vertices[v * 3 + 2] = (mesh.vertices[v * 3 + 2] - center.z) * wheel_scale;
+        }
+        UpdateMeshBuffer(mesh, 0, mesh.vertices, mesh.vertexCount * 3 * sizeof(float), 0);
+        auto& material = wheel_.materials[wheel_.meshMaterial[i]];
+        material.shader = shader_;
+        material.maps[MATERIAL_MAP_DIFFUSE].color = wheel_colors[i];
+        material.maps[MATERIAL_MAP_EMISSION].color = BLANK;
+    }
+    wheel_ready_ = true;
+    TraceLog(LOG_INFO, "CAR: Loaded Trueno wheel, radius %.3f m, width %.3f m", wheel_radius,
+             (bounds.max.x - bounds.min.x) * wheel_scale);
+}
+
 CarRenderer::~CarRenderer() {
     if (body_.meshes || body_.materials) UnloadModel(body_);
+    if (wheel_.meshes || wheel_.materials) UnloadModel(wheel_);
     if (shader_.id != 0) UnloadShader(shader_);
 }
 
@@ -154,18 +221,37 @@ bool CarRenderer::draw_body(const Car& car, const Camera3D& camera) const {
     const auto p = car.position();
     const Matrix transform = MatrixMultiply(QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()}),
         MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
+    draw_model(body_, transform, camera);
+    return true;
+}
+
+bool CarRenderer::draw_wheel(const Car& car, const Wheel& wheel, const Camera3D& camera) const {
+    if (!wheel_ready_) return false;
+    // Orient the detailed rim outward on each side. Spin about chassis +X
+    // after this turn so both sides roll in the same physical direction.
+    const Quat side = Quat::sRotation(Vec3::sAxisY(), wheel.mount.GetX() < 0 ? PI : 0);
+    const Quat spin = Quat::sRotation(Vec3::sAxisX(), -std::remainder(wheel.spin, 2 * PI));
+    const Quat steering = Quat::sRotation(Vec3::sAxisY(), wheel.front ? car.steering() : 0);
+    const Quat q = car.rotation() * steering * spin * side;
+    const auto& p = wheel.center;
+    const Matrix transform = MatrixMultiply(QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()}),
+        MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
+    draw_model(wheel_, transform, camera);
+    return true;
+}
+
+void CarRenderer::draw_model(const Model& model, const Matrix& transform, const Camera3D& camera) const {
     SetShaderValue(shader_, camera_location_, &camera.position, SHADER_UNIFORM_VEC3);
-    // The source GLB marks every material as double-sided.
+    // Both source GLBs mark every material as double-sided.
     rlDrawRenderBatchActive();
     rlDisableBackfaceCulling();
-    for (int i = 0; i < body_.meshCount; ++i) {
-        const auto& material = body_.materials[body_.meshMaterial[i]];
+    for (int i = 0; i < model.meshCount; ++i) {
+        const auto& material = model.materials[model.meshMaterial[i]];
         const auto color = material.maps[MATERIAL_MAP_EMISSION].color;
         const Vector3 emission{color.r / 255.0f, color.g / 255.0f, color.b / 255.0f};
         SetShaderValue(shader_, emission_location_, &emission, SHADER_UNIFORM_VEC3);
-        DrawMesh(body_.meshes[i], material, transform);
+        DrawMesh(model.meshes[i], material, transform);
     }
     rlEnableBackfaceCulling();
-    return true;
 }
 } // namespace forza
