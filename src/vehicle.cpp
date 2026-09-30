@@ -19,6 +19,7 @@
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
@@ -140,8 +141,10 @@ PhysicsWorld::PhysicsWorld(const Environment& environment) {
         impl_->add_body(settings);
     }
     for (const auto& tree : environment.trees()) {
-        JPH::RefConst<JPH::Shape> trunk = new JPH::BoxShape(Vec3(0.3f, tree.height / 2, 0.3f));
-        JPH::BodyCreationSettings settings(trunk, tree.base + Vec3(0, tree.height / 2, 0),
+        const float height = Tree::model_trunk_height * tree.scale();
+        const float radius = Tree::model_trunk_radius * tree.scale();
+        JPH::RefConst<JPH::Shape> trunk = new JPH::CylinderShape(height / 2, radius, .02f);
+        JPH::BodyCreationSettings settings(trunk, tree.base + Vec3(0, height / 2, 0),
             Quat::sIdentity(), JPH::EMotionType::Static, obstacle_layer);
         impl_->add_body(settings);
     }

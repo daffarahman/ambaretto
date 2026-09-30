@@ -113,7 +113,8 @@ Environment::Environment() {
             const float cx = std::floor(x / 60) * 60 + 30, cz = std::floor(z / 60) * 60 + 30;
             if (!((cx == 30 && cz == 30) || (cx == -90 && cz == 90))) continue;
         }
-        trees_.push_back({Vec3(x, y, z), 4.5f + (random() % 40) * 0.1f, r > 0.77f});
+        const float yaw = std::remainder(x * 13 + z * 17, 360.0f) * .017453293f;
+        trees_.push_back({Vec3(x, y, z), 4.5f + (random() % 40) * 0.1f, yaw});
     }
 }
 

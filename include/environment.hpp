@@ -8,7 +8,16 @@ namespace forza {
 enum class Surface { Grass, Sand, Rock, Road, Seabed };
 struct TerrainTriangle { std::uint32_t a, b, c; Surface surface; };
 struct Building { Vec3 center; Vec3 size; int style; };
-struct Tree { Vec3 base; float height; bool palm; };
+struct Tree {
+    Vec3 base;
+    float height;
+    float yaw;
+    // Native tree1.glb dimensions, shared by rendering and trunk collision.
+    static constexpr float model_height = 3.9276662f;
+    static constexpr float model_trunk_height = 2.5137062f;
+    static constexpr float model_trunk_radius = .1256853f;
+    float scale() const { return height / model_height; }
+};
 
 // Shared map data: rendering and Jolt use these exact terrain triangles.
 class Environment {

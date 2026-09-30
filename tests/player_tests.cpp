@@ -92,10 +92,32 @@ void mouse_camera() {
     camera.look(0, 0, 1000, false, forza::Vec3(0, 0, -1), 0, 1.0f / 60);
     require(camera.desired_position(forza::Vec3::sZero(), false).Length() >= 2.49f, "camera zoom entered the character");
 }
+void model_tree_collisions() {
+    const forza::Environment map;
+    forza::PhysicsWorld world(map);
+    forza::Character character(world);
+    // Pick an isolated tree outside the city so nearby buildings or other
+    // trunks cannot make a collision query pass for the wrong reason.
+    for (const auto& tree : map.trees()) {
+        if (std::abs(tree.base.GetX()) < 150 && std::abs(tree.base.GetZ()) < 150) continue;
+        bool isolated = true;
+        for (const auto& other : map.trees())
+            if (&other != &tree && (tree.base - other.base).Length() < 10) isolated = false;
+        if (!isolated) continue;
+        require(!character.can_stand_at(tree.base + forza::Vec3(0, .08f, 0)), "character can overlap the model's tree trunk");
+        require(character.can_stand_at(tree.base + forza::Vec3(0, tree.height * .75f, 0)), "tree has an invisible trunk collider in its upper foliage");
+        const forza::Vec3 across(0, 0, -4);
+        require(world.camera_fraction(tree.base + forza::Vec3(0, 1, 2), across) < .5f, "camera passed through the model's tree trunk");
+        require(world.camera_fraction(tree.base + forza::Vec3(0, tree.height * .85f, 2), across) > .99f,
+            "tree foliage unexpectedly blocks the camera");
+        return;
+    }
+    require(false, "no isolated tree available for collision checks");
+}
 }
 int main() {
     try {
-        character_movement(); city_collisions_and_interaction(); mouse_camera();
+        character_movement(); city_collisions_and_interaction(); mouse_camera(); model_tree_collisions();
         std::cout << "All player checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

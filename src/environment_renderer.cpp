@@ -1,6 +1,7 @@
 #include "environment_renderer.hpp"
 #include "traffic.hpp"
 #include "airport.hpp"
+#include <rlgl.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -109,6 +110,38 @@ struct MeshBuilder {
         return LoadModelFromMesh(mesh);
     }
 };
+Mesh batch_tree_mesh(const Mesh& source, const std::vector<Tree>& trees, const Vec3& origin) {
+    Mesh mesh{};
+    mesh.triangleCount = source.triangleCount * int(trees.size());
+    mesh.vertexCount = mesh.triangleCount * 3;
+    mesh.vertices = static_cast<float*>(MemAlloc(mesh.vertexCount * 3 * sizeof(float)));
+    mesh.normals = static_cast<float*>(MemAlloc(mesh.vertexCount * 3 * sizeof(float)));
+    mesh.texcoords = static_cast<float*>(MemAlloc(mesh.vertexCount * 2 * sizeof(float)));
+    mesh.colors = static_cast<unsigned char*>(MemAlloc(mesh.vertexCount * 4));
+    int destination = 0;
+    for (const auto& tree : trees) {
+        const Quat rotation = Quat::sRotation(Vec3::sAxisY(), tree.yaw);
+        for (int corner = 0; corner < source.triangleCount * 3; ++corner, ++destination) {
+            const int index = source.indices ? source.indices[corner] : corner;
+            const Vec3 local(source.vertices[index * 3], source.vertices[index * 3 + 1], source.vertices[index * 3 + 2]);
+            const Vec3 point = tree.base + rotation * ((local - origin) * tree.scale());
+            const Vec3 normal = rotation * (source.normals
+                ? Vec3(source.normals[index * 3], source.normals[index * 3 + 1], source.normals[index * 3 + 2]) : Vec3::sAxisY());
+            mesh.vertices[destination * 3] = point.GetX();
+            mesh.vertices[destination * 3 + 1] = point.GetY();
+            mesh.vertices[destination * 3 + 2] = point.GetZ();
+            mesh.normals[destination * 3] = normal.GetX();
+            mesh.normals[destination * 3 + 1] = normal.GetY();
+            mesh.normals[destination * 3 + 2] = normal.GetZ();
+            for (int uv = 0; uv < 2; ++uv)
+                mesh.texcoords[destination * 2 + uv] = source.texcoords ? source.texcoords[index * 2 + uv] : 0;
+            for (int channel = 0; channel < 4; ++channel)
+                mesh.colors[destination * 4 + channel] = source.colors ? source.colors[index * 4 + channel] : 255;
+        }
+    }
+    UploadMesh(&mesh, false);
+    return mesh;
+}
 Color surface_color(Surface s) {
     switch (s) {
         case Surface::Sand: return {222, 202, 143, 255};
@@ -146,6 +179,42 @@ void main() {
     float lighting = 0.58 + 0.42 * max(dot(normalize(normal), normalize(vec3(-0.45, 0.85, 0.30))), 0.0);
     float fog = smoothstep(450.0, 1400.0, distance(position.xz, cameraPosition.xz));
     finalColor = vec4(mix(surface.rgb * lighting, vec3(0.64, 0.80, 0.87), fog * 0.80), surface.a);
+})GLSL";
+const char* tree_vertex = R"GLSL(#version 330
+in vec3 vertexPosition;
+in vec3 vertexNormal;
+in vec2 vertexTexCoord;
+in vec4 vertexColor;
+uniform mat4 mvp;
+out vec3 position;
+out vec3 normal;
+out vec2 texCoord;
+out vec4 color;
+void main() {
+    position = vertexPosition;
+    normal = vertexNormal;
+    texCoord = vertexTexCoord;
+    color = vertexColor;
+    gl_Position = mvp * vec4(vertexPosition, 1.0);
+})GLSL";
+const char* tree_fragment = R"GLSL(#version 330
+in vec3 position;
+in vec3 normal;
+in vec2 texCoord;
+in vec4 color;
+uniform vec3 cameraPosition;
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+out vec4 finalColor;
+void main() {
+    vec4 surface = texture(texture0, texCoord) * colDiffuse * color;
+    // Leaf cards need holes that neither hide scenery nor write depth.
+    if (surface.a < 0.3) discard;
+    vec3 n = normalize(normal);
+    if (!gl_FrontFacing) n = -n;
+    float lighting = 0.58 + 0.42 * max(dot(n, normalize(vec3(-0.45, 0.85, 0.30))), 0.0);
+    float fog = smoothstep(450.0, 1400.0, distance(position.xz, cameraPosition.xz));
+    finalColor = vec4(mix(surface.rgb * lighting, vec3(0.64, 0.80, 0.87), fog * 0.80), 1.0);
 })GLSL";
 const char* water_vertex = R"GLSL(#version 330
 in vec3 vertexPosition;
@@ -299,29 +368,6 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             }
         city.box(Vec3(b.center.GetX(), bottom + 1.3f, b.center.GetZ() + 8.04f), Vec3(2.2f, 2.6f, 0.06f), {29, 57, 68, 255});
     }
-    for (const auto& t : env.trees()) {
-        city.box(t.base + Vec3(0, t.height / 2, 0), Vec3(0.6f, t.height, 0.6f), {127, 99, 68, 255});
-        const Vec3 crown = t.base + Vec3(0, t.height, 0);
-        if (t.palm) {
-            for (int i = 0; i < 7; ++i) {
-                const float a = i * 2 * pi / 7;
-                const Vec3 direction(std::cos(a), 0, std::sin(a)), side(-std::sin(a), 0, std::cos(a));
-                const Vec3 middle = crown + direction * 2.2f + Vec3(0, 0.7f, 0);
-                const Vec3 tip = crown + direction * 4 + Vec3(0, -1, 0);
-                city.quad(crown, middle + side * 0.7f, tip, middle - side * 0.7f, {47, 126, 83, 255});
-                city.quad(crown, middle - side * 0.7f, tip, middle + side * 0.7f, {47, 126, 83, 255});
-            }
-        } else {
-            const Vec3 top = crown + Vec3(0, 2.6f, 0), bottom = crown - Vec3(0, 2, 0);
-            for (int i = 0; i < 8; ++i) {
-                const float a = i * 2 * pi / 8, b = (i + 1) * 2 * pi / 8;
-                const Vec3 p = crown + Vec3(std::cos(a) * 2.7f, 0, std::sin(a) * 2.7f);
-                const Vec3 q = crown + Vec3(std::cos(b) * 2.7f, 0, std::sin(b) * 2.7f);
-                city.triangle(top, q, p, {60, 124, 76, 255});
-                city.triangle(bottom, p, q, {51, 108, 68, 255});
-            }
-        }
-    }
     // Beach umbrellas and towels on the broad eastern shore.
     for (int i = 0; i < 18; ++i) {
         const float a = -0.6f + i * 0.065f;
@@ -356,16 +402,63 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     land_camera_ = GetShaderLocation(land_shader_, "cameraPosition");
     water_camera_ = GetShaderLocation(water_shader_, "cameraPosition");
     water_time_ = GetShaderLocation(water_shader_, "time");
+    load_trees(env);
+}
+
+void EnvironmentRenderer::load_trees(const Environment& env) {
+    if (env.trees().empty()) return;
+    const std::string relative = "assets/models/tree1.glb";
+    const std::string bundled = std::string(GetApplicationDirectory()) + relative;
+    const std::string path = FileExists(bundled.c_str()) ? bundled : relative;
+    if (!FileExists(path.c_str())) {
+        TraceLog(LOG_WARNING, "TREES: tree1.glb missing");
+        return;
+    }
+    trees_ = LoadModel(path.c_str());
+    if (trees_.meshCount <= 0 || !trees_.meshes || !trees_.materials || !trees_.meshMaterial) return;
+    for (int i = 0; i < trees_.meshCount; ++i) {
+        const auto& mesh = trees_.meshes[i];
+        if (!mesh.vertices || mesh.triangleCount <= 0 || trees_.meshMaterial[i] < 0
+            || trees_.meshMaterial[i] >= trees_.materialCount) {
+            TraceLog(LOG_WARNING, "TREES: Invalid tree1.glb geometry");
+            return;
+        }
+    }
+    const auto bounds = GetModelBoundingBox(trees_);
+    // Center the trunk in X/Z and put the root on the shared terrain height.
+    const Vec3 origin((bounds.min.x + bounds.max.x) / 2, bounds.min.y, (bounds.min.z + bounds.max.z) / 2);
+    tree_shader_ = LoadShaderFromMemory(tree_vertex, tree_fragment);
+    tree_camera_ = GetShaderLocation(tree_shader_, "cameraPosition");
+    tree_texture_ = trees_.materials[trees_.meshMaterial[0]].maps[MATERIAL_MAP_DIFFUSE].texture;
+    if (tree_texture_.id != 0 && tree_texture_.id != rlGetTextureIdDefault()) {
+        GenTextureMipmaps(&tree_texture_);
+        SetTextureFilter(tree_texture_, TEXTURE_FILTER_TRILINEAR);
+        SetTextureWrap(tree_texture_, TEXTURE_WRAP_CLAMP);
+    }
+    for (int i = 0; i < trees_.meshCount; ++i) {
+        Mesh batch = batch_tree_mesh(trees_.meshes[i], env.trees(), origin);
+        UnloadMesh(trees_.meshes[i]);
+        trees_.meshes[i] = batch;
+        auto& material = trees_.materials[trees_.meshMaterial[i]];
+        material.shader = tree_shader_;
+        if (material.maps[MATERIAL_MAP_DIFFUSE].texture.id == tree_texture_.id)
+            material.maps[MATERIAL_MAP_DIFFUSE].texture = tree_texture_;
+    }
+    trees_ready_ = true;
+    TraceLog(LOG_INFO, "TREES: Loaded tree1.glb for all %i island trees", int(env.trees().size()));
 }
 
 EnvironmentRenderer::~EnvironmentRenderer() {
     UnloadModel(terrain_); UnloadModel(city_); UnloadModel(ocean_);
     UnloadModel(grass_); UnloadModel(sand_);
     UnloadModel(roads_);
+    if (trees_.meshes || trees_.materials) UnloadModel(trees_);
+    if (tree_texture_.id != 0 && tree_texture_.id != rlGetTextureIdDefault()) UnloadTexture(tree_texture_);
     if (grass_texture_.id != 0) UnloadTexture(grass_texture_);
     if (sand_texture_.id != 0) UnloadTexture(sand_texture_);
     if (asphalt_texture_.id != 0) UnloadTexture(asphalt_texture_);
     UnloadShader(land_shader_); UnloadShader(water_shader_);
+    if (tree_shader_.id != 0) UnloadShader(tree_shader_);
 }
 void EnvironmentRenderer::draw(const Camera3D& camera, float time) {
     SetShaderValue(land_shader_, land_camera_, &camera.position, SHADER_UNIFORM_VEC3);
@@ -377,6 +470,14 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time) {
     DrawModel(sand_, {0, 0, 0}, 1, WHITE);
     DrawModel(roads_, {0, 0, 0}, 1, WHITE);
     DrawModel(city_, {0, 0, 0}, 1, WHITE);
+    if (trees_ready_) {
+        SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
+        rlDrawRenderBatchActive();
+        rlDisableBackfaceCulling();
+        DrawModel(trees_, {0, 0, 0}, 1, WHITE);
+        rlDrawRenderBatchActive();
+        rlEnableBackfaceCulling();
+    }
 }
 void EnvironmentRenderer::minimap(const Environment& env, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, int screen_width, const Traffic* traffic) const {
     const float left = float(screen_width - 220), top = 20, scale = 0.28f;

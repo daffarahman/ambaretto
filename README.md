@@ -123,6 +123,8 @@ Water is animated scenery. Driving into the ocean automatically returns the car 
 
 Grass uses `assets/textures/grass.png`, beaches use `assets/textures/beach-sand.png`, and roads use `assets/textures/asphalt.png`. All three tile every four meters with mipmap filtering. Road markings are drawn above the asphalt. CMake copies `assets` beside each executable when building; the game loads that copy independently of the working directory.
 
+All island trees use `assets/models/tree1.glb`, including trees in parks and along the coast. The model's embedded autumn-leaf texture retains its transparent gaps and renders from both sides. Trees keep their existing terrain positions, vary in height and rotation, and share a batched mesh loaded once. Cylindrical trunk colliders use the model's scaled trunk dimensions; foliage remains passable.
+
 ## Code and physics
 
 The car body uses `assets/models/trueno.glb`. The exported half-body is mirrored at load time, turned to face the driving direction, and scaled/positioned to match the existing 2.5-meter wheelbase. White paint, dark trim, and tinted glass fill the export's default white material slots; lamp colors come from its emissive materials. Each wheel uses `assets/models/trueno-wheel.glb`, recentered from its exported position and uniformly scaled to the physics tire radius of 0.34 meters. The detailed rims face outward on both sides; all four wheels follow the raycast suspension and rotate as the car moves, with steering on the front pair. Silver rims and dark rubber/tread fill the wheel export's default white slots. Both models are loaded once and copied beside the executable with the other assets. Missing or invalid models fall back to the respective procedural body or wheels.
