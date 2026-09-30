@@ -215,13 +215,13 @@ CarRenderer::~CarRenderer() {
     if (shader_.id != 0) UnloadShader(shader_);
 }
 
-bool CarRenderer::draw_body(const Car& car, const Camera3D& camera) const {
+bool CarRenderer::draw_body(const Car& car, const Camera3D& camera, Color paint) const {
     if (!ready_) return false;
     const auto q = car.rotation();
     const auto p = car.position();
     const Matrix transform = MatrixMultiply(QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()}),
         MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
-    draw_model(body_, transform, camera);
+    draw_model(body_, transform, camera, paint);
     return true;
 }
 
@@ -241,17 +241,20 @@ bool CarRenderer::draw_wheel(const Car& car, const Wheel& wheel, const Camera3D&
     return true;
 }
 
-void CarRenderer::draw_model(const Model& model, const Matrix& transform, const Camera3D& camera) const {
+void CarRenderer::draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Color paint) const {
     SetShaderValue(shader_, camera_location_, &camera.position, SHADER_UNIFORM_VEC3);
     // Both source GLBs mark every material as double-sided.
     rlDrawRenderBatchActive();
     rlDisableBackfaceCulling();
     for (int i = 0; i < model.meshCount; ++i) {
-        const auto& material = model.materials[model.meshMaterial[i]];
+        auto& material = model.materials[model.meshMaterial[i]];
+        const Color original = material.maps[MATERIAL_MAP_DIFFUSE].color;
+        if (i == 0 && paint.a != 0) material.maps[MATERIAL_MAP_DIFFUSE].color = paint;
         const auto color = material.maps[MATERIAL_MAP_EMISSION].color;
         const Vector3 emission{color.r / 255.0f, color.g / 255.0f, color.b / 255.0f};
         SetShaderValue(shader_, emission_location_, &emission, SHADER_UNIFORM_VEC3);
         DrawMesh(model.meshes[i], material, transform);
+        material.maps[MATERIAL_MAP_DIFFUSE].color = original;
     }
     rlEnableBackfaceCulling();
 }

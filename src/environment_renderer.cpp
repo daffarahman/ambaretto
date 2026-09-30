@@ -1,4 +1,5 @@
 #include "environment_renderer.hpp"
+#include "traffic.hpp"
 #include "airport.hpp"
 #include <algorithm>
 #include <array>
@@ -377,7 +378,7 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time) {
     DrawModel(roads_, {0, 0, 0}, 1, WHITE);
     DrawModel(city_, {0, 0, 0}, 1, WHITE);
 }
-void EnvironmentRenderer::minimap(const Environment& env, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, int screen_width) const {
+void EnvironmentRenderer::minimap(const Environment& env, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, int screen_width, const Traffic* traffic) const {
     const float left = float(screen_width - 220), top = 20, scale = 0.28f;
     DrawRectangle(int(left - 8), int(top - 8), 216, 225, {22, 39, 48, 230});
     DrawRectangle(int(left), int(top), 200, 200, {43, 111, 141, 255});
@@ -385,6 +386,10 @@ void EnvironmentRenderer::minimap(const Environment& env, const Car& car, const 
         const float y = env.height(float(x), float(z));
         if (y > 0) DrawRectangle(int(left + 100 + x * scale), int(top + 100 + z * scale), 3, 3,
             env.road(float(x), float(z)) ? Color{61, 71, 78, 255} : y < 1.3f ? Color{213, 193, 135, 255} : Color{104, 147, 103, 255});
+    }
+    if (traffic) for (const auto& vehicle : traffic->cars()) {
+        const auto p = vehicle.car->position();
+        DrawCircleV({left + 100 + p.GetX() * scale, top + 100 + p.GetZ() * scale}, 2.5f, vehicle.npc ? GREEN : SKYBLUE);
     }
     const Vector2 car_dot{left + 100 + car.position().GetX() * scale, top + 100 + car.position().GetZ() * scale};
     DrawRectangle(int(car_dot.x - 3), int(car_dot.y - 3), 6, 6, SKYBLUE);

@@ -3,6 +3,7 @@
 #include "plane.hpp"
 
 namespace forza {
+class Traffic;
 struct FootInput {
     Vec3 direction{0, 0, 0};
     bool sprint = false;
@@ -35,7 +36,7 @@ enum class Interaction { Entered, Exited, TooFast, TooFar, Blocked };
 enum class EntryVehicle { None, Car, Plane };
 class Player {
 public:
-    Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane = nullptr);
+    Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane = nullptr, Traffic* traffic = nullptr);
     void reset();
     void recover_plane();
     Interaction interact();
@@ -44,17 +45,25 @@ public:
     bool flying() const { return flying_; }
     bool on_foot() const { return !driving_ && !flying_; }
     EntryVehicle entry_vehicle() const;
+    Car* entry_car() const;
+    bool can_steal() const;
     bool can_enter() const;
-    Vec3 position() const { return driving_ ? car_.position() : flying_ ? plane_->position() : character_.position(); }
-    Vec3 forward() const { return driving_ ? car_.forward() : flying_ ? plane_->forward() : character_.forward(); }
+    Car& car() { return *car_; }
+    const Car& car() const { return *car_; }
+    Vec3 position() const { return driving_ ? car_->position() : flying_ ? plane_->position() : character_.position(); }
+    Vec3 forward() const { return driving_ ? car_->forward() : flying_ ? plane_->forward() : character_.forward(); }
     Character& character() { return character_; }
     const Character& character() const { return character_; }
 private:
     PhysicsWorld& world_;
-    Car& car_;
+    struct EntryTarget { EntryVehicle kind = EntryVehicle::None; Car* car = nullptr; };
+    EntryTarget entry_target() const;
+    Car& starter_car_;
+    Car* car_;
     const Environment& environment_;
     Character character_;
     Plane* plane_ = nullptr;
+    Traffic* traffic_ = nullptr;
     bool driving_ = true;
     bool flying_ = false;
 };

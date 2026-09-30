@@ -1,6 +1,6 @@
 # Forza Ambazon
 
-A C++17 coastal city driving and flying demo built with native [raylib](https://www.raylib.com/) and [Jolt Physics](https://github.com/jrouwe/JoltPhysics). Four raycast wheels apply suspension and tire impulses to a single chassis rigid body. Explore a city street grid, hill districts, a coastal loop road, parks, sandy beaches, and a connected airport surrounded by animated ocean water. Includes WASD driving, handbrake drifting, rear tire skid marks, a flyable propeller plane, third-person character control, a mouse camera, and a minimap.
+A C++17 coastal city driving and flying demo built with native [raylib](https://www.raylib.com/) and [Jolt Physics](https://github.com/jrouwe/JoltPhysics). Four raycast wheels apply suspension and tire impulses to each car's chassis rigid body. Explore a city street grid, hill districts, a coastal loop road, parks, sandy beaches, and a connected airport surrounded by animated ocean water. Includes WASD driving, handbrake drifting, rear tire skid marks, stealable NPC traffic, a flyable propeller plane, third-person character control, a mouse camera, and a minimap.
 
 ## Build on Windows with MSYS2 UCRT64
 
@@ -47,7 +47,7 @@ cmake --build --preset ucrt64
 | W / S | Drive forward / reverse |
 | A / D | Steer left / right |
 | Space | Rear handbrake / drift |
-| E | Enter the nearest car or plane / exit when stopped on the ground |
+| E | Enter the nearest car or plane / steal a nearby stopped traffic car / exit when stopped on the ground |
 | WASD (on foot) | Move relative to the camera |
 | Shift (on foot) | Sprint |
 | Space (on foot) | Jump |
@@ -63,6 +63,19 @@ cmake --build --preset ucrt64
 Build speed before holding Space and A or D to start a slide. Use W to keep driving through it; release Space and straighten or countersteer to regain grip.
 
 Press E while stopped or moving slowly to leave the car. Walk back within a few meters and press E to enter. The game checks for a free exit beside either door and behind the car, so buildings cannot trap the character inside a wall. The car applies its parking brake while you explore on foot.
+
+### NPC traffic and stealing cars
+
+Fourteen NPC cars drive in both directions along the city streets and coastal loop. They use the same Jolt chassis, suspension, steering, wheels, and collisions as your car, with colored paint and dark tinted windows. Traffic slows for corners, queues behind vehicles, and stops when you approach on foot. Green minimap dots mark NPC cars; blue dots mark cars available to reenter after taking them.
+
+Leave your car with E, walk beside a stopped traffic car, and press E when **Press E to steal traffic car** appears. Entry requires a clear path, a distance within 3.3 meters, and speed below 2.5 m/s. Stealing stops the car's AI control and gives you immediate WASD control. The camera, speed display, drifting, F3 tuning, and R/water recovery all follow the car you take. Exit and reenter it as usual, or steal another car. Abandoned cars stay parked, and tuning stays with each individual car for the session. Displaced or stuck NPC cars recover into clear road space when more than 35 meters from the player.
+
+Start beside a traffic car, ready to steal it, or capture a preview:
+
+```bash
+./build/ucrt64/forzaambazon.exe --traffic
+./build/ucrt64/forzaambazon.exe --traffic --screenshot build/traffic-preview.png
+```
 
 ### Airport and flying
 
@@ -122,6 +135,7 @@ The car body uses `assets/models/trueno.glb`. The exported half-body is mirrored
 - `src/car_renderer.cpp`: Trueno body/wheel loading, symmetry, wheel alignment, steering/spin animation, material lighting, and chassis orientation.
 - `include/car_tuning.hpp`, `src/tuning_panel.cpp`: runtime tuning defaults/limits, sliders, precision input, and wheel telemetry.
 - `include/player.hpp`, `src/player.cpp`: on-foot control and entering/exiting the vehicle; the Jolt capsule implementation lives alongside the physics world in `src/vehicle.cpp`.
+- `include/traffic.hpp`, `src/traffic.cpp`: city/coastal lane routes, NPC driving and braking, pedestrian yielding, ownership transfer, and distant recovery.
 - `src/third_person_camera.cpp`: mouse orbit, zoom, and camera-relative movement.
 - `include/environment.hpp`, `src/environment.cpp`: shared terrain mesh, city layout, buildings, trees, spawn, and water recovery bounds.
 - `src/environment_renderer.cpp`: terrain lighting, road markings, building details, vegetation, beach props, animated ocean, and minimap.
@@ -129,6 +143,7 @@ The car body uses `assets/models/trueno.glb`. The exported half-body is mirrored
 - `tests/player_tests.cpp`: walking, sprinting, jumping, slopes, collisions, parking, entry/exit conditions, and mouse camera movement.
 - `tests/tuning_tests.cpp`: live suspension changes, tire contact, validation, per-car isolation, setup retention, and slider input/focus behavior.
 - `tests/plane_tests.cpp`: road access, runway collision alignment, parking, takeoff distance, lift/control response, stalls, gravity, gliding, landing/braking, taxi steering, aircraft collisions, entry/exit, and recovery.
+- `tests/traffic_tests.cpp`: sustained road following, pedestrian/vehicle braking, stealing, switching cars, parking, per-car tuning/recovery, and plane boarding with traffic.
 
 Physics runs at 120 Hz independently of rendering. The chassis weighs 1100 kg and has a lowered center of mass. Steering grip receives priority in the tire friction circle, and steering angle decreases as speed rises. The handbrake reduces rear grip and brakes those tires, allowing the rear to slide while the front wheels steer and drive. Suspension rays query only ground collision objects.
 
