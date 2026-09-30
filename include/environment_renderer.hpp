@@ -10,7 +10,7 @@ public:
     EnvironmentRenderer(const EnvironmentRenderer&) = delete;
     EnvironmentRenderer& operator=(const EnvironmentRenderer&) = delete;
     void draw(const Camera3D& camera, float time);
-    void minimap(const Environment& environment, const Car& car, int screen_width) const;
+    void minimap(const Environment& environment, const Car& car, Vec3 player_position, Vec3 player_forward, int screen_width) const;
 private:
     Model terrain_{}, city_{}, ocean_{};
     Shader land_shader_{}, water_shader_{};

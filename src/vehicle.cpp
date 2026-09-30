@@ -1,5 +1,6 @@
 #include "vehicle.hpp"
 #include "environment.hpp"
+#include "player.hpp"
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/TempAllocator.h>
@@ -16,6 +17,12 @@
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -187,6 +194,83 @@ void PhysicsWorld::step(float dt) {
         throw std::runtime_error("Jolt physics capacity exceeded");
 }
 
+float PhysicsWorld::camera_fraction(const Vec3& origin, const Vec3& offset, JPH::BodyID ignore) const {
+    if (offset.LengthSq() < 0.0001f) return 1;
+    JPH::SphereShape sphere(0.28f);
+    const JPH::RShapeCast cast(&sphere, Vec3::sOne(), JPH::RMat44::sTranslation(origin), offset);
+    JPH::ShapeCastSettings settings;
+    settings.mBackFaceModeTriangles = JPH::EBackFaceMode::CollideWithBackFaces;
+    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> hits;
+    impl_->system.GetNarrowPhaseQuery().CastShape(cast, settings, origin, hits, {}, {}, JPH::IgnoreSingleBodyFilter(ignore));
+    return hits.HadHit() ? std::clamp(hits.mHit.mFraction - 0.03f / offset.Length(), 0.0f, 1.0f) : 1;
+}
+
+struct Character::Impl {
+    JPH::Ref<JPH::CharacterVirtual> character;
+    Vec3 desired_velocity{0, 0, 0};
+};
+
+Character::Character(PhysicsWorld& world) : world_(world), impl_(std::make_unique<Impl>()) {
+    JPH::CharacterVirtualSettings settings;
+    JPH::RefConst<JPH::Shape> capsule = new JPH::CapsuleShape(0.58f, 0.32f);
+    settings.mShape = new JPH::RotatedTranslatedShape(Vec3(0, 0.9f, 0), Quat::sIdentity(), capsule);
+    settings.mSupportingVolume = JPH::Plane(Vec3::sAxisY(), -0.32f);
+    settings.mMaxSlopeAngle = 0.8726646f;
+    settings.mEnhancedInternalEdgeRemoval = true;
+    settings.mMaxStrength = 100;
+    impl_->character = new JPH::CharacterVirtual(&settings, Vec3(0, 2, 0), Quat::sIdentity(), &world_.impl_->system);
+}
+Character::~Character() = default;
+Vec3 Character::position() const { return impl_->character->GetPosition(); }
+Vec3 Character::velocity() const { return impl_->character->GetLinearVelocity(); }
+bool Character::grounded() const { return impl_->character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround; }
+
+void Character::reset(const Vec3& feet, float yaw) {
+    yaw_ = yaw; gait_ = 0;
+    impl_->desired_velocity = Vec3::sZero();
+    impl_->character->SetPosition(feet);
+    impl_->character->SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw));
+    impl_->character->SetLinearVelocity(Vec3::sZero());
+    impl_->character->RefreshContacts({}, {}, {}, {}, world_.impl_->allocator);
+}
+
+bool Character::can_stand_at(const Vec3& feet) const {
+    const auto* shape = impl_->character->GetShape();
+    JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> hits;
+    world_.impl_->system.GetNarrowPhaseQuery().CollideShape(shape, Vec3::sOne(),
+        JPH::RMat44::sTranslation(feet + shape->GetCenterOfMass()), {}, feet, hits);
+    for (const auto& hit : hits.mHits) if (hit.mPenetrationDepth > 0.005f) return false;
+    return true;
+}
+
+void Character::step(FootInput input, float dt) {
+    auto& character = *impl_->character;
+    input.direction.SetY(0);
+    if (input.direction.LengthSq() > 1) input.direction = input.direction.Normalized();
+    const Vec3 desired = input.direction * (input.sprint ? 6.5f : 3.2f);
+    const float acceleration = character.IsSupported() ? 18.0f : 4.0f;
+    impl_->desired_velocity += (desired - impl_->desired_velocity) * (1 - std::exp(-acceleration * dt));
+    character.UpdateGroundVelocity();
+    float vertical_speed = velocity().GetY();
+    if (grounded() && vertical_speed - character.GetGroundVelocity().GetY() < 0.15f) {
+        vertical_speed = character.GetGroundVelocity().GetY();
+        if (input.jump) vertical_speed += 5.8f;
+    }
+    vertical_speed -= 18 * dt;
+    character.SetLinearVelocity(impl_->desired_velocity + Vec3(0, vertical_speed, 0));
+    JPH::CharacterVirtual::ExtendedUpdateSettings settings;
+    settings.mWalkStairsStepUp = Vec3(0, 0.35f, 0);
+    settings.mStickToFloorStepDown = vertical_speed > 0.1f ? Vec3::sZero() : Vec3(0, -0.35f, 0);
+    character.ExtendedUpdate(dt, Vec3(0, -18, 0), settings, {}, {}, {}, {}, world_.impl_->allocator);
+    if (input.direction.LengthSq() > 0.01f) {
+        const float target = std::atan2(-input.direction.GetX(), -input.direction.GetZ());
+        yaw_ += std::clamp(std::remainder(target - yaw_, 6.28318530718f), -12 * dt, 12 * dt);
+        character.SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw_));
+    }
+    const auto speed = velocity();
+    if (grounded()) gait_ += std::hypot(speed.GetX(), speed.GetZ()) * dt * 2.3f;
+}
+
 Vec3 Car::position() const { return world_.impl_->system.GetBodyInterface().GetCenterOfMassPosition(body_); }
 Vec3 Car::velocity() const { return world_.impl_->system.GetBodyInterface().GetLinearVelocity(body_); }
 Quat Car::rotation() const { return world_.impl_->system.GetBodyInterface().GetRotation(body_); }
@@ -275,6 +359,8 @@ void Car::step(Input input, float dt) {
             const float brake_limit = normal_force * float(0.12) * dt;
             long_impulse = clamp(-long_speed * mass * float(0.25 * 0.9), -brake_limit, brake_limit);
         }
+        if (input.parking_brake)
+            long_impulse = clamp(-long_speed * mass * 0.25f, -grip, grip);
         long_impulse = clamp(long_impulse, -remaining, remaining);
         physics.AddImpulse(body_, wheel_forward * long_impulse + wheel_right * lateral_impulse, hit.point);
         wheel.spin += long_speed / wheel_radius * dt;

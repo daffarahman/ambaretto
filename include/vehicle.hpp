@@ -9,6 +9,7 @@
 
 namespace forza {
 class Environment;
+class Character;
 using Vec3 = JPH::Vec3;
 using Quat = JPH::Quat;
 inline constexpr float fixed_step = 1.0f / 120.0f;
@@ -19,6 +20,7 @@ struct Input {
     float throttle = 0;
     float steer = 0; // Positive turns left; the car faces local -Z.
     bool handbrake = false;
+    bool parking_brake = false;
 };
 struct Wheel {
     Vec3 mount{0, 0, 0};
@@ -47,8 +49,10 @@ public:
     bool cast_ground(const Vec3& origin, const Vec3& direction,
                      float distance, GroundHit& hit) const;
     void step(float dt = fixed_step);
+    float camera_fraction(const Vec3& origin, const Vec3& offset, JPH::BodyID ignore = {}) const;
 private:
     friend class Car;
+    friend class Character;
     struct Impl;
     std::unique_ptr<Impl> impl_;
     JPH::BodyID create_chassis();
@@ -66,6 +70,7 @@ public:
     Vec3 forward() const { return rotate(Vec3(0, 0, -1)); }
     const std::array<Wheel, 4>& wheels() const { return wheels_; }
     float steering() const { return steer_; }
+    JPH::BodyID body_id() const { return body_; }
 private:
     PhysicsWorld& world_;
     JPH::BodyID body_;

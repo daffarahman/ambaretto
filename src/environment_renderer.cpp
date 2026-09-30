@@ -270,7 +270,7 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time) {
     DrawModel(terrain_, {0, 0, 0}, 1, WHITE);
     DrawModel(city_, {0, 0, 0}, 1, WHITE);
 }
-void EnvironmentRenderer::minimap(const Environment& env, const Car& car, int screen_width) const {
+void EnvironmentRenderer::minimap(const Environment& env, const Car& car, Vec3 player_position, Vec3 player_forward, int screen_width) const {
     const float left = float(screen_width - 220), top = 20, scale = 0.28f;
     DrawRectangle(int(left - 8), int(top - 8), 216, 225, {22, 39, 48, 230});
     DrawRectangle(int(left), int(top), 200, 200, {43, 111, 141, 255});
@@ -279,9 +279,11 @@ void EnvironmentRenderer::minimap(const Environment& env, const Car& car, int sc
         if (y > 0) DrawRectangle(int(left + 100 + x * scale), int(top + 100 + z * scale), 3, 3,
             env.road(float(x), float(z)) ? Color{61, 71, 78, 255} : y < 1.3f ? Color{213, 193, 135, 255} : Color{104, 147, 103, 255});
     }
-    const Vector2 dot{left + 100 + car.position().GetX() * scale, top + 100 + car.position().GetZ() * scale};
+    const Vector2 car_dot{left + 100 + car.position().GetX() * scale, top + 100 + car.position().GetZ() * scale};
+    DrawRectangle(int(car_dot.x - 3), int(car_dot.y - 3), 6, 6, SKYBLUE);
+    const Vector2 dot{left + 100 + player_position.GetX() * scale, top + 100 + player_position.GetZ() * scale};
     DrawCircleV(dot, 4, ORANGE);
-    DrawLineEx(dot, {dot.x + car.forward().GetX() * 12, dot.y + car.forward().GetZ() * 12}, 2, RAYWHITE);
+    DrawLineEx(dot, {dot.x + player_forward.GetX() * 12, dot.y + player_forward.GetZ() * 12}, 2, RAYWHITE);
     DrawText("COASTAL CITY  /  N", int(left + 5), int(top + 203), 12, RAYWHITE);
 }
 } // namespace forza

@@ -47,11 +47,23 @@ cmake --build --preset ucrt64
 | W / S | Drive forward / reverse |
 | A / D | Steer left / right |
 | Space | Rear handbrake / drift |
+| E | Exit the car / enter when nearby |
+| WASD (on foot) | Move relative to the camera |
+| Shift (on foot) | Sprint |
+| Space (on foot) | Jump |
+| Mouse | Orbit the third-person camera |
+| Mouse wheel | Zoom the camera |
 | R | Reset the car and skid marks |
 | F2 | Toggle the island aerial view |
-| Escape | Exit |
+| Escape | Release the mouse and pause |
+| Left click | Capture the mouse and resume |
+| Window close button | Exit |
 
 Build speed before holding Space and A or D to start a slide. Use W to keep driving through it; release Space and straighten or countersteer to regain grip.
+
+Press E while stopped or moving slowly to leave the car. Walk back within a few meters and press E to enter. The game checks for a free exit beside either door and behind the car, so buildings cannot trap the character inside a wall. The car applies its parking brake while you explore on foot.
+
+The character uses Jolt's virtual capsule controller for slopes, steps, jumping, and collision with buildings, trees, and the vehicle. Its body turns toward movement and animates while walking or running. Mouse movement orbits the camera in either mode; the driving camera gradually follows the car again after you stop moving the mouse. Camera sweeps keep the view clear of walls and terrain. Focus loss and aerial view pause gameplay and release the mouse.
 
 ## Island map
 
@@ -64,9 +76,12 @@ Water is animated scenery. Driving into the ocean automatically returns the car 
 - `include/vehicle.hpp`: vehicle input, wheel state, and physics interface.
 - `src/vehicle.cpp`: Jolt world, chassis collisions, raycast suspension, tire grip, and handbrake behavior.
 - `src/main.cpp`: rendering, keyboard input, fixed step loop, chase camera, and a bounded skid mark buffer.
+- `include/player.hpp`, `src/player.cpp`: on-foot control and entering/exiting the vehicle; the Jolt capsule implementation lives alongside the physics world in `src/vehicle.cpp`.
+- `src/third_person_camera.cpp`: mouse orbit, zoom, and camera-relative movement.
 - `include/environment.hpp`, `src/environment.cpp`: shared terrain mesh, city layout, buildings, trees, spawn, and water recovery bounds.
 - `src/environment_renderer.cpp`: terrain lighting, road markings, building details, vegetation, beach props, animated ocean, and minimap.
 - `tests/physics_tests.cpp`: headless checks for driving behavior, terrain/collider alignment, climbing city streets, building collisions, and recovery. The original flat test track and suspension ridges remain as test fixtures.
+- `tests/player_tests.cpp`: walking, sprinting, jumping, slopes, collisions, parking, entry/exit conditions, and mouse camera movement.
 
 Physics runs at 120 Hz independently of rendering. The chassis weighs 1100 kg and has a lowered center of mass. Steering grip receives priority in the tire friction circle, and steering angle decreases as speed rises. The handbrake reduces rear grip and brakes those tires, allowing the rear to slide while the front wheels steer and drive. Suspension rays query only ground collision objects.
 
@@ -85,4 +100,11 @@ For a rendered map preview (saves the image and exits):
 
 ```bash
 ./build/ucrt64/forzaambazon.exe --overview --screenshot build/city-overview.png
+```
+
+Start on foot, or capture a character preview:
+
+```bash
+./build/ucrt64/forzaambazon.exe --on-foot
+./build/ucrt64/forzaambazon.exe --on-foot --screenshot build/character-preview.png
 ```
