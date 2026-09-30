@@ -1,0 +1,30 @@
+cmake_minimum_required(VERSION 3.24)
+project(forzaambazon VERSION 1.0.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(RAYLIB REQUIRED IMPORTED_TARGET raylib)
+pkg_check_modules(BULLET REQUIRED IMPORTED_TARGET bullet)
+
+add_library(vehicle_physics src/vehicle.cpp)
+target_include_directories(vehicle_physics PUBLIC include)
+target_link_libraries(vehicle_physics PUBLIC PkgConfig::BULLET)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(vehicle_physics PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(forzaambazon src/main.cpp)
+target_link_libraries(forzaambazon PRIVATE vehicle_physics PkgConfig::RAYLIB)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(forzaambazon PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(physics_tests tests/physics_tests.cpp)
+    target_link_libraries(physics_tests PRIVATE vehicle_physics)
+    add_test(NAME vehicle_behavior COMMAND physics_tests)
+endif()
