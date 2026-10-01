@@ -52,6 +52,7 @@ void validation_and_isolation() {
     tuning.damper_rate = -100; tuning.rest_length = -4; tuning.travel = 20;
     tuning.tire_grip = 100; tuning.max_spring_force = 4500;
     tuning.wheelbase = -100; tuning.track_width = std::numeric_limits<float>::infinity();
+    tuning.top_speed = std::numeric_limits<float>::infinity(); tuning.acceleration = -100;
     car.set_tuning(tuning);
     for (const auto& control : forza::tuning_controls) {
         const float value = car.tuning().*(control.value);
@@ -114,7 +115,7 @@ void panel_input() {
     input = {}; input.mouse = slider; input.fine = true; input.horizontal = 1;
     panel.update(car, width, height, input);
     require(near(car.tuning().wheel_radius, mid + .0005f, .00001f), "fine keyboard adjustment was ignored");
-    input = {}; input.mouse = {rect.x + 260, rect.y + 80}; input.pressed = input.down = true;
+    input = {}; input.mouse = {rect.x + 180, rect.y + 80}; input.pressed = input.down = true;
     panel.update(car, width, height, input);
     input = {}; input.horizontal = 1; panel.update(car, width, height, input);
     require(near(car.tuning().tire_grip, 1.65f), "handling tab edited the wrong setting");
@@ -125,10 +126,18 @@ void panel_input() {
     input = {}; input.vertical = 1; panel.update(car, width, height, input);
     input = {}; input.horizontal = 1; input.fine = true; panel.update(car, width, height, input);
     require(near(car.tuning().track_width, 1.641f, .00001f), "track width fine adjustment failed");
+    input = {}; input.mouse = {rect.x + 290, rect.y + 80}; input.pressed = input.down = true;
+    panel.update(car, width, height, input);
+    input = {}; input.horizontal = 1; panel.update(car, width, height, input);
+    require(near(car.tuning().top_speed * 3.6f, 245, .01f), "performance tab did not edit top speed in km/h");
+    input = {}; input.vertical = 1; panel.update(car, width, height, input);
+    input = {}; input.horizontal = 1; input.fine = true; panel.update(car, width, height, input);
+    require(near(car.tuning().acceleration, 9.025f, .0001f), "acceleration fine adjustment failed");
     input = {}; input.mouse = {rect.x + 50, rect.y + rect.height - 43}; input.pressed = input.down = true;
     panel.update(car, width, height, input);
     require(near(car.tuning().wheel_radius, .34f) && near(car.tuning().tire_grip, 1.6f), "defaults failed across tabs");
     require(near(car.tuning().wheelbase, 2.5f) && near(car.tuning().track_width, 1.64f), "panel defaults failed for wheel spacing");
+    require(near(car.tuning().top_speed * 3.6f, 240, .01f) && near(car.tuning().acceleration, 9), "defaults did not restore performance");
     input.mouse.x = rect.x + 180;
     require(panel.update(car, width, height, input).reset_car, "reset car action did not reach game controls");
     input.mouse.x = rect.x + 290;
@@ -136,8 +145,51 @@ void panel_input() {
     require(!panel.contains({100, 200}, width, height), "panel consumes camera interaction outside its bounds");
     std::cout << "Panel input: dragging, release, focus loss, precision, tabs, reset and close passed\n";
 }
+void engine_performance() {
+    forza::PhysicsWorld world(false);
+    forza::Car car(world);
+    const auto drive = [&](int steps) {
+        for (int i = 0; i < steps; ++i) {
+            car.step({1, 0, false}); world.step();
+            require(std::isfinite(car.velocity().Length()) && car.rotate(forza::Vec3::sAxisY()).GetY() > .98f,
+                "high-speed driving became unstable");
+        }
+        return car.velocity().Dot(car.forward()) * 3.6f;
+    };
+    tick(world, car, 120);
+    const float four_seconds = drive(480);
+    std::cout << "Default speed after 4 seconds: " << four_seconds << " km/h\n";
+    require(four_seconds > 90, "default acceleration did not exceed the old 86 km/h limit quickly");
+    const float stock = drive(120 * 26);
+    std::cout << "Default top speed: " << stock << " km/h, velocity " << car.velocity().Length()
+        << ", grounded " << car.wheels()[0].grounded << car.wheels()[1].grounded << car.wheels()[2].grounded << car.wheels()[3].grounded << '\n';
+    require(near(stock, 240, 1.5f), "default top speed did not reach 240 km/h");
+    auto tuning = car.tuning(); tuning.top_speed = 120 / 3.6f; car.set_tuning(tuning);
+    const float before = car.velocity().Length();
+    drive(1);
+    require(car.velocity().Length() < before && car.velocity().Length() > before - .2f,
+        "lowering top speed teleported or clamped vehicle velocity");
+    require(near(drive(120 * 10), 120, 1), "live top-speed reduction did not slow the car");
+    tuning.top_speed = 360 / 3.6f; tuning.acceleration = 12; tuning.motor_grip = 1.4f;
+    car.set_tuning(tuning);
+    const float tuned = drive(120 * 25);
+    require(near(tuned, 360, 1.5f), "tuned engine still has an old hard-coded speed limit");
+    tuning.top_speed = 400 / 3.6f; car.set_tuning(tuning);
+    require(near(drive(120 * 10), 400, 1.5f), "maximum speed setting could not sustain 400 km/h");
+    tuning.top_speed = 360 / 3.6f; car.set_tuning(tuning);
+    car.reset(forza::Vec3(0, .56f, 0));
+    require(near(car.tuning().top_speed * 3.6f, 360, .01f) && near(car.tuning().acceleration, 12),
+        "reset erased engine tuning");
+    tuning.acceleration = 2; car.set_tuning(tuning); tick(world, car, 120);
+    const float slow = drive(240);
+    car.reset(forza::Vec3(0, .56f, 0)); tuning.acceleration = 12; car.set_tuning(tuning); tick(world, car, 120);
+    const float fast = drive(240);
+    require(fast > slow + 35, "acceleration slider did not change engine response");
+    std::cout << "Engine: " << four_seconds << " km/h after 4 seconds, " << stock << " stock / " << tuned
+        << " tuned top speed; acceleration " << slow << " / " << fast << " km/h after 2 seconds\n";
+}
 } // namespace
 int main() {
-    try { live_physics(); validation_and_isolation(); wheel_spacing(); panel_input(); return 0; }
+    try { live_physics(); validation_and_isolation(); wheel_spacing(); panel_input(); engine_performance(); return 0; }
     catch (const std::exception& error) { std::cerr << "Tuning check failed: " << error.what() << '\n'; return 1; }
 }

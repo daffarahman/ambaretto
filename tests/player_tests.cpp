@@ -59,13 +59,15 @@ void city_collisions_and_interaction() {
     const auto& building = map.buildings().front();
     const float x = building.center.GetX(), z = building.center.GetZ();
     require(!player.character().can_stand_at(forza::Vec3(x, map.height(x, z) + 0.08f, z)), "exit collision check accepted a building interior");
-    car.reset(forza::Vec3(x + 9.3f, map.height(x + 9.3f, z) + 0.56f, z));
+    const float beside = x + building.size.GetX() / 2 + 1.3f;
+    car.reset(forza::Vec3(beside, map.height(beside, z) + 0.56f, z));
     require(player.interact() == forza::Interaction::Exited && player.position().GetX() > car.position().GetX(),
             "did not use opposite door when driver-side exit was blocked");
     auto& character = player.character();
-    character.reset(forza::Vec3(x, map.height(x, z + 20) + 0.08f, z + 20));
+    const float approach = z + building.size.GetZ() / 2 + 12;
+    character.reset(forza::Vec3(x, map.height(x, approach) + 0.08f, approach));
     tick(world, character, {forza::Vec3(0, 0, -1), true, false}, 300);
-    require(character.position().GetZ() > z + 8.2f, "character walked through a building");
+    require(character.position().GetZ() > z + building.size.GetZ() / 2, "character walked through a building");
     character.reset(forza::Vec3(0, map.height(0, 105) + 0.08f, 105));
     tick(world, character, {forza::Vec3(0, 0, -1), true, false}, 1200);
     require(character.position().GetZ() < 45 && character.grounded(), "character failed to walk up the city avenue");
@@ -76,7 +78,7 @@ void city_collisions_and_interaction() {
     for (int i = 0; i < 240; ++i) player.step({}, {forza::Vec3(0, 0, -1), true, false});
     require(character.position().GetZ() > car.position().GetZ() + 1.7f,
             "character walked through the parked car");
-    const forza::Vec3 camera_origin(x, building.center.GetY(), z + 20);
+    const forza::Vec3 camera_origin(x, building.center.GetY(), approach);
     require(world.camera_fraction(camera_origin, forza::Vec3(0, 0, -30)) < 0.5f, "camera passed through building");
     player.reset();
     require(player.driving() && player.character().velocity().Length() < 0.001f, "reset retained on-foot state or motion");

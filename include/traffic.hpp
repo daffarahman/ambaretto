@@ -10,10 +10,15 @@ struct TrafficCar {
     bool npc = true;
     std::size_t route = 0;
     float stuck_time = 0;
+    std::size_t segment = 0;
+    Vec3 point = Vec3::sZero();
+    Input input{};
+    float plan_time = 0;
 };
 
-// Traffic uses the same dynamic chassis and suspension as the player's car.
-// It applies inputs before the single shared PhysicsWorld step.
+// Nearby traffic uses the player's dynamic chassis and suspension. Distant
+// cars advance on routes with their bodies removed from the physics world.
+// Claimed cars stay physical. Inputs precede the shared PhysicsWorld step.
 class Traffic {
 public:
     Traffic(PhysicsWorld& world, const Environment& environment);
@@ -30,11 +35,14 @@ private:
     };
     RouteLocation locate(const std::vector<Vec3>& route, Vec3 position) const;
     Vec3 ahead(const std::vector<Vec3>& route, RouteLocation location, float distance) const;
+    RouteLocation advance(const std::vector<Vec3>& route, RouteLocation location, float distance) const;
+    void stream(Vec3 player_position, const Car* starter, const Plane* plane);
     bool space_available(Vec3 position, const Car& ignore, const Car& starter_car,
                          const Plane* plane, Vec3 player_position) const;
     PhysicsWorld& world_;
     const Environment& environment_;
     std::vector<std::vector<Vec3>> routes_;
     std::vector<TrafficCar> cars_;
+    float stream_time_ = 0;
 };
 } // namespace forza

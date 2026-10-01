@@ -21,22 +21,23 @@ void airport_and_takeoff() {
     GroundHit hit;
     for (int x = -164; x <= 164; x += 4) for (int dz : {-10, 0, 10}) {
         const float z = Airport::runway_z + dz;
-        require(std::abs(map.height(float(x), z) - Airport::elevation) < .001f, "runway is not level");
-        require(world.cast_ground(Vec3(float(x), 20, z), Vec3(0, -1, 0), 30, hit)
-            && std::abs(hit.point.GetY() - map.height(float(x), z)) < .001f, "airport render and collision heights differ");
+        const float px = Airport::center_x + x;
+        require(std::abs(map.height(px, z) - Airport::elevation) < .001f, "runway is not level");
+        require(world.cast_ground(Vec3(px, 20, z), Vec3(0, -1, 0), 30, hit)
+            && std::abs(hit.point.GetY() - map.height(px, z)) < .001f, "airport render and collision heights differ");
     }
-    for (int z = 120; z <= int(Airport::apron_z); ++z)
-        require(map.road(0, float(z)) && map.height(0, float(z)) > .5f, "airport access road has a gap or enters water");
+    for (int z = int(Airport::apron_z); z <= 400; ++z)
+        require(map.road(Airport::center_x, float(z)) && map.height(Airport::center_x, float(z)) > .5f, "airport access road has a gap or enters water");
     for (const auto& tree : map.trees())
         require(!Airport::contains(tree.base.GetX(), tree.base.GetZ()), "tree obstructs airport");
     Car car(world);
     plane.reset(Vec3(Airport::plane_x, Airport::elevation + Plane::parked_height, Airport::runway_z));
-    car.reset(map.spawn(), 3.14159265f);
-    for (int i = 0; i < 1440 && car.position().GetZ() < 235; ++i) {
+    car.reset(Vec3(Airport::center_x, map.height(Airport::center_x, -400) + .56f, -400));
+    for (int i = 0; i < 1440 && car.position().GetZ() > Airport::apron_z; ++i) {
         car.step({1, 0, false}); plane.step({0, 0, 0, 0, false, false, true}); world.step();
     }
     std::cout << "Airport road: car z " << car.position().GetZ() << '\n';
-    require(car.position().GetZ() > 220, "car cannot reach airport from main avenue");
+    require(car.position().GetZ() <= Airport::apron_z, "car cannot reach airport from access avenue");
     plane.reset(Vec3(Airport::plane_x, Airport::elevation + Plane::parked_height, Airport::runway_z));
     tick(world, plane, {0, 0, 0, 0, false, false, true}, 480);
     require(plane.grounded() && std::abs(plane.position().GetY() - Airport::elevation - Plane::parked_height) < .15f,
@@ -99,7 +100,7 @@ void landing_brakes_and_collisions() {
     PhysicsWorld city(map);
     Plane collision_plane(city);
     const auto& b = map.buildings().front();
-    collision_plane.reset(b.center + Vec3(0, 0, 30), 0, Vec3(0, 0, -35));
+    collision_plane.reset(b.center + Vec3(0, 0, b.size.GetZ() / 2 + 20), 0, Vec3(0, 0, -35));
     tick(city, collision_plane, {}, 160);
     require(collision_plane.position().GetZ() > b.center.GetZ(), "plane passed through building");
     require(collision_plane.damaged(), "severe impact did not damage aircraft");

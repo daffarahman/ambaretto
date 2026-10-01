@@ -26,7 +26,7 @@ void roads_and_driving() {
     Car starter(world);
     Traffic traffic(world, map);
     Player player(world, starter, map, nullptr, &traffic);
-    require(traffic.cars().size() >= 12, "island has too few NPC cars");
+    require(traffic.cars().size() >= 250, "Miami region has too few NPC cars");
     std::vector<Vec3> previous;
     std::vector<float> traveled(traffic.cars().size(), 0);
     for (const auto& vehicle : traffic.cars()) {
@@ -50,7 +50,7 @@ void roads_and_driving() {
         }
     }
     std::cout << "Road samples: " << road_samples << '/' << total_samples << "; travel:";
-    for (float distance : traveled) std::cout << ' ' << distance;
+    for (std::size_t i = 0; i < 8; ++i) std::cout << ' ' << traveled[i];
     std::cout << '\n';
     require(road_samples > total_samples * .98f, "traffic left the island roads");
     for (float distance : traveled) require(distance > 80, "NPC traffic stopped making progress");
@@ -63,13 +63,13 @@ void braking_and_theft() {
     Plane plane(world);
     Traffic traffic(world, map);
     Player player(world, starter, map, &plane, &traffic);
-    starter.reset(ground(map, -60, 90));
+    starter.reset(ground(map, -200, 90));
     tick(player, 120);
     require(player.interact() == Interaction::Exited, "could not leave starter car");
 
     Car& target = *traffic.cars().front().car;
-    target.reset(ground(map, 2.5f, 100));
-    player.character().reset(ground(map, 2.5f, 76, .08f));
+    target.reset(ground(map, 4, 100));
+    player.character().reset(ground(map, 4, 76, .08f));
     float closest = 100;
     for (int i = 0; i < 720; ++i) {
         player.step({}, {});
@@ -82,11 +82,11 @@ void braking_and_theft() {
     require(player.entry_car() == &target && player.can_steal(), "nearest NPC car was not stealable");
     require(player.interact() == Interaction::Entered && &player.car() == &target, "theft did not transfer control");
     require(!traffic.is_npc(&target) && player.driving(), "stolen car retained NPC control");
-    auto tuning = target.tuning(); tuning.tire_grip = 2;
+    auto tuning = target.tuning(); tuning.tire_grip = 2; tuning.top_speed = 310 / 3.6f; tuning.acceleration = 5;
     target.set_tuning(tuning);
     target.reset(ground(map, 0, 110));
     const Vec3 parked = starter.position();
-    tick(player, 240, {1, 0, false});
+    tick(player, 300, {1, 0, false});
     require(target.position().GetZ() < 100 && target.velocity().Length() > 4, "player input did not drive the stolen car");
     require((player.position() - target.position()).Length() < .001f && player.forward().Dot(target.forward()) > .999f,
         "player/camera target did not follow stolen car");
@@ -97,6 +97,8 @@ void braking_and_theft() {
     tick(player, 120);
     require(&player.car() == &target && target.tuning().tire_grip == 2 && !traffic.is_npc(&target),
         "recovery lost stolen car, tuning, or ownership");
+    require(std::abs(target.tuning().top_speed * 3.6f - 310) < .01f && target.tuning().acceleration == 5,
+        "stolen car recovery lost engine tuning");
     require((target.position() - starter.position()).Length() > 5 && target.velocity().Length() < .3f,
         "stolen car recovered on top of the starter car");
     require(player.interact() == Interaction::Exited, "could not leave stolen car");
@@ -108,13 +110,16 @@ void braking_and_theft() {
     require(player.interact() == Interaction::Exited, "second exit failed");
 
     Car& second = *traffic.cars()[1].car;
-    second.reset(ground(map, 60, 85));
-    player.character().reset(ground(map, 58, 85, .08f));
+    second.set_simulated(true);
+    second.reset(ground(map, 200, 85));
+    player.character().reset(ground(map, 198, 85, .08f));
     require(player.can_steal() && player.interact() == Interaction::Entered && &player.car() == &second,
         "could not switch to a second NPC car");
     tick(player, 240);
     require((target.position() - abandoned).Length() < 1 && second.tuning().tire_grip != 2,
         "switching cars moved the previous car or shared its tuning");
+    require(std::abs(second.tuning().top_speed * 3.6f - 240) < .01f && second.tuning().acceleration == 9,
+        "engine tuning leaked to a second stolen car");
     require(player.interact() == Interaction::Exited, "could not exit second stolen car");
 
     const Vec3 door = plane.position() + plane.rotate(Vec3(-1.9f, 0, -1.8f));
@@ -131,9 +136,9 @@ void traffic_obstructions() {
     Car starter(world);
     Traffic traffic(world, map);
     Player player(world, starter, map, nullptr, &traffic);
-    starter.reset(ground(map, 2.5f, 74));
+    starter.reset(ground(map, 4, 74));
     Car& follower = *traffic.cars().front().car;
-    follower.reset(ground(map, 2.5f, 100));
+    follower.reset(ground(map, 4, 100));
     const Vec3 parked = starter.position();
     tick(player, 1200, {0, 0, false, true});
     std::cout << "Parked car displacement: " << (starter.position() - parked).Length()

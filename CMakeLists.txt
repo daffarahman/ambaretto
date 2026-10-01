@@ -7,6 +7,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(RAYLIB REQUIRED IMPORTED_TARGET raylib)
+# Use the same GLFW library as raylib's desktop backend for unmapped USB joysticks.
+pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
 
 # Build a pinned, static Jolt library with the same compiler as the game.
 include(FetchContent)
@@ -42,8 +44,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vehicle_physics PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_executable(forzaambazon src/main.cpp src/environment_renderer.cpp src/car_renderer.cpp src/tuning_panel.cpp)
-target_link_libraries(forzaambazon PRIVATE vehicle_physics PkgConfig::RAYLIB)
+add_executable(forzaambazon src/main.cpp src/environment_renderer.cpp src/car_renderer.cpp src/tuning_panel.cpp src/ui_font.cpp src/controller_mapping.cpp src/menu_bar.cpp)
+target_link_libraries(forzaambazon PRIVATE vehicle_physics PkgConfig::RAYLIB PkgConfig::GLFW)
 # Keep runtime assets beside the executable, including after model/texture edits.
 add_custom_target(forzaambazon_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -58,13 +60,17 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(controller_tests tests/controller_tests.cpp src/controller_mapping.cpp)
+    target_include_directories(controller_tests PRIVATE include)
+    target_link_libraries(controller_tests PRIVATE PkgConfig::RAYLIB PkgConfig::GLFW)
+    add_test(NAME controller_mapping COMMAND controller_tests)
     add_executable(physics_tests tests/physics_tests.cpp)
     target_link_libraries(physics_tests PRIVATE vehicle_physics)
     add_test(NAME vehicle_behavior COMMAND physics_tests)
     add_executable(player_tests tests/player_tests.cpp)
     target_link_libraries(player_tests PRIVATE vehicle_physics)
     add_test(NAME player_behavior COMMAND player_tests)
-    add_executable(tuning_tests tests/tuning_tests.cpp src/tuning_panel.cpp)
+    add_executable(tuning_tests tests/tuning_tests.cpp src/tuning_panel.cpp src/ui_font.cpp)
     target_link_libraries(tuning_tests PRIVATE vehicle_physics PkgConfig::RAYLIB)
     add_test(NAME live_tuning COMMAND tuning_tests)
     add_executable(plane_tests tests/plane_tests.cpp)
@@ -73,4 +79,7 @@ if(BUILD_TESTING)
     add_executable(traffic_tests tests/traffic_tests.cpp)
     target_link_libraries(traffic_tests PRIVATE vehicle_physics)
     add_test(NAME traffic_and_theft COMMAND traffic_tests)
+    add_executable(map_tests tests/map_tests.cpp)
+    target_link_libraries(map_tests PRIVATE vehicle_physics)
+    add_test(NAME miami_connectivity COMMAND map_tests)
 endif()

@@ -16,6 +16,7 @@ public:
     bool contains(Vector2 point, int width, int height) const;
     TuningPanelAction update(Car& car, int width, int height, const TuningPanelInput& input);
     void draw(const Car& car, int width, int height) const;
+    void select_tab(int tab);
     void cancel_drag() { dragging_ = -1; }
 private:
     int tab_ = 0, selected_ = 0, dragging_ = -1;

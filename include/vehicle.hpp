@@ -77,6 +77,8 @@ public:
     JPH::BodyID body_id() const { return body_; }
     const CarTuning& tuning() const { return tuning_; }
     void set_tuning(CarTuning tuning);
+    void set_simulated(bool simulated);
+    bool simulated() const { return simulated_; }
 private:
     void update_wheel_mounts();
     void refresh_wheel_contacts();
@@ -85,5 +87,6 @@ private:
     std::array<Wheel, 4> wheels_{};
     float steer_ = 0;
     CarTuning tuning_{};
+    bool simulated_ = true;
 };
 } // namespace forza

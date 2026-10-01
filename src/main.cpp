@@ -1,8 +1,10 @@
+#include "ui_font.hpp"
 #include "vehicle.hpp"
 #include "environment.hpp"
 #include "environment_renderer.hpp"
 #include "car_renderer.hpp"
 #include "tuning_panel.hpp"
+#include "menu_bar.hpp"
 #include "player.hpp"
 #include "third_person_camera.hpp"
 #include "airport.hpp"
@@ -248,54 +250,68 @@ void draw_plane(const forza::Plane& plane, bool occupied) {
 }
 
 void draw_hud(const Scene& scene, bool handbrake, bool captured, bool aerial, bool tuning, bool flaps) {
+    if (aerial) {
+        DrawRectangle(14, 46, 660, 76, {19, 28, 35, 220});
+        forza::ui::draw_text("MIAMI  /  MIAMI BEACH  /  FLORIDA KEYS", 26, 56, 22, RAYWHITE);
+        forza::ui::draw_text("US 1 connects every Key  |  Settings > Aerial map", 26, 88, 17, GOLD);
+        return;
+    }
     const auto& player = scene.player;
-    DrawRectangle(14, 14, 790, player.flying() ? 132 : 103, {19, 28, 35, 220});
-    DrawText(tuning ? "TUNING MODE  |  Drag sliders to adjust your car" :
-        player.flying() ? "W/S nose down/up  A/D bank  LEFT/RIGHT rudder" :
-        player.driving() ? "W/S drive  A/D steer  SPACE drift  E exit car" : "WASD move  SHIFT run  SPACE jump  E enter vehicle", 26, 24, 19, RAYWHITE);
-    DrawText(tuning ? "Right drag outside panel: camera  |  Scroll: adjust / zoom" :
-        player.flying() ? "SHIFT/CTRL throttle  SPACE brake  F flaps  E exit  R recover" :
-        "Mouse look  Wheel zoom  ESC pause  R reset  F2 map  F3 tuning", 26, 49, 17, LIGHTGRAY);
-    if (tuning) DrawText("Physics live / parking brake / Driving input disabled", 26, 79, 19, GOLD);
+    DrawRectangle(14, 46, 790, player.flying() ? 132 : 103, {19, 28, 35, 220});
+    forza::ui::draw_text(tuning ? "TUNING MODE  |  Drag sliders to adjust your car" :
+        player.flying() ? "FLIGHT MODE  |  Help > Controls for flight instructions" :
+        player.driving() ? "DRIVING MODE  |  Help > Controls for driving instructions" : "ON FOOT  |  Help > Controls for movement instructions", 26, 56, 19, RAYWHITE);
+    forza::ui::draw_text(tuning ? "Right drag outside panel: camera  |  Scroll: adjust / zoom" :
+        "Settings > Controller mapping  |  F10 menu / Esc pause", 26, 81, 17, LIGHTGRAY);
+    if (tuning) forza::ui::draw_text("Physics live / parking brake / Driving input disabled", 26, 111, 19, GOLD);
     else if (player.flying()) {
         const auto& plane = scene.plane;
         const auto p = plane.position();
         const float ground = std::abs(p.GetX()) <= forza::Environment::extent && std::abs(p.GetZ()) <= forza::Environment::extent
             ? std::max(scene.environment.height(p.GetX(), p.GetZ()), 0.0f) : 0;
-        DrawText(TextFormat("FLYING | %3.0f km/h | AGL %4.0f m | THROTTLE %3.0f%%", double(plane.airspeed() * 3.6f),
-            double(std::max(0.0f, p.GetY() - ground)), double(plane.throttle() * 100)), 26, 79, 20, GOLD);
-        DrawText(plane.damaged() ? "AIRCRAFT DAMAGED - press R to recover at airport" : plane.stalled() ? "STALL - lower nose and add throttle" :
-            plane.grounded() ? "RUNWAY | Full throttle, pull S gently above 100 km/h" : "Mouse look / Wheel zoom / Land and stop before exiting", 26, 108, 17, plane.stalled() || plane.damaged() ? ORANGE : LIGHTGRAY);
-        if (flaps) DrawText("FLAPS", 712, 80, 17, SKYBLUE);
+        forza::ui::draw_text(TextFormat("FLYING | %3.0f km/h | AGL %4.0f m | THROTTLE %3.0f%%", double(plane.airspeed() * 3.6f),
+            double(std::max(0.0f, p.GetY() - ground)), double(plane.throttle() * 100)), 26, 111, 20, GOLD);
+        forza::ui::draw_text(plane.damaged() ? "AIRCRAFT DAMAGED - use Recover vehicle" : plane.stalled() ? "STALL - lower nose and add throttle" :
+            plane.grounded() ? "RUNWAY | Full throttle, pitch up gently above 100 km/h" : "Mouse look / Wheel zoom / Land and stop before exiting", 26, 140, 17, plane.stalled() || plane.damaged() ? ORANGE : LIGHTGRAY);
+        if (flaps) forza::ui::draw_text("FLAPS", 712, 112, 17, SKYBLUE);
     } else if (player.driving()) {
         const float speed = player.car().velocity().Dot(player.car().forward()) * 3.6f;
-        DrawText(TextFormat("DRIVING  |  %5.1f km/h", double(speed)), 26, 79, 20, GOLD);
-        if (handbrake && std::abs(speed) > 15) DrawText("DRIFT", 340, 79, 20, ORANGE);
+        forza::ui::draw_text(TextFormat("DRIVING  |  %5.1f km/h", double(speed)), 26, 111, 20, GOLD);
+        if (handbrake && std::abs(speed) > 15) forza::ui::draw_text("DRIFT", 340, 111, 20, ORANGE);
     } else {
         const auto nearby = player.entry_vehicle();
-        DrawText(nearby == forza::EntryVehicle::Plane ? "ON FOOT | Press E to enter plane" :
-            player.can_steal() ? "ON FOOT | Press E to steal traffic car" :
-            nearby == forza::EntryVehicle::Car ? "ON FOOT | Press E to enter car" :
-            "ON FOOT | Approach traffic to stop it, then E to steal", 26, 79, 20, GOLD);
+        forza::ui::draw_text(nearby == forza::EntryVehicle::Plane ? "Use Enter / exit vehicle to board the plane" :
+            player.can_steal() ? "Use Enter / exit vehicle to steal this traffic car" :
+            nearby == forza::EntryVehicle::Car ? "Use Enter / exit vehicle to enter this car" :
+            "ON FOOT | Approach traffic to stop it, then enter to steal", 26, 111, 20, GOLD);
     }
     if (!captured && !aerial) {
-        const int x = GetScreenWidth() / 2 - 190, y = GetScreenHeight() / 2 - 36;
-        DrawRectangle(x - 14, y - 12, 408, 87, {19, 28, 35, 235});
-        DrawText("Click to resume and capture mouse", x, y, 20, RAYWHITE);
-        DrawText("ESC releases the mouse", x, y + 32, 18, LIGHTGRAY);
+        const int panel_width = std::max(408, forza::ui::measure_text("Click to resume and capture mouse", 20) + 28);
+        const int x = (GetScreenWidth() - panel_width) / 2 + 14, y = GetScreenHeight() / 2 - 36;
+        DrawRectangle(x - 14, y - 12, panel_width, 87, {19, 28, 35, 235});
+        forza::ui::draw_text("Click to resume and capture mouse", x, y, 20, RAYWHITE);
+        forza::ui::draw_text("F10: menu / Start: resume / Esc: pause", x, y + 32, 18, LIGHTGRAY);
     }
 }
 } // namespace
 
 int main(int argc, char** argv) {
     std::string screenshot;
+    std::string start_district;
+    bool performance_tuning = false;
+    bool start_controllers = false, start_menu = false, start_help = false;
     bool aerial = false, start_on_foot = false, tuning_open = false, start_at_airport = false, start_in_plane = false, start_at_traffic = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--overview") aerial = true;
+        if (arg == "--beach" || arg == "--keys" || arg == "--key-west" || arg == "--bridge") start_district = arg;
         if (arg == "--on-foot") start_on_foot = true;
         if (arg == "--traffic") { start_at_traffic = true; start_on_foot = true; }
         if (arg == "--tuning") tuning_open = true;
+        if (arg == "--performance") { tuning_open = true; performance_tuning = true; }
+        if (arg == "--controllers") start_controllers = true;
+        if (arg == "--menu") start_menu = true;
+        if (arg == "--help-menu") start_help = true;
         if (arg == "--airport") start_at_airport = true;
         if (arg == "--plane") { start_at_airport = true; start_in_plane = true; }
         if (arg == "--screenshot" && i + 1 < argc) screenshot = argv[++i];
@@ -303,22 +319,43 @@ int main(int argc, char** argv) {
     unsigned int window_flags = FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE;
     if (!screenshot.empty()) window_flags |= FLAG_WINDOW_HIDDEN;
     SetConfigFlags(window_flags);
-    InitWindow(1280, 720, "Forza Ambazon - Coastal City & Airport");
+    InitWindow(1280, 720, "Forza Ambazon - Miami & Florida Keys");
     if (!IsWindowReady()) return 1;
     SetWindowMinSize(1024, 600);
     SetExitKey(KEY_NULL);
     SetTargetFPS(60);
-    bool captured = screenshot.empty() && !aerial && !tuning_open;
+    bool captured = screenshot.empty() && !aerial && !tuning_open && !start_controllers && !start_menu && !start_help;
     bool resume_capture = screenshot.empty() && !aerial;
     bool resume_aerial = aerial;
     if (tuning_open) aerial = false;
     if (captured) DisableCursor();
     {
+        const forza::ui::FontResource ui_font;
         const forza::Environment environment;
         forza::EnvironmentRenderer scenery(environment);
         forza::CarRenderer car_renderer;
         forza::TuningPanel tuning_panel;
+        using forza::Action;
+        using forza::MenuCommand;
+        forza::ControllerMapping controls;
+        forza::MenuBar menu;
+        const auto mapping_path = std::filesystem::path(GetApplicationDirectory()) / "controller-mappings.ini";
+        std::string mapping_error;
+        if (std::filesystem::exists(mapping_path)) controls.load(mapping_path, mapping_error);
+        else if (screenshot.empty()) controls.save(mapping_path, mapping_error);
+        if (start_controllers) menu.show(MenuCommand::Controllers);
+        else if (start_help) menu.show(MenuCommand::Controls);
+        else if (start_menu) menu.open(2);
+        if (performance_tuning) tuning_panel.select_tab(2);
         auto scene = std::make_unique<Scene>(environment);
+        if (!start_district.empty()) {
+            forza::Vec3 p = start_district == "--beach" ? forza::Vec3(2450, 0, 400) :
+                start_district == "--keys" ? forza::Vec3(-600, 0, 2500) :
+                start_district == "--key-west" ? forza::Vec3(-3500, 0, 7300) : environment.bridges()[6].point(.5f);
+            p.SetY(environment.height(p.GetX(), p.GetZ()) + .56f);
+            const auto heading = environment.bridges()[6].a - environment.bridges()[6].b;
+            scene->car.reset(p, start_district == "--bridge" ? std::atan2(-heading.GetX(), -heading.GetZ()) : 0);
+        }
         if (start_at_airport) scene->car.reset(forza::Vec3(forza::Airport::plane_x,
             environment.height(forza::Airport::plane_x, forza::Airport::runway_z - 8) + .56f, forza::Airport::runway_z - 8), -1.5707963f);
         if (start_in_plane) {
@@ -355,11 +392,12 @@ int main(int argc, char** argv) {
         };
         snap_camera();
         double accumulator = 0;
-        float notice_time = 0;
-        std::string notice;
+        float notice_time = mapping_error.empty() ? 0 : 8;
+        std::string notice = mapping_error;
         bool jump_pending = false, discard_mouse = true, orbit_dragging = false, flaps = false;
         int rendered_frames = 0;
-        while (!WindowShouldClose()) {
+        bool quit_requested = false;
+        while (!quit_requested && !WindowShouldClose()) {
             const float frame = std::min(GetFrameTime(), 0.1f);
             bool mode_changed = false;
             const auto toggle_tuning = [&]() {
@@ -383,26 +421,50 @@ int main(int argc, char** argv) {
                 }
             };
             if (screenshot.empty()) {
+                const auto controller_input = forza::read_controllers();
+                controls.update(controller_input);
                 if (!IsWindowFocused()) {
                     if (captured) EnableCursor();
                     captured = false; resume_capture = false;
                     tuning_panel.cancel_drag(); orbit_dragging = false; discard_mouse = true;
                 }
-                if (IsKeyPressed(KEY_F3)) {
+                const auto command = menu.update(controls, mapping_path, !captured, controller_input);
+                if (menu.blocking() || menu.interacted()) {
+                    mode_changed = true; jump_pending = false; discard_mouse = true;
+                    tuning_panel.cancel_drag(); orbit_dragging = false;
+                    if (captured) { captured = false; EnableCursor(); }
+                }
+                if (command == MenuCommand::Quit) quit_requested = true;
+                if (command == MenuCommand::Resume) {
+                    if (tuning_open) toggle_tuning();
+                    aerial = false; captured = true; DisableCursor(); discard_mouse = true;
+                }
+                if (command == MenuCommand::Pause) {
+                    if (tuning_open) toggle_tuning();
+                    captured = false; EnableCursor();
+                }
+                if (command == MenuCommand::Map && tuning_open) toggle_tuning();
+                if (command == MenuCommand::Recover) {
+                    scene->reset(); snap_camera(); accumulator = 0; jump_pending = false; flaps = false;
+                }
+                if (command == MenuCommand::CarDefaults) scene->player.car().set_tuning({});
+                const bool shortcuts = IsWindowFocused() && !menu.blocking() && !menu.interacted();
+                if (command == MenuCommand::Tuning || (shortcuts && controls.pressed(Action::Tuning))) {
                     if (scene->player.flying()) { notice = "Land and exit the plane before tuning the car"; notice_time = 3; }
                     else toggle_tuning();
                 }
-                else if (IsKeyPressed(KEY_ESCAPE)) {
+                else if (shortcuts && (controls.pressed(Action::Pause) || IsKeyPressed(KEY_ESCAPE))) {
                     if (tuning_open) toggle_tuning();
                     else if (captured) { EnableCursor(); captured = false; mode_changed = true; }
+                    else if (!IsKeyPressed(KEY_ESCAPE)) { aerial = false; captured = true; DisableCursor(); discard_mouse = true; mode_changed = true; }
                 }
-                if (IsKeyPressed(KEY_F2) && !tuning_open && !mode_changed) {
+                if (!tuning_open && (command == MenuCommand::Map || (shortcuts && controls.pressed(Action::Map) && !mode_changed))) {
                     aerial = !aerial;
                     captured = !aerial;
                     if (captured) DisableCursor(); else EnableCursor();
                     discard_mouse = true; mode_changed = true;
                 }
-                if (tuning_open && !mode_changed) {
+                if (tuning_open && !mode_changed && !menu.blocking()) {
                     const auto mouse = GetMousePosition();
                     const bool fine = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
                     const auto pressed = [](int key) { return IsKeyPressed(key) || IsKeyPressedRepeat(key); };
@@ -422,36 +484,39 @@ int main(int argc, char** argv) {
                     orbit_dragging = dragging;
                     SetMouseCursor(tuning_open && !outside ? MOUSE_CURSOR_DEFAULT : dragging ? MOUSE_CURSOR_RESIZE_ALL : MOUSE_CURSOR_DEFAULT);
                 }
-                if (!captured && !aerial && !tuning_open && !mode_changed && IsWindowFocused() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                if (!captured && !aerial && !tuning_open && !menu.blocking() && !mode_changed && IsWindowFocused() &&
+                    GetMousePosition().y >= forza::menu_height && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                     captured = true; DisableCursor(); discard_mouse = true;
                 }
             }
-            const bool active = !tuning_open && !mode_changed &&
+            const bool active = !tuning_open && !menu.blocking() && !mode_changed &&
                 (!screenshot.empty() || (captured && IsWindowFocused() && !aerial));
-            const bool simulate = active || (tuning_open && (!screenshot.empty() || IsWindowFocused()));
+            const bool simulate = !menu.blocking() && (active || (tuning_open && (!screenshot.empty() || IsWindowFocused())));
             if (active && screenshot.empty()) {
-                if (IsKeyPressed(KEY_R)) {
+                if (controls.pressed(Action::Recover)) {
                     scene->reset(); snap_camera(); accumulator = 0; jump_pending = false; flaps = false;
                 }
-                if (IsKeyPressed(KEY_E)) {
+                if (controls.pressed(Action::Interact)) {
                     const bool stealing = scene->player.can_steal();
                     const auto result = scene->player.interact();
                     if (result == forza::Interaction::Entered || result == forza::Interaction::Exited) {
                         jump_pending = false;
                         snap_camera();
-                        notice = result == forza::Interaction::Entered ? (scene->player.flying() ? "Entered plane - SHIFT adds throttle" :
-                            stealing ? "Stole traffic car - WASD to drive" : "Entered car") : "On foot";
+                        notice = result == forza::Interaction::Entered ? (scene->player.flying() ? "Entered plane - increase throttle to take off" :
+                            stealing ? "Stole traffic car" : "Entered car") : "On foot";
                     } else if (result == forza::Interaction::TooFast) notice = scene->player.flying()
                         ? "Land and stop before exiting the plane" : "Slow down before exiting the car";
                     else if (result == forza::Interaction::Blocked) notice = "Exit blocked - move the vehicle to an open space";
                     else notice = "Move closer to a car or plane to enter";
                     notice_time = 2.5f;
                 }
-                if (scene->player.on_foot() && IsKeyPressed(KEY_SPACE)) jump_pending = true;
-                if (scene->player.flying() && IsKeyPressed(KEY_F)) flaps = !flaps;
+                if (scene->player.on_foot() && controls.pressed(Action::Jump)) jump_pending = true;
+                if (scene->player.flying() && controls.pressed(Action::Flaps)) flaps = !flaps;
                 Vector2 mouse = GetMouseDelta();
                 if (discard_mouse) { mouse = {}; discard_mouse = false; }
-                orbit.look(mouse.x, mouse.y, GetMouseWheelMove(), scene->player.driving(), scene->player.forward(),
+                mouse.x += (controls.value(Action::LookRight) - controls.value(Action::LookLeft)) * 700 * frame;
+                mouse.y += (controls.value(Action::LookDown) - controls.value(Action::LookUp)) * 700 * frame;
+                orbit.look(mouse.x, mouse.y, GetMouseWheelMove() + (controls.value(Action::ZoomIn) - controls.value(Action::ZoomOut)) * 6 * frame, scene->player.driving(), scene->player.forward(),
                     scene->player.flying() ? scene->plane.velocity().Length() : scene->player.driving() ? scene->player.car().velocity().Length() : 0, frame, scene->player.flying());
             }
             forza::Input driving;
@@ -460,17 +525,16 @@ int main(int argc, char** argv) {
             flight.flaps = flaps;
             driving.parking_brake = tuning_open;
             if (active && screenshot.empty()) {
-                driving.throttle = float(IsKeyDown(KEY_W)) - float(IsKeyDown(KEY_S));
-                driving.steer = float(IsKeyDown(KEY_A)) - float(IsKeyDown(KEY_D));
-                driving.handbrake = IsKeyDown(KEY_SPACE);
-                walking.direction = orbit.move_direction(driving.throttle, float(IsKeyDown(KEY_D)) - float(IsKeyDown(KEY_A)));
-                walking.sprint = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
-                flight.throttle = float(IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT))
-                    - float(IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL));
-                flight.pitch = float(IsKeyDown(KEY_S)) - float(IsKeyDown(KEY_W));
-                flight.roll = float(IsKeyDown(KEY_A)) - float(IsKeyDown(KEY_D));
-                flight.yaw = float(IsKeyDown(KEY_LEFT)) - float(IsKeyDown(KEY_RIGHT));
-                flight.brake = IsKeyDown(KEY_SPACE);
+                driving.throttle = controls.value(Action::Forward) - controls.value(Action::Backward);
+                driving.steer = controls.value(Action::Left) - controls.value(Action::Right);
+                driving.handbrake = controls.value(Action::Brake) > .5f;
+                walking.direction = orbit.move_direction(driving.throttle, -driving.steer);
+                walking.sprint = controls.value(Action::Sprint) > .5f;
+                flight.throttle = controls.value(Action::ThrottleUp) - controls.value(Action::ThrottleDown);
+                flight.pitch = -driving.throttle;
+                flight.roll = driving.steer;
+                flight.yaw = controls.value(Action::RudderLeft) - controls.value(Action::RudderRight);
+                flight.brake = driving.handbrake;
             }
             if (simulate) accumulator += frame;
             else { accumulator = 0; jump_pending = false; }
@@ -480,7 +544,7 @@ int main(int argc, char** argv) {
                 jump_pending = false;
                 scene->record_skids();
                 const auto position = scene->player.position();
-                const bool recover = scene->player.flying() ? position.GetY() < -.6f || position.Length() > 5800
+                const bool recover = scene->player.flying() ? position.GetY() < -.6f || position.Length() > 24000
                     : environment.submerged(position);
                 if (recover) {
                     scene->reset(); snap_camera(); flaps = false;
@@ -501,8 +565,8 @@ int main(int argc, char** argv) {
                 (tuning_open || scene->player.driving()) ? scene->player.car().body_id() : scene->player.flying() ? scene->plane.body_id() : JPH::BodyID());
             camera.position = render_vector(camera_target + offset * fraction);
             Camera3D view = camera;
-            if (aerial) view = Camera3D{{390, 425, 470}, {0, 5, 35}, {0, 1, 0}, 52, CAMERA_PERSPECTIVE};
-            rlSetClipPlanes(aerial ? 1.0 : 0.2, 5000);
+            if (aerial) view = Camera3D{{3200, 7000, 10000}, {-500, 0, 2800}, {0, 1, 0}, 50, CAMERA_PERSPECTIVE};
+            rlSetClipPlanes(aerial ? 1.0 : 0.2, 30000);
             notice_time = std::max(0.0f, notice_time - frame);
             BeginDrawing();
             ClearBackground({153, 203, 233, 255});
@@ -513,18 +577,31 @@ int main(int argc, char** argv) {
             draw_car(scene->car, car_renderer, view);
             for (std::size_t i = 0; i < scene->traffic.cars().size(); ++i) {
                 const auto& vehicle = scene->traffic.cars()[i];
+                if (!aerial && !vehicle.car->simulated()) continue;
+                if (!aerial && (vehicle.car->position() - scene->player.position()).LengthSq() > 1000 * 1000) continue;
                 draw_car(*vehicle.car, car_renderer, view, traffic_paint(i));
             }
             draw_plane(scene->plane, scene->player.flying());
             if (scene->player.on_foot()) draw_character(scene->player.character(), environment);
             EndMode3D();
+            if (aerial) for (std::size_t i : {std::size_t(0), std::size_t(1), std::size_t(2), std::size_t(6), std::size_t(7), std::size_t(8), std::size_t(9), std::size_t(10)}) {
+                const auto& island = environment.islands()[i];
+                auto p = GetWorldToScreen(render_vector(island.center + forza::Vec3(0, 70, 0)), view);
+                if (i == 1) p.y += 20;
+                if (i == 2) p.y -= 12;
+                const int width = forza::ui::measure_text(island.name, 16);
+                DrawRectangle(int(p.x) - width / 2 - 5, int(p.y) - 4, width + 10, 24, {22, 39, 48, 210});
+                forza::ui::draw_text(island.name, int(p.x) - width / 2, int(p.y), 16, RAYWHITE);
+            }
             draw_hud(*scene, driving.handbrake, captured || tuning_open || !screenshot.empty(), aerial, tuning_open, flaps);
             if (!tuning_open) scenery.minimap(environment, scene->car, scene->plane, scene->player.position(), scene->player.forward(), GetScreenWidth(), &scene->traffic);
-            DrawText("AMBAZON ISLAND", 26, GetScreenHeight() - 58, 24, RAYWHITE);
-            DrawText(tuning_open ? "F3 / Esc to close tuning and return to play" :
-                aerial ? "AERIAL VIEW  /  F2 to return" : "Green dots: traffic / On foot: approach a traffic car and E to steal / Airport south", 26, GetScreenHeight() - 30, 16, RAYWHITE);
-            if (notice_time > 0) DrawText(notice.c_str(), 26, scene->player.flying() ? 158 : 129, 20, RAYWHITE);
+            const auto region = scene->player.position();
+            forza::ui::draw_text(aerial ? "MIAMI & FLORIDA KEYS" : forza::Environment::district(region.GetX(), region.GetZ()), 26, GetScreenHeight() - 58, 24, RAYWHITE);
+            forza::ui::draw_text(tuning_open ? "Settings > Car tuning / Esc to close tuning" :
+                aerial ? "CONNECTED REGION  /  Settings > Aerial map to return" : "Green dots: traffic / Enter vehicle to steal / US 1 south to the Keys", 26, GetScreenHeight() - 30, 16, RAYWHITE);
+            if (notice_time > 0) forza::ui::draw_text(notice.c_str(), 26, scene->player.flying() ? 190 : 161, 20, RAYWHITE);
             if (tuning_open) tuning_panel.draw(scene->player.car(), GetScreenWidth(), GetScreenHeight());
+            menu.draw(controls, mapping_path, captured);
             EndDrawing();
             if (!screenshot.empty() && ++rendered_frames >= 90) {
                 const Image capture = LoadImageFromScreen();
@@ -533,6 +610,7 @@ int main(int argc, char** argv) {
                 break;
             }
         }
+        if (!menu.save_pending(controls, mapping_path)) TraceLog(LOG_ERROR, "Could not save controller mappings; previous file retained");
     }
     EnableCursor();
     CloseWindow();

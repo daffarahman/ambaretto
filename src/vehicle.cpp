@@ -65,7 +65,7 @@ struct PhysicsWorld::Impl {
     JPH::BroadPhaseLayerInterfaceTable broad_phase{3, 2};
     JPH::ObjectLayerPairFilterTable pairs{3};
     std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> broad_phase_filter;
-    JPH::TempAllocatorImpl allocator{10 * 1024 * 1024};
+    JPH::TempAllocatorImpl allocator{64 * 1024 * 1024};
     JPH::JobSystemThreadPool jobs{JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, 2};
     JPH::PhysicsSystem system;
     std::vector<JPH::BodyID> bodies;
@@ -78,7 +78,7 @@ struct PhysicsWorld::Impl {
         pairs.EnableCollision(vehicle_layer, vehicle_layer);
         pairs.EnableCollision(vehicle_layer, obstacle_layer);
         broad_phase_filter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(broad_phase, 2, pairs, 3);
-        system.Init(1024, 0, 2048, 2048, broad_phase, *broad_phase_filter, pairs);
+        system.Init(8192, 0, 16384, 16384, broad_phase, *broad_phase_filter, pairs);
         system.SetGravity(Vec3(0, -9.81f, 0));
         auto settings = system.GetPhysicsSettings();
         settings.mNumVelocitySteps = 12;
@@ -88,7 +88,7 @@ struct PhysicsWorld::Impl {
     ~Impl() {
         auto& interface = system.GetBodyInterface();
         for (const auto& id : bodies) {
-            interface.RemoveBody(id);
+            if (interface.IsAdded(id)) interface.RemoveBody(id);
             interface.DestroyBody(id);
         }
     }
@@ -104,7 +104,8 @@ struct PhysicsWorld::Impl {
 PhysicsWorld::PhysicsWorld(bool with_ridges) {
     initialize_jolt();
     impl_ = std::make_unique<Impl>();
-    JPH::RefConst<JPH::Shape> ground = new JPH::PlaneShape(JPH::Plane(Vec3(0, 1, 0), 0));
+    // The flat test track must support sustained driving at the tunable speeds.
+    JPH::RefConst<JPH::Shape> ground = new JPH::PlaneShape(JPH::Plane(Vec3(0, 1, 0), 0), nullptr, 10000);
     JPH::BodyCreationSettings floor(ground, Vec3(0, 0, 0), Quat::sIdentity(), JPH::EMotionType::Static, ground_layer);
     floor.mFriction = 0.8f;
     impl_->add_body(floor);
@@ -136,8 +137,34 @@ PhysicsWorld::PhysicsWorld(const Environment& environment) {
     ground.mFriction = 0.8f;
     impl_->add_body(ground);
     for (const auto& building : environment.buildings()) {
-        JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(building.size / 2, 0.04f);
-        JPH::BodyCreationSettings settings(shape, building.center, Quat::sIdentity(), JPH::EMotionType::Static, obstacle_layer);
+        JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(building.solid_size() / 2, 0.04f);
+        JPH::BodyCreationSettings settings(shape, building.solid_center(), Quat::sIdentity(), JPH::EMotionType::Static, obstacle_layer);
+        impl_->add_body(settings);
+        if (building.kind == BuildingKind::GasStation) {
+            const float base = building.center.GetY() - building.size.GetY() / 2;
+            const float x = building.center.GetX() + building.size.GetX() * .3f;
+            JPH::RefConst<JPH::Shape> canopy = new JPH::BoxShape(Vec3(building.size.GetX() * .175f, .3f, (building.size.GetZ() - 4) / 2), .02f);
+            JPH::BodyCreationSettings roof(canopy, Vec3(x, base + 4.8f, building.center.GetZ()), Quat::sIdentity(), JPH::EMotionType::Static, obstacle_layer);
+            impl_->add_body(roof);
+            for (float z : {-12.0f, 0.0f, 12.0f}) {
+                JPH::RefConst<JPH::Shape> pump = new JPH::BoxShape(Vec3(.9f, 1, .6f), .02f);
+                JPH::BodyCreationSettings settings(pump, Vec3(x, base + 1, building.center.GetZ() + z), Quat::sIdentity(), JPH::EMotionType::Static, obstacle_layer);
+                impl_->add_body(settings);
+            }
+        }
+    }
+    for (const auto& barrier : environment.barriers()) {
+        JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(barrier.size / 2, .02f);
+        JPH::BodyCreationSettings settings(shape, barrier.center, Quat::sRotation(Vec3::sAxisY(), barrier.yaw),
+            JPH::EMotionType::Static, obstacle_layer);
+        impl_->add_body(settings);
+    }
+    for (const auto& port : environment.ports()) {
+        const Vec3 direction = port.east ? Vec3::sAxisX() : Vec3::sAxisZ();
+        const Vec3 half = port.east ? Vec3(110, .6f, 4) : Vec3(4, .6f, 110);
+        JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(half, .02f);
+        JPH::BodyCreationSettings settings(shape, port.center + direction * 110 - Vec3(0, .6f, 0),
+            Quat::sIdentity(), JPH::EMotionType::Static, ground_layer);
         impl_->add_body(settings);
     }
     for (const auto& tree : environment.trees()) {
@@ -423,7 +450,7 @@ void Car::reset(const Vec3& center_of_mass, float yaw) {
     auto& physics = world_.impl_->system.GetBodyInterface();
     const Quat rotation = Quat::sRotation(Vec3::sAxisY(), yaw);
     physics.SetPositionAndRotation(body_, center_of_mass + rotation * Vec3(0, chassis_offset, 0),
-        rotation, JPH::EActivation::Activate);
+        rotation, simulated_ ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
     physics.SetLinearAndAngularVelocity(body_, Vec3::sZero(), Vec3::sZero());
     steer_ = 0;
     for (auto& wheel : wheels_) {
@@ -431,6 +458,13 @@ void Car::reset(const Vec3& center_of_mass, float yaw) {
         wheel.spin = wheel.compression = wheel.normal_force = 0;
         wheel.center = center_of_mass + rotation * (wheel.mount - Vec3(0, tuning_.rest_length, 0));
     }
+}
+void Car::set_simulated(bool simulated) {
+    if (simulated == simulated_) return;
+    auto& physics = world_.impl_->system.GetBodyInterface();
+    if (simulated) physics.AddBody(body_, JPH::EActivation::Activate);
+    else physics.RemoveBody(body_);
+    simulated_ = simulated;
 }
 
 void Car::set_tuning(CarTuning tuning) {
@@ -508,8 +542,11 @@ void Car::step(Input input, float dt) {
         const float grip = normal_force * grip_scale * dt;
         const float lateral_impulse = clamp(-lateral_speed * mass * float(0.25 * 0.95), -grip, grip);
         const float remaining = std::sqrt(std::max(float(0), grip * grip - lateral_impulse * lateral_impulse));
-        const float desired = input.throttle * (input.throttle < 0 ? 11 : 24);
-        const float motor_limit = normal_force * tuning_.motor_grip * dt;
+        const float desired = input.throttle * (input.throttle < 0 ? 11 : tuning_.top_speed);
+        // Apply engine force through the tires, respecting both engine output
+        // and available traction. Never clamp the chassis velocity directly.
+        const float engine_limit = mass * .25f * tuning_.acceleration * dt;
+        const float motor_limit = std::min(normal_force * tuning_.motor_grip * dt, engine_limit);
         float long_impulse = clamp((desired - long_speed) * mass * float(0.25 * 0.34), -motor_limit, motor_limit);
         if (std::abs(input.throttle) < float(0.01)) long_impulse = -long_speed * mass * float(0.25 * 0.012);
         if (input.handbrake && !wheel.front) {

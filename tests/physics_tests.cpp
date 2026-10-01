@@ -171,8 +171,8 @@ void test_city_terrain() {
     tick(world, car, {1, 0, false}, 1200);
     const float terrain_y = map.height(car.position().GetX(), car.position().GetZ());
     std::cout << "City avenue: z " << car.position().GetZ() << ", elevation " << terrain_y << " m\n";
-    require(car.position().GetZ() < -30 && terrain_y > map.height(0, 105) + 3,
-            "car failed to climb the city avenue");
+    require(car.position().GetZ() < -30 && std::abs(terrain_y - forza::Environment::road_level) < .01f,
+            "car failed to follow the Miami avenue");
     require(std::abs(car.position().GetY() - terrain_y - 0.56f) < 0.7f,
             "car lost the raised terrain");
     const auto& building = map.buildings().front();
@@ -180,7 +180,8 @@ void test_city_terrain() {
     require(world.cast_ground(forza::Vec3(x, 100, z), forza::Vec3(0, -1, 0), 150, hit)
             && std::abs(hit.point.GetY() - map.height(x, z)) < 0.005f,
             "suspension ray treated a building roof as terrain");
-    car.reset(forza::Vec3(x, map.height(x, z + 20) + 0.56f, z + 20));
+    const float approach = z + building.size.GetZ() / 2 + 12;
+    car.reset(forza::Vec3(x, map.height(x, approach) + 0.56f, approach));
     tick(world, car, {1, 0, false}, 480);
     require(car.position().GetZ() > z + building.size.GetZ() / 2,
             "car passed through a city building");

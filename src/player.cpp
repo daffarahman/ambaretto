@@ -26,6 +26,7 @@ void Player::reset() {
         const float z = environment_.spawn().GetZ() + (i % 2 == 0 ? 1 : -1) * (i / 2 + 1) * 8;
         spawn = Vec3(0, environment_.height(0, z) + .56f, z);
     }
+    car_->set_simulated(true);
     car_->reset(spawn);
     character_.reset(spawn - Vec3(0, 0.5f, 0));
     driving_ = true;
@@ -55,7 +56,7 @@ Player::EntryTarget Player::entry_target() const {
     consider(EntryVehicle::Car, starter_car_.position(), starter_car_.velocity(), starter_car_.body_id(), 3.3f, true, &starter_car_);
     if (traffic_) for (const auto& vehicle : traffic_->cars()) {
         auto* car = vehicle.car.get();
-        consider(EntryVehicle::Car, car->position(), car->velocity(), car->body_id(), 3.3f, true, car);
+        consider(EntryVehicle::Car, car->position(), car->velocity(), car->body_id(), 3.3f, car->simulated(), car);
     }
     if (plane_) consider(EntryVehicle::Plane, plane_->position(), plane_->velocity(), plane_->body_id(), 4.5f, plane_->grounded());
     return result;
