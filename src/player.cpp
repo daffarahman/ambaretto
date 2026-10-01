@@ -35,8 +35,13 @@ void Player::reset() {
 }
 
 void Player::recover_plane() {
-    if (plane_) plane_->reset(Vec3(Airport::plane_x, environment_.height(Airport::plane_x, Airport::runway_z)
-        + Plane::parked_height, Airport::runway_z));
+    if (!plane_) return;
+    const Airport* nearest = &airports.front();
+    for (const auto& airport : airports)
+        if (std::hypot(plane_->position().GetX() - airport.center_x, plane_->position().GetZ() - airport.runway_z)
+            < std::hypot(plane_->position().GetX() - nearest->center_x, plane_->position().GetZ() - nearest->runway_z)) nearest = &airport;
+    plane_->reset(Vec3(nearest->center_x, environment_.height(nearest->center_x, nearest->plane_z())
+        + Plane::parked_height, nearest->plane_z()), nearest->yaw());
 }
 
 Player::EntryTarget Player::entry_target() const {

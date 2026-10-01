@@ -19,44 +19,51 @@ void airport_and_takeoff() {
     PhysicsWorld world(map);
     Plane plane(world);
     GroundHit hit;
-    for (int x = -164; x <= 164; x += 4) for (int dz : {-10, 0, 10}) {
-        const float z = Airport::runway_z + dz;
-        const float px = Airport::center_x + x;
-        require(std::abs(map.height(px, z) - Airport::elevation) < .001f, "runway is not level");
-        require(world.cast_ground(Vec3(px, 20, z), Vec3(0, -1, 0), 30, hit)
-            && std::abs(hit.point.GetY() - map.height(px, z)) < .001f, "airport render and collision heights differ");
-    }
-    for (int z = int(Airport::apron_z); z <= 400; ++z)
-        require(map.road(Airport::center_x, float(z)) && map.height(Airport::center_x, float(z)) > .5f, "airport access road has a gap or enters water");
-    for (const auto& tree : map.trees())
-        require(!Airport::contains(tree.base.GetX(), tree.base.GetZ()), "tree obstructs airport");
     Car car(world);
-    plane.reset(Vec3(Airport::plane_x, Airport::elevation + Plane::parked_height, Airport::runway_z));
-    car.reset(Vec3(Airport::center_x, map.height(Airport::center_x, -400) + .56f, -400));
-    for (int i = 0; i < 1440 && car.position().GetZ() > Airport::apron_z; ++i) {
-        car.step({1, 0, false}); plane.step({0, 0, 0, 0, false, false, true}); world.step();
+    for (const auto& airport : airports) {
+        for (int along = -164; along <= 164; along += 4) for (int dx : {-10, 0, 10}) {
+            const float z = airport.runway_z + along;
+            const float px = airport.center_x + dx;
+            require(std::abs(map.height(px, z) - Airport::elevation) < .001f, "runway is not level");
+            require(world.cast_ground(Vec3(px, 20, z), Vec3(0, -1, 0), 30, hit)
+                && std::abs(hit.point.GetY() - map.height(px, z)) < .001f, "airport render and collision heights differ");
+        }
+        const Vec3 access(airport.apron_x(), 0, airport.apron_z());
+        const Vec3 entrance = &airport == &airports.front() ? Vec3(-780, 0, -240) : Vec3(-2190, 0, 4290);
+        for (int i = 0; i <= 100; ++i) {
+            const Vec3 p = access + (entrance - access) * (i / 100.0f);
+            require(map.road(p.GetX(), p.GetZ()) && map.height(p.GetX(), p.GetZ()) > 2.9f, "airport access road has a gap or enters water");
+        }
+        for (const auto& tree : map.trees())
+            require(!airport.contains(tree.base.GetX(), tree.base.GetZ()) && !airport.flight_path(tree.base.GetX(), tree.base.GetZ()), "tree obstructs airport or departure path");
+        plane.reset(Vec3(airport.center_x, Airport::elevation + Plane::parked_height, airport.plane_z()), airport.yaw());
+        const Vec3 direction = (access - entrance).Normalized();
+        car.reset(entrance + Vec3(0, map.height(entrance.GetX(), entrance.GetZ()) + .56f, 0), std::atan2(-direction.GetX(), -direction.GetZ()));
+        for (int i = 0; i < 1440 && (car.position() - entrance).Dot(direction) < (access - entrance).Length(); ++i) {
+            car.step({1, 0, false}); plane.step({0, 0, 0, 0, false, false, true}); world.step();
+        }
+        require((car.position() - entrance).Dot(direction) >= (access - entrance).Length(), "car cannot reach airport from access avenue");
+        plane.reset(Vec3(airport.center_x, Airport::elevation + Plane::parked_height, airport.plane_z()), airport.yaw());
+        tick(world, plane, {0, 0, 0, 0, false, false, true}, 480);
+        require(plane.grounded() && std::abs(plane.position().GetY() - Airport::elevation - Plane::parked_height) < .15f,
+            "plane did not settle on landing gear");
+        require(plane.velocity().Length() < .15f && plane.throttle() == 0, "parked plane moves or engine runs");
+        require(plane.forward().Dot(Vec3(0, 0, airport.departure)) > .99f, "runway departure does not face away from the city");
+        const float start = plane.position().GetZ();
+        float takeoff_distance = -1;
+        for (int i = 0; i < 2160; ++i) {
+            FlightInput input;
+            input.throttle = 1;
+            input.pitch = plane.airspeed() > 28 ? .5f : 0;
+            plane.step(input); world.step();
+            if (!plane.grounded() && plane.position().GetY() > Airport::elevation + 3 && takeoff_distance < 0)
+                takeoff_distance = (plane.position().GetZ() - start) * airport.departure;
+        }
+        std::cout << airport.name << " takeoff: " << takeoff_distance << " m, altitude " << plane.position().GetY()
+            << " m, airspeed " << plane.airspeed() << " m/s\n";
+        require(takeoff_distance > 50 && takeoff_distance < 280, "aircraft did not take off before runway end");
+        require(plane.position().GetY() > 20 && !plane.damaged(), "powered climb failed or damaged aircraft");
     }
-    std::cout << "Airport road: car z " << car.position().GetZ() << '\n';
-    require(car.position().GetZ() <= Airport::apron_z, "car cannot reach airport from access avenue");
-    plane.reset(Vec3(Airport::plane_x, Airport::elevation + Plane::parked_height, Airport::runway_z));
-    tick(world, plane, {0, 0, 0, 0, false, false, true}, 480);
-    require(plane.grounded() && std::abs(plane.position().GetY() - Airport::elevation - Plane::parked_height) < .15f,
-        "plane did not settle on landing gear");
-    require(plane.velocity().Length() < .15f && plane.throttle() == 0, "parked plane moves or engine runs");
-    const float start = plane.position().GetX();
-    float takeoff_distance = -1;
-    for (int i = 0; i < 2160; ++i) {
-        FlightInput input;
-        input.throttle = 1;
-        input.pitch = plane.airspeed() > 28 ? .5f : 0;
-        plane.step(input); world.step();
-        if (!plane.grounded() && plane.position().GetY() > Airport::elevation + 3 && takeoff_distance < 0)
-            takeoff_distance = plane.position().GetX() - start;
-    }
-    std::cout << "Takeoff: " << takeoff_distance << " m, altitude " << plane.position().GetY()
-        << " m, airspeed " << plane.airspeed() << " m/s\n";
-    require(takeoff_distance > 50 && takeoff_distance < 280, "aircraft did not take off before runway end");
-    require(plane.position().GetY() > 20 && !plane.damaged(), "powered climb failed or damaged aircraft");
 }
 void flight_controls_and_gravity() {
     PhysicsWorld world(false);
@@ -127,7 +134,12 @@ void entry_exit_and_recovery() {
     player.recover_plane();
     require(player.flying() && plane.velocity().Length() < .001f && !plane.damaged() && plane.throttle() == 0,
         "aircraft recovery retained velocity, damage or throttle");
-    require(std::abs(plane.position().GetX() - Airport::plane_x) < .001f, "recovery did not return to runway");
+    require(std::abs(plane.position().GetX() - airports[0].center_x) < .001f, "recovery did not return to runway");
+    plane.reset(Vec3(airports[1].center_x, 80, airports[1].runway_z + 300), 0, Vec3(0, 0, 40));
+    player.recover_plane();
+    require(std::abs(plane.position().GetX() - airports[1].center_x) < .001f
+        && std::abs(plane.position().GetZ() - airports[1].plane_z()) < .001f && plane.forward().GetZ() > .99f,
+        "recovery near Key West did not use its southbound runway");
     player.reset();
     require(player.driving() && !player.flying(), "full reset did not restore driving mode");
 }

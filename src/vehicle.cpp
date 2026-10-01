@@ -78,7 +78,7 @@ struct PhysicsWorld::Impl {
         pairs.EnableCollision(vehicle_layer, vehicle_layer);
         pairs.EnableCollision(vehicle_layer, obstacle_layer);
         broad_phase_filter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(broad_phase, 2, pairs, 3);
-        system.Init(8192, 0, 16384, 16384, broad_phase, *broad_phase_filter, pairs);
+        system.Init(16384, 0, 16384, 16384, broad_phase, *broad_phase_filter, pairs);
         system.SetGravity(Vec3(0, -9.81f, 0));
         auto settings = system.GetPhysicsSettings();
         settings.mNumVelocitySteps = 12;
@@ -146,7 +146,7 @@ PhysicsWorld::PhysicsWorld(const Environment& environment) {
             JPH::RefConst<JPH::Shape> canopy = new JPH::BoxShape(Vec3(building.size.GetX() * .175f, .3f, (building.size.GetZ() - 4) / 2), .02f);
             JPH::BodyCreationSettings roof(canopy, Vec3(x, base + 4.8f, building.center.GetZ()), Quat::sIdentity(), JPH::EMotionType::Static, obstacle_layer);
             impl_->add_body(roof);
-            for (float z : {-12.0f, 0.0f, 12.0f}) {
+            for (float z : {-building.size.GetZ() * .28f, 0.0f, building.size.GetZ() * .28f}) {
                 JPH::RefConst<JPH::Shape> pump = new JPH::BoxShape(Vec3(.9f, 1, .6f), .02f);
                 JPH::BodyCreationSettings settings(pump, Vec3(x, base + 1, building.center.GetZ() + z), Quat::sIdentity(), JPH::EMotionType::Static, obstacle_layer);
                 impl_->add_body(settings);
@@ -161,9 +161,10 @@ PhysicsWorld::PhysicsWorld(const Environment& environment) {
     }
     for (const auto& port : environment.ports()) {
         const Vec3 direction = port.east ? Vec3::sAxisX() : Vec3::sAxisZ();
-        const Vec3 half = port.east ? Vec3(110, .6f, 4) : Vec3(4, .6f, 110);
+        // Overlap the access road so the deck's vertical edge is outside the junction.
+        const Vec3 half = port.east ? Vec3(111, .6f, 4) : Vec3(4, .6f, 111);
         JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(half, .02f);
-        JPH::BodyCreationSettings settings(shape, port.center + direction * 110 - Vec3(0, .6f, 0),
+        JPH::BodyCreationSettings settings(shape, port.center + direction * 109 - Vec3(0, .6f, 0),
             Quat::sIdentity(), JPH::EMotionType::Static, ground_layer);
         impl_->add_body(settings);
     }

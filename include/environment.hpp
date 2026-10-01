@@ -7,17 +7,20 @@
 namespace forza {
 enum class Surface { Grass, Sand, Rock, Road, Seabed };
 struct TerrainTriangle { std::uint32_t a, b, c; Surface surface; bool deck = false; };
-enum class BuildingKind { Tower, Mall, Hotel, Cafe, Club, House, GasStation, Warehouse, Terminal, Hangar, ControlTower };
+enum class BuildingKind { Tower, Mall, Hotel, Cafe, Club, House, GasStation, Warehouse, Terminal, Hangar, ControlTower, Apartment, Shop, Office };
 struct Building {
     Vec3 center, size;
     int style;
     BuildingKind kind = BuildingKind::Tower;
     bool face_east = false;
+    bool face_positive = true;
     Vec3 solid_size() const { return kind == BuildingKind::GasStation ? Vec3(size.GetX() * .42f, size.GetY(), size.GetZ()) : size; }
     Vec3 solid_center() const { return kind == BuildingKind::GasStation ? center - Vec3(size.GetX() * .29f, 0, 0) : center; }
 };
 struct Island { Vec3 center; float radius_x, radius_z; const char* name; };
 struct Road { Vec3 a, b; float width; const char* name; int bridge = -1; };
+// Street corners are shared by pavement generation and NPC routes.
+struct StreetLoop { std::vector<Vec3> corners; float width; const char* name; };
 struct Bridge {
     Vec3 a, b;
     float width, clearance;
@@ -40,10 +43,9 @@ struct Tree {
 // Shared map data: rendering and Jolt use these exact terrain triangles.
 class Environment {
 public:
-    static constexpr float extent = 8192;
-    static constexpr float spacing = 32;
+    static constexpr float extent = 5120;
+    static constexpr float spacing = 20;
     static constexpr int samples = 513;
-    static constexpr float block_size = 200;
     static constexpr float road_level = 3.2f;
     static constexpr float water_level = 0;
     Environment();
@@ -52,6 +54,7 @@ public:
     static bool road(float x, float z);
     static const std::vector<Island>& islands();
     static const std::vector<Road>& roads();
+    static const std::vector<StreetLoop>& street_loops();
     static const std::vector<Bridge>& bridges();
     static const char* district(float x, float z);
     Vec3 spawn() const { return Vec3(0, height(0, 105) + 0.56f, 105); }

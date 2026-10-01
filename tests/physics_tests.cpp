@@ -195,9 +195,17 @@ void test_city_terrain() {
     tick(world, car, {}, 120);
     require(std::abs(car.position().GetY() - map.height(0, 105) - 0.56f) < 0.15f,
             "car did not settle at the city spawn");
-    tick(world, car, {1, 0, false}, 1200);
+    for (int i = 0; i < 1200; ++i) {
+        // Follow the lane: dense frontage no longer leaves a field beside the avenue.
+        const auto target = forza::Vec3(-car.position().GetX(), 0, -12);
+        const float curvature = 2 * target.Dot(-car.forward().Cross(forza::Vec3::sAxisY())) / target.LengthSq();
+        const float steer = std::atan(car.tuning().wheelbase * curvature) / car.tuning().max_steer;
+        tick(world, car, {1, std::clamp(steer, -1.0f, 1.0f), false}, 1);
+        require(std::abs(car.position().GetX()) < 3, "car failed to stay on the narrow avenue");
+    }
     const float terrain_y = map.height(car.position().GetX(), car.position().GetZ());
-    std::cout << "City avenue: z " << car.position().GetZ() << ", elevation " << terrain_y << " m\n";
+    std::cout << "City avenue: position " << car.position().GetX() << ", " << car.position().GetY()
+        << ", " << car.position().GetZ() << ", elevation " << terrain_y << " m\n";
     require(car.position().GetZ() < -30 && std::abs(terrain_y - forza::Environment::road_level) < .01f,
             "car failed to follow the Miami avenue");
     require(std::abs(car.position().GetY() - terrain_y - 0.56f) < 0.7f,

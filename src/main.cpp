@@ -365,15 +365,20 @@ int main(int argc, char** argv) {
         if (performance_tuning) tuning_panel.select_tab(2);
         auto scene = std::make_unique<Scene>(environment);
         if (!start_district.empty()) {
-            forza::Vec3 p = start_district == "--beach" ? forza::Vec3(2450, 0, 400) :
-                start_district == "--keys" ? forza::Vec3(-600, 0, 2500) :
-                start_district == "--key-west" ? forza::Vec3(-3500, 0, 7300) : environment.bridges()[6].point(.5f);
+            forza::Vec3 p = start_district == "--beach" ? forza::Vec3(1470, 0, 240) :
+                start_district == "--keys" ? environment.islands()[6].center :
+                start_district == "--key-west" ? environment.islands().back().center : environment.bridges()[6].point(.5f);
             p.SetY(environment.height(p.GetX(), p.GetZ()) + .56f);
             const auto heading = environment.bridges()[6].a - environment.bridges()[6].b;
             scene->car.reset(p, start_district == "--bridge" ? std::atan2(-heading.GetX(), -heading.GetZ()) : 0);
         }
-        if (start_at_airport) scene->car.reset(forza::Vec3(forza::Airport::plane_x,
-            environment.height(forza::Airport::plane_x, forza::Airport::runway_z - 8) + .56f, forza::Airport::runway_z - 8), -1.5707963f);
+        if (start_at_airport) {
+            const auto& airport = forza::airports[start_district == "--key-west" ? 1 : 0];
+            scene->plane.reset(forza::Vec3(airport.center_x, forza::Airport::elevation + forza::Plane::parked_height,
+                airport.plane_z()), airport.yaw());
+            scene->car.reset(forza::Vec3(airport.center_x + 8,
+                environment.height(airport.center_x + 8, airport.plane_z()) + .56f, airport.plane_z()), airport.yaw());
+        }
         if (start_in_plane) {
             scene->player.interact();
             const auto door = scene->plane.position() + scene->plane.rotate(forza::Vec3(-1.9f, 0, -1.8f));
@@ -596,7 +601,7 @@ int main(int argc, char** argv) {
                 (tuning_open || scene->player.driving()) ? scene->player.car().body_id() : scene->player.flying() ? scene->plane.body_id() : JPH::BodyID());
             camera.position = render_vector(camera_target + offset * fraction);
             Camera3D view = camera;
-            if (aerial) view = Camera3D{{3200, 7000, 10000}, {-500, 0, 2800}, {0, 1, 0}, 50, CAMERA_PERSPECTIVE};
+            if (aerial) view = Camera3D{{1900, 4200, 6000}, {-300, 0, 1680}, {0, 1, 0}, 50, CAMERA_PERSPECTIVE};
             rlSetClipPlanes(aerial ? 1.0 : 0.2, 30000);
             notice_time = std::max(0.0f, notice_time - frame);
             BeginDrawing();

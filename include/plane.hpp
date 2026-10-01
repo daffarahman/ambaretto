@@ -16,7 +16,7 @@ struct FlightInput {
 class Plane {
 public:
     explicit Plane(PhysicsWorld& world);
-    void reset(const Vec3& center, float yaw = -1.57079632679f,
+    void reset(const Vec3& center, float yaw = 0,
                const Vec3& velocity = Vec3::sZero(), float throttle = 0);
     void step(FlightInput input, float dt = fixed_step);
     Vec3 position() const;

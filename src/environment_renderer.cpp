@@ -13,6 +13,7 @@
 namespace forza {
 namespace {
 constexpr float pi = 3.14159265359f;
+constexpr int sign_rows = 10;
 Texture2D load_terrain_texture(const char* filename) {
     const std::string relative = std::string("assets/textures/") + filename;
     const std::string bundled = std::string(GetApplicationDirectory()) + relative;
@@ -46,7 +47,7 @@ struct MeshBuilder {
         const Vec3 up(0, height / 2, 0), side = right * (width / 2);
         const auto first = texcoords.size();
         quad(center - side - up, center + side - up, center + side + up, center - side + up, WHITE);
-        const float top = float(row) / 8, bottom = float(row + 1) / 8;
+        const float top = float(row) / sign_rows, bottom = float(row + 1) / sign_rows;
         const float uv[] = {0, bottom, 1, bottom, 1, top, 0, bottom, 1, top, 0, top};
         std::copy(std::begin(uv), std::end(uv), texcoords.begin() + first);
     }
@@ -285,30 +286,46 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         const Vec3 direction = (road.b - road.a).Normalized();
         const Vec3 side = direction.Cross(Vec3::sAxisY());
         const float length = (road.b - road.a).Length();
+        const auto marking = [&](Vec3 a, Vec3 b, float width, Color color) {
+            const int steps = std::max(1, int(std::ceil((b - a).Length() / 2)));
+            for (int i = 0; i < steps; ++i) {
+                const Vec3 start = a + (b - a) * (float(i) / steps), end = a + (b - a) * (float(i + 1) / steps);
+                const Vec3 middle = (start + end) / 2;
+                bool covered = false;
+                for (const auto& other : env.roads()) {
+                    if (&other == &road) continue;
+                    const Vec3 delta = other.b - other.a;
+                    const float t = std::clamp((middle - other.a).Dot(delta) / delta.LengthSq(), 0.0f, 1.0f);
+                    if ((middle - other.a - delta * t).Length() > other.width / 2 + .3f) continue;
+                    // Open junctions; keep only the widest marking on overlapping streets.
+                    if (std::abs(direction.Dot(delta.Normalized())) < .98f || other.width > road.width
+                        || (other.width == road.width && &other < &road)) { covered = true; break; }
+                }
+                if (covered) continue;
+                if (road.bridge >= 0) deck_strip(start, end, width, color);
+                else city.ribbon(env, start, end, width, color, .085f);
+            }
+        };
         if (road.bridge < 0) {
-            city.ribbon(env, road.a, road.b, road.width + 7, {172, 181, 175, 255}, .03f);
+            city.ribbon(env, road.a, road.b, road.width + 3, {172, 181, 175, 255}, .03f);
             roads.ribbon(env, road.a, road.b, road.width, asphalt, .055f);
         }
         for (float along = 0; along < length; along += 16) {
             const Vec3 a = road.a + direction * along, b = road.a + direction * std::min(along + 6, length);
-            if (road.bridge >= 0) deck_strip(a, b, .24f, {244, 207, 99, 255});
-            else city.ribbon(env, a, b, .24f, {244, 207, 99, 255}, .085f);
+            marking(a, b, .24f, {244, 207, 99, 255});
         }
         for (float sign : {-1.0f, 1.0f}) {
             const Vec3 offset = side * (sign * (road.width / 2 - 1));
-            if (road.bridge >= 0) {
-                for (float along = 0; along < length; along += 8)
-                    deck_strip(road.a + direction * along + offset,
-                        road.a + direction * std::min(along + 8, length) + offset, .18f, RAYWHITE);
-            } else city.ribbon(env, road.a + offset, road.b + offset, .18f, RAYWHITE, .085f);
+            marking(road.a + offset, road.b + offset, .18f, RAYWHITE);
         }
     }
 
-    Image atlas = GenImageColor(256, 512, BLANK);
-    const char* labels[] = {"HOTEL", "CAFE", "CLUB", "MALL", "GAS", "MARINA", "MIAMI BEACH", "US 1"};
+    Image atlas = GenImageColor(256, 64 * sign_rows, BLANK);
+    const char* labels[] = {"HOTEL", "CAFE", "CLUB", "MALL", "GAS", "MARINA", "MIAMI BEACH", "US 1", "SHOP", "WORKSHOP"};
     const Color backgrounds[] = {{36, 136, 151, 255}, {190, 101, 64, 255}, {121, 44, 161, 255},
-        {26, 73, 104, 255}, {34, 141, 104, 255}, {31, 100, 139, 255}, {210, 123, 141, 255}, {43, 105, 74, 255}};
-    for (int row = 0; row < 8; ++row) {
+        {26, 73, 104, 255}, {34, 141, 104, 255}, {31, 100, 139, 255}, {210, 123, 141, 255}, {43, 105, 74, 255},
+        {53, 101, 119, 255}, {108, 106, 86, 255}};
+    for (int row = 0; row < sign_rows; ++row) {
         ImageDrawRectangle(&atlas, 0, row * 64, 256, 64, backgrounds[row]);
         ImageDrawRectangleLines(&atlas, {3, float(row * 64 + 3), 250, 58}, 2, RAYWHITE);
         const int font_size = row == 6 ? 22 : 32;
@@ -322,74 +339,97 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     for (const auto& b : env.buildings()) {
         const float base = b.center.GetY() - b.size.GetY() / 2, roof = base + b.size.GetY();
         const float x = b.center.GetX(), z = b.center.GetZ(), sx = b.size.GetX(), sz = b.size.GetZ();
-        const Vec3 front = b.face_east ? Vec3::sAxisX() : Vec3::sAxisZ();
+        const float facing = b.face_positive ? 1.0f : -1.0f;
+        const Vec3 front = (b.face_east ? Vec3::sAxisX() : Vec3::sAxisZ()) * facing;
         const Vec3 face = Vec3(x, base, z) + front * ((b.face_east ? sx : sz) / 2 + .08f);
-        const Vec3 sign_right = b.face_east ? Vec3(0, 0, -1) : Vec3::sAxisX();
+        const Vec3 sign_right = (b.face_east ? Vec3(0, 0, -1) : Vec3::sAxisX()) * facing;
         const auto shop_sign = [&](int row, float y, float width) {
-            signs.sign(face + front * .06f + Vec3(0, y, 0), sign_right, width, 2.6f, row);
+            signs.sign(face + front * .06f + Vec3(0, std::min(y, b.size.GetY() - .65f), 0), sign_right,
+                std::min(width, (b.face_east ? sz : sx) * .8f), 1.2f, row);
         };
         Color body = palette[b.style % 5];
         if (b.kind == BuildingKind::Tower) body = Color{89, static_cast<unsigned char>(140 + b.style * 9), 166, 255};
         if (b.kind == BuildingKind::Warehouse || b.kind == BuildingKind::Hangar) body = Color{149, 169, 174, 255};
         city.box(b.solid_center(), b.solid_size(), body);
+        if (b.kind != BuildingKind::House)
+            city.box(Vec3(x, base + .04f, z), Vec3(sx + 3, .08f, sz + 3), concrete);
         const Vec3 solid = b.solid_center();
-        city.box(Vec3(solid.GetX(), roof + .4f, z), Vec3(b.solid_size().GetX() + .8f, .8f, sz + .8f), concrete);
-        if (b.kind == BuildingKind::Tower || b.kind == BuildingKind::Hotel) {
-            const float floor = b.kind == BuildingKind::Hotel ? 4 : 9;
+        city.box(Vec3(solid.GetX(), roof + .15f, z), Vec3(b.solid_size().GetX() + .6f, .3f, sz + .6f), concrete);
+        if (b.kind == BuildingKind::Tower || b.kind == BuildingKind::Hotel
+            || b.kind == BuildingKind::Apartment || b.kind == BuildingKind::Office) {
+            const float floor = 3.3f;
             for (float y = base + 4; y < roof - 1; y += floor) {
                 for (float side : {-1.0f, 1.0f}) {
                     city.box(Vec3(x, y, z + side * (sz / 2 + .04f)), Vec3(sx - 5, floor * .55f, .08f), glass);
                     city.box(Vec3(x + side * (sx / 2 + .04f), y, z), Vec3(.08f, floor * .55f, sz - 5), glass);
                 }
-                if (b.kind == BuildingKind::Hotel)
-                    city.box(Vec3(x, y - 1.3f, z), Vec3(sx + 1.6f, .3f, sz + 1.6f), RAYWHITE);
+                if (b.kind == BuildingKind::Hotel || b.kind == BuildingKind::Apartment)
+                    city.box(Vec3(x, y - 1.3f, z), Vec3(sx + .8f, .2f, sz + .8f), RAYWHITE);
             }
-            city.box(Vec3(x, roof + (b.kind == BuildingKind::Tower ? 5 : 2), z),
-                Vec3(sx * .65f, b.kind == BuildingKind::Tower ? 10 : 4, sz * .65f), body);
+            const float cap = b.kind == BuildingKind::Tower ? 3.0f + b.style : 1.2f;
+            city.box(Vec3(x, roof + cap / 2, z), Vec3(sx * (b.style % 2 ? .5f : .75f), cap, sz * .55f), body);
+            if (b.kind == BuildingKind::Office || b.style == 3)
+                for (float dx : {-sx * .3f, sx * .3f})
+                    city.box(Vec3(x + dx, roof + .65f, z), Vec3(2, 1.3f, 2), concrete);
             if (b.kind == BuildingKind::Hotel) shop_sign(0, 5, 16);
-            else city.box(Vec3(x, base + 2, z), Vec3(sx + 4, 4, sz + 4), concrete);
+            const Vec3 door_size = b.face_east ? Vec3(.12f, 2.3f, 1.4f) : Vec3(1.4f, 2.3f, .12f);
+            city.box(face + Vec3(0, 1.15f, 0), door_size, glass);
         } else if (b.kind == BuildingKind::House) {
-            // Terracotta pitched roofs and a shaded front porch.
-            const Vec3 a(x - sx / 2 - 1, roof, z - sz / 2 - 1), c(x + sx / 2 + 1, roof, z - sz / 2 - 1);
-            const Vec3 d(x - sx / 2 - 1, roof, z + sz / 2 + 1), e(x + sx / 2 + 1, roof, z + sz / 2 + 1);
-            const Vec3 r1(x, roof + 4, a.GetZ()), r2(x, roof + 4, d.GetZ());
-            city.quad(a, d, r2, r1, {172, 88, 61, 255}); city.quad(r1, r2, e, c, {192, 108, 77, 255});
-            city.triangle(a, r1, c, body); city.triangle(d, e, r2, body);
-            city.box(face + Vec3(0, 2, 0), Vec3(2.4f, 4, .12f), glass);
-            city.box(face + Vec3(0, 4.4f, 2), Vec3(14, .35f, 4), RAYWHITE);
+            const Vec3 a(x - sx / 2 - .45f, roof, z - sz / 2 - .45f), c(x + sx / 2 + .45f, roof, z - sz / 2 - .45f);
+            const Vec3 d(x - sx / 2 - .45f, roof, z + sz / 2 + .45f), e(x + sx / 2 + .45f, roof, z + sz / 2 + .45f);
+            if (b.style % 3 == 0) {
+                const Vec3 ridge(x, roof + 1.6f, z);
+                for (const auto& edge : {std::pair<Vec3, Vec3>{a, c}, {c, e}, {e, d}, {d, a}})
+                    city.triangle(edge.first, ridge, edge.second, {172, 88, 61, 255});
+            } else if (b.style % 3 == 1) {
+                city.box(Vec3(x, roof + .35f, z), Vec3(sx, .4f, sz), palette[(b.style + 1) % 5]);
+            } else {
+                const Vec3 r1(x, roof + 1.4f, a.GetZ()), r2(x, roof + 1.4f, d.GetZ());
+                city.quad(a, d, r2, r1, {172, 88, 61, 255}); city.quad(r1, r2, e, c, {192, 108, 77, 255});
+                city.triangle(a, r1, c, body); city.triangle(d, e, r2, body);
+            }
+            city.box(face + Vec3(0, 1.05f, 0), b.face_east ? Vec3(.12f, 2.1f, 1) : Vec3(1, 2.1f, .12f), {91, 72, 55, 255});
+            for (float floor = 1.6f; floor < b.size.GetY(); floor += 3.1f) for (float side : {-1.0f, 1.0f})
+                city.box(face + sign_right * (side * (b.face_east ? sz : sx) * .28f) + Vec3(0, floor, 0),
+                    b.face_east ? Vec3(.12f, 1.1f, 1.5f) : Vec3(1.5f, 1.1f, .12f), glass);
+            city.box(face + front + Vec3(0, 2.5f, 0), b.face_east ? Vec3(2, .2f, std::min(sz, 6.0f)) : Vec3(std::min(sx, 6.0f), .2f, 2), RAYWHITE);
         } else if (b.kind == BuildingKind::GasStation) {
             city.ribbon(env, Vec3(x, 0, z - sz / 2), Vec3(x, 0, z + sz / 2), sx, {173, 179, 175, 255}, .035f);
             // Keep the canopy inside the station's collider footprint.
             city.box(Vec3(x + sx * .3f, base + 4.8f, z), Vec3(sx * .35f, .6f, sz - 4), {32, 153, 126, 255});
-            for (float dz : {-12.0f, 0.0f, 12.0f}) {
+            for (float dz : {-sz * .28f, 0.0f, sz * .28f}) {
                 city.box(Vec3(x + sx * .3f, base + 1, z + dz), Vec3(1.8f, 2, 1.2f), RAYWHITE);
                 city.box(Vec3(x + sx * .3f, base + 3, z + dz), Vec3(.25f, 3, .25f), concrete);
             }
             shop_sign(4, 6, 12);
             city.box(face + Vec3(0, 3, 0), Vec3(.25f, 6, .25f), concrete);
-        } else if (b.kind == BuildingKind::Cafe || b.kind == BuildingKind::Club) {
+        } else if (b.kind == BuildingKind::Cafe || b.kind == BuildingKind::Club || b.kind == BuildingKind::Shop) {
             const bool club = b.kind == BuildingKind::Club;
             const Color accent = club ? Color{211, 94, 228, 255} : Color{240, 161, 98, 255};
-            const Vec3 awning_size = b.face_east ? Vec3(3, .4f, sz - 4) : Vec3(sx - 4, .4f, 3);
-            city.box(face + front * 1.4f + Vec3(0, 3.4f, 0), awning_size, accent);
-            const Vec3 window_size = b.face_east ? Vec3(.1f, 2.8f, sz - 6) : Vec3(sx - 6, 2.8f, .1f);
-            city.box(face + Vec3(0, 1.6f, 0), window_size, glass);
-            shop_sign(club ? 2 : 1, club ? 7 : 5, 14);
-            if (!club) for (float side : {-8.0f, 8.0f}) {
-                const Vec3 table = face + front * 5 + sign_right * side;
+            const Vec3 awning_size = b.face_east ? Vec3(1.8f, .2f, sz - 2) : Vec3(sx - 2, .2f, 1.8f);
+            city.box(face + front * .8f + Vec3(0, 2.6f, 0), awning_size, accent);
+            const Vec3 window_size = b.face_east ? Vec3(.1f, 1.8f, sz - 3) : Vec3(sx - 3, 1.8f, .1f);
+            city.box(face + Vec3(0, 1.3f, 0), window_size, glass);
+            shop_sign(club ? 2 : b.kind == BuildingKind::Shop ? 8 : 1, club ? 7 : 5, 14);
+            if (b.kind == BuildingKind::Cafe) for (float side : {-2.8f, 2.8f}) {
+                const Vec3 table = face + front * 1.7f + sign_right * side;
                 city.box(table + Vec3(0, .75f, 0), Vec3(1.8f, .15f, 1.8f), body);
                 city.box(table + Vec3(0, .35f, 0), Vec3(.2f, .7f, .2f), concrete);
             }
         } else if (b.kind == BuildingKind::Mall) {
-            city.box(face + Vec3(0, 5, 0), Vec3(sx - 14, 8, .2f), glass);
-            city.box(face + Vec3(0, 10, 2), Vec3(sx - 4, 1, 4), concrete);
-            shop_sign(3, 15, 25);
+            city.box(face + Vec3(0, 2.5f, 0), Vec3(sx - 6, 4, .2f), glass);
+            city.box(face + front + Vec3(0, 4.5f, 0), Vec3(sx - 2, .4f, 2), concrete);
+            shop_sign(3, 7, 16);
         } else if (b.kind == BuildingKind::ControlTower) {
             city.box(Vec3(x, roof - 3, z), Vec3(sx + 3, 5, sz + 3), glass);
             city.box(Vec3(x, roof + 3, z), Vec3(.2f, 6, .2f), RAYWHITE);
         } else {
-            city.box(face + Vec3(0, 4, 0), Vec3(sx - 4, 6, .15f), glass);
-            if (b.kind == BuildingKind::Warehouse) shop_sign(5, 10, 17);
+            city.box(face + Vec3(0, 2.5f, 0), b.face_east ? Vec3(.15f, 4, sz - 4) : Vec3(sx - 4, 4, .15f), glass);
+            if (b.kind == BuildingKind::Warehouse) {
+                shop_sign(9, 5.5f, 10);
+                city.box(Vec3(x, roof + .4f, z), Vec3(sx * .6f, .6f, 2), glass);
+                city.box(face + front * 1.5f + sign_right * 3 + Vec3(0, .65f, 0), Vec3(2, 1.3f, 2), {153, 111, 68, 255});
+            }
         }
     }
 
@@ -420,8 +460,8 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     }
     for (const auto& port : env.ports()) {
         const Vec3 direction = port.east ? Vec3::sAxisX() : Vec3::sAxisZ(), side = direction.Cross(Vec3::sAxisY());
-        const Vec3 deck = port.center + direction * 110 - Vec3(0, .6f, 0);
-        city.box(deck, port.east ? Vec3(220, 1.2f, 8) : Vec3(8, 1.2f, 220), {149, 116, 80, 255});
+        const Vec3 deck = port.center + direction * 109 - Vec3(0, .6f, 0);
+        city.box(deck, port.east ? Vec3(222, 1.2f, 8) : Vec3(8, 1.2f, 222), {149, 116, 80, 255});
         signs.sign(port.center + Vec3(0, 4, 0), Vec3::sAxisX(), 14, 3, 5);
         city.box(port.center + Vec3(0, 2, 0), Vec3(.3f, 4, .3f), concrete);
         for (float d = 10; d < 220; d += 25) {
@@ -440,9 +480,9 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         }
     }
     for (int i = 0; i < 38; ++i) {
-        const float z = -820 + i * 44.0f;
-        const float coast = (z + 100) / 1650;
-        const float x = 2200 + 500 * std::sqrt(.94f * .94f - coast * coast);
+        const float z = -492 + i * 26.4f;
+        const float coast = (z + 60) / 990;
+        const float x = 1320 + 300 * std::sqrt(.94f * .94f - coast * coast);
         const Vec3 p(x, env.terrain_height(x, z), z);
         if (p.GetY() < .1f) continue;
         city.box(p + Vec3(0, 1.3f, 0), Vec3(.12f, 2.6f, .12f), RAYWHITE);
@@ -454,25 +494,27 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         city.box(p + Vec3(3, .16f, 0), Vec3(1.5f, .25f, 2.6f), {115, 173, 190, 255});
     }
 
-    const float ax = Airport::center_x, rz = Airport::runway_z;
-    roads.ribbon(env, Vec3(ax - 156, 0, Airport::apron_z), Vec3(ax + 62, 0, Airport::apron_z), 24, asphalt, .06f);
-    roads.ribbon(env, Vec3(Airport::plane_x, 0, Airport::apron_z), Vec3(Airport::plane_x, 0, rz), 10, asphalt, .06f);
-    roads.ribbon(env, Vec3(ax - 168, 0, rz), Vec3(ax + 168, 0, rz), 24, asphalt, .06f);
-    for (float side : {-10.8f, 10.8f})
-        city.ribbon(env, Vec3(ax - 168, 0, rz + side), Vec3(ax + 168, 0, rz + side), .35f, RAYWHITE, .09f);
-    for (int x = -125; x < 130; x += 20)
-        city.ribbon(env, Vec3(ax + x, 0, rz), Vec3(ax + x + 10, 0, rz), .45f, RAYWHITE, .09f);
-    for (float end : {-1.0f, 1.0f}) for (float stripe : {-8.0f, -5.5f, -3.0f, 3.0f, 5.5f, 8.0f})
-        city.ribbon(env, Vec3(ax + end * 164, 0, rz + stripe), Vec3(ax + end * 154, 0, rz + stripe), 1.4f, RAYWHITE, .09f);
-    city.ribbon(env, Vec3(ax, 0, Airport::apron_z), Vec3(Airport::plane_x, 0, Airport::apron_z), .25f, YELLOW, .09f);
-    city.ribbon(env, Vec3(Airport::plane_x, 0, Airport::apron_z), Vec3(Airport::plane_x, 0, rz), .25f, YELLOW, .09f);
-    for (int x = -160; x <= 160; x += 20) for (float side : {-11.8f, 11.8f})
-        city.box(Vec3(ax + x, Airport::elevation + .17f, rz + side), Vec3(.3f, .25f, .3f), {245, 233, 166, 255});
-    const Vec3 sock(ax + 112, Airport::elevation, Airport::apron_z - 15);
-    city.box(sock + Vec3(0, 3, 0), Vec3(.18f, 6, .18f), concrete);
-    for (int i = 0; i < 5; ++i)
-        city.box(sock + Vec3(.5f + i * .5f, 5.8f - i * .09f, 0),
-            Vec3(.5f, .6f - i * .075f, .6f - i * .075f), i % 2 ? RAYWHITE : ORANGE);
+    for (const auto& airport : airports) {
+        const float ax = airport.center_x, rz = airport.runway_z;
+        roads.ribbon(env, Vec3(airport.apron_x(), 0, rz + airport.departure * 156), Vec3(airport.apron_x(), 0, airport.plane_z()), 30, asphalt, .06f);
+        roads.ribbon(env, Vec3(ax, 0, airport.plane_z()), Vec3(airport.apron_x(), 0, airport.plane_z()), 10, asphalt, .06f);
+        roads.ribbon(env, Vec3(ax, 0, rz - 168), Vec3(ax, 0, rz + 168), 24, asphalt, .06f);
+        for (float side : {-10.8f, 10.8f})
+            city.ribbon(env, Vec3(ax + side, 0, rz - 168), Vec3(ax + side, 0, rz + 168), .35f, RAYWHITE, .09f);
+        for (int x = -125; x < 130; x += 20)
+            city.ribbon(env, Vec3(ax, 0, rz + x), Vec3(ax, 0, rz + x + 10), .45f, RAYWHITE, .09f);
+        for (float end : {-1.0f, 1.0f}) for (float stripe : {-8.0f, -5.5f, -3.0f, 3.0f, 5.5f, 8.0f})
+            city.ribbon(env, Vec3(ax + stripe, 0, rz + end * 164), Vec3(ax + stripe, 0, rz + end * 154), 1.4f, RAYWHITE, .09f);
+        city.ribbon(env, Vec3(airport.apron_x(), 0, airport.apron_z()), Vec3(airport.apron_x(), 0, airport.plane_z()), .25f, YELLOW, .09f);
+        city.ribbon(env, Vec3(airport.apron_x(), 0, airport.plane_z()), Vec3(ax, 0, airport.plane_z()), .25f, YELLOW, .09f);
+        for (int x = -160; x <= 160; x += 20) for (float side : {-11.8f, 11.8f})
+            city.box(Vec3(ax + side, Airport::elevation + .17f, rz + x), Vec3(.3f, .25f, .3f), {245, 233, 166, 255});
+        const Vec3 sock(airport.apron_x() + 20, Airport::elevation, rz + airport.departure * 132);
+        city.box(sock + Vec3(0, 3, 0), Vec3(.18f, 6, .18f), concrete);
+        for (int i = 0; i < 5; ++i)
+            city.box(sock + Vec3(.5f + i * .5f, 5.8f - i * .09f, 0),
+                Vec3(.5f, .6f - i * .075f, .6f - i * .075f), i % 2 ? RAYWHITE : ORANGE);
+    }
     for (std::size_t i = 3; i < env.bridges().size(); ++i) {
         const auto& bridge = env.bridges()[i];
         const Vec3 dir = (bridge.b - bridge.a).Normalized(), side = dir.Cross(Vec3::sAxisY());
@@ -521,6 +563,18 @@ void EnvironmentRenderer::load_minimap(const Environment& env) {
     for (const auto& road : env.roads()) {
         const Color color = road.bridge >= 0 ? Color{221, 195, 134, 255} : Color{66, 78, 85, 255};
         ImageDrawLine(&map, pixel(road.a.GetX()), pixel(road.a.GetZ()), pixel(road.b.GetX()), pixel(road.b.GetZ()), color);
+    }
+    for (const auto& airport : airports) {
+        const Color pavement{66, 78, 85, 255};
+        ImageDrawRectangle(&map, pixel(airport.center_x - 12), pixel(airport.runway_z - 168),
+            pixel(airport.center_x + 12) - pixel(airport.center_x - 12),
+            pixel(airport.runway_z + 168) - pixel(airport.runway_z - 168), pavement);
+        const float apron_start = std::min(airport.plane_z(), airport.runway_z + airport.departure * 156);
+        ImageDrawRectangle(&map, pixel(airport.apron_x() - 15), pixel(apron_start),
+            pixel(airport.apron_x() + 15) - pixel(airport.apron_x() - 15),
+            pixel(apron_start + 296) - pixel(apron_start), pavement);
+        ImageDrawLine(&map, pixel(airport.center_x), pixel(airport.plane_z()),
+            pixel(airport.apron_x()), pixel(airport.plane_z()), pavement);
     }
     for (const auto& b : env.buildings())
         ImageDrawRectangle(&map, pixel(b.center.GetX() - b.size.GetX() / 2), pixel(b.center.GetZ() - b.size.GetZ() / 2),

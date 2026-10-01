@@ -7,7 +7,7 @@
 
 namespace forza {
 namespace {
-constexpr float lane_offset = 4;
+constexpr float lane_offset = 2.2f;
 Vec3 flat(Vec3 value) { value.SetY(0); return value; }
 Vec3 right(Vec3 direction) { return direction.Cross(Vec3::sAxisY()); }
 float yaw(Vec3 direction) { return std::atan2(-direction.GetX(), -direction.GetZ()); }
@@ -24,48 +24,36 @@ std::vector<Vec3> lane_route(std::vector<Vec3> corners, bool reverse = false) {
     for (std::size_t i = 0; i < lane.size(); ++i) {
         const Vec3 incoming = (lane[i] - lane[(i + lane.size() - 1) % lane.size()]).Normalized();
         const Vec3 outgoing = (lane[(i + 1) % lane.size()] - lane[i]).Normalized();
-        const Vec3 start = lane[i] - incoming * 8, end = lane[i] + outgoing * 8;
+        const Vec3 start = lane[i] - incoming * 4, end = lane[i] + outgoing * 4;
         for (int j = 0; j < 8; ++j) {
             const float t = j / 8.0f;
             result.push_back(start * ((1 - t) * (1 - t)) + lane[i] * (2 * t * (1 - t)) + end * (t * t));
         }
-        const Vec3 next = lane[(i + 1) % lane.size()] - outgoing * 8;
+        const Vec3 next = lane[(i + 1) % lane.size()] - outgoing * 4;
         const int steps = std::max(1, int((next - end).Length() / 8));
         for (int j = 0; j < steps; ++j) result.push_back(end + (next - end) * (float(j) / steps));
     }
     return result;
 }
-std::vector<Vec3> rectangle(float west, float north, float east, float south, bool reverse) {
-    return lane_route({{west, 0, north}, {east, 0, north}, {east, 0, south}, {west, 0, south}}, reverse);
-}
 } // namespace
 
 Traffic::Traffic(PhysicsWorld& world, const Environment& environment) : world_(world), environment_(environment) {
     for (bool reverse : {false, true}) {
-        routes_.push_back(rectangle(0, -200, 200, 200, reverse));
-        for (float x : {-1000.0f, -600.0f, -200.0f})
-            for (float z : {-1000.0f, -600.0f, -200.0f, 200.0f, 600.0f})
-                routes_.push_back(rectangle(x, z, x + 400, z + 400, reverse));
-        for (float x : {1900.0f, 2100.0f, 2300.0f})
-            for (float z : {-800.0f, -400.0f, 0.0f, 400.0f})
-                routes_.push_back(rectangle(x, z, x == 2300 ? 2450 : x + 200, z + 400, reverse));
-        for (std::size_t i = 6; i < environment.islands().size(); ++i) {
-            const auto c = environment.islands()[i].center;
-            routes_.push_back(rectangle(c.GetX() - 200, c.GetZ() - 200, c.GetX() + 200, c.GetZ() + 200, reverse));
-        }
+        for (const auto& loop : environment.street_loops()) routes_.push_back(lane_route(loop.corners, reverse));
     }
-    routes_.push_back(lane_route({{0, 0, 400}, {1100, 0, 400}, {2100, 0, 400}, {2100, 0, -400}, {0, 0, -400}}));
-    routes_.push_back(lane_route({{0, 0, 400}, {1100, 0, 400}, {2100, 0, 400}, {2100, 0, -400}, {0, 0, -400}}, true));
+    routes_.push_back(lane_route({{0, 0, 240}, {660, 0, 240}, {1260, 0, 240}, {1260, 0, -240}, {0, 0, -240}}));
+    routes_.push_back(lane_route({{0, 0, 240}, {660, 0, 240}, {1260, 0, 240}, {1260, 0, -240}, {0, 0, -240}}, true));
     // The Overseas Highway goes through every Key and every connecting deck.
     // Both ends turn around on connected village/city blocks.
-    std::vector<Vec3> spine{{-600, 0, 1000}, {-600, 0, 1500}, {-600, 0, 2100}, {-600, 0, 2500},
-        {-600, 0, 2900}, {-900, 0, 3400}, {-1300, 0, 3700}, {-1400, 0, 3900},
-        {-1800, 0, 4650}, {-2200, 0, 4900}, {-2400, 0, 5150}, {-2650, 0, 5900},
-        {-2900, 0, 6200}, {-3150, 0, 6450}, {-3300, 0, 6950}, {-3500, 0, 7300}};
+    std::vector<Vec3> spine{{-360, 0, 600}};
+    for (std::size_t i = 3; i < environment.bridges().size(); ++i) {
+        const auto& bridge = environment.bridges()[i];
+        spine.push_back(bridge.a); spine.push_back(bridge.b); spine.push_back(environment.islands()[i + 3].center);
+    }
     auto highway = spine;
-    highway.insert(highway.end(), {{-3500, 0, 7500}, {-3300, 0, 7500}, {-3300, 0, 7300}, {-3500, 0, 7300}});
+    highway.insert(highway.end(), {{-2100, 0, 4470}, {-2010, 0, 4470}, {-2010, 0, 4380}, {-2100, 0, 4380}});
     for (std::size_t i = spine.size() - 1; i-- > 0;) highway.push_back(spine[i]);
-    highway.insert(highway.end(), {{-800, 0, 1000}, {-800, 0, 800}, {-600, 0, 800}});
+    highway.insert(highway.end(), {{-600, 0, 600}, {-580, 0, 340}, {-360, 0, 360}});
     routes_.push_back(lane_route(highway));
     for (std::size_t r = 0; r < routes_.size(); ++r) {
         const auto& route = routes_[r];

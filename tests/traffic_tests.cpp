@@ -26,6 +26,8 @@ void roads_and_driving() {
     Car starter(world);
     Traffic traffic(world, map);
     Player player(world, starter, map, nullptr, &traffic);
+    // Keep this circulation check clear of parked-player queues (tested separately).
+    starter.reset(ground(map, -180, -700));
     require(traffic.cars().size() >= 250, "Miami region has too few NPC cars");
     std::vector<Vec3> previous;
     std::vector<float> traveled(traffic.cars().size(), 0);
@@ -53,7 +55,12 @@ void roads_and_driving() {
     for (std::size_t i = 0; i < 8; ++i) std::cout << ' ' << traveled[i];
     std::cout << '\n';
     require(road_samples > total_samples * .98f, "traffic left the island roads");
-    for (float distance : traveled) require(distance > 80, "NPC traffic stopped making progress");
+    for (std::size_t i = 0; i < traveled.size(); ++i) {
+        if (traveled[i] <= 80) std::cout << "Stopped car " << i << ", route " << traffic.cars()[i].route
+            << ", distance " << traveled[i] << ", position " << traffic.cars()[i].car->position().GetX()
+            << ", " << traffic.cars()[i].car->position().GetZ() << '\n';
+        require(traveled[i] > 80, "NPC traffic stopped making progress");
+    }
 }
 
 void braking_and_theft() {
