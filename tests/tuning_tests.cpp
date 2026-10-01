@@ -84,7 +84,7 @@ void wheel_spacing() {
     require(near((wheels[0].center - wheels[2].center).Dot(car.forward()), 3.1f), "reset lost wheelbase on a rotated chassis");
     require(near(car.tuning().wheelbase, 3.1f) && near(car.tuning().track_width, 1.92f), "reset erased wheel spacing settings");
     car.set_tuning({});
-    require(near((wheels[1].mount - wheels[0].mount).Length(), 1.64f) &&
+    require(near((wheels[1].mount - wheels[0].mount).Length(), 1.480f) &&
             near((wheels[2].mount - wheels[0].mount).Length(), 2.5f), "defaults did not restore original wheel spacing");
     std::cout << "Wheel spacing: live geometry, ground contacts, support, rotated reset and defaults passed\n";
 }
@@ -125,7 +125,7 @@ void panel_input() {
     require(near(car.tuning().wheelbase, 2.51f), "wheelbase control edited the wrong setting");
     input = {}; input.vertical = 1; panel.update(car, width, height, input);
     input = {}; input.horizontal = 1; input.fine = true; panel.update(car, width, height, input);
-    require(near(car.tuning().track_width, 1.641f, .00001f), "track width fine adjustment failed");
+    require(near(car.tuning().track_width, 1.481f, .00001f), "track width fine adjustment failed");
     input = {}; input.mouse = {rect.x + 290, rect.y + 80}; input.pressed = input.down = true;
     panel.update(car, width, height, input);
     input = {}; input.horizontal = 1; panel.update(car, width, height, input);
@@ -135,8 +135,8 @@ void panel_input() {
     require(near(car.tuning().acceleration, 9.025f, .0001f), "acceleration fine adjustment failed");
     input = {}; input.mouse = {rect.x + 50, rect.y + rect.height - 43}; input.pressed = input.down = true;
     panel.update(car, width, height, input);
-    require(near(car.tuning().wheel_radius, .34f) && near(car.tuning().tire_grip, 1.6f), "defaults failed across tabs");
-    require(near(car.tuning().wheelbase, 2.5f) && near(car.tuning().track_width, 1.64f), "panel defaults failed for wheel spacing");
+    require(near(car.tuning().wheel_radius, .3f) && near(car.tuning().tire_grip, 1.6f), "defaults failed across tabs");
+    require(near(car.tuning().wheelbase, 2.5f) && near(car.tuning().track_width, 1.480f), "panel defaults failed for wheel spacing");
     require(near(car.tuning().top_speed * 3.6f, 240, .01f) && near(car.tuning().acceleration, 9), "defaults did not restore performance");
     input.mouse.x = rect.x + 180;
     require(panel.update(car, width, height, input).reset_car, "reset car action did not reach game controls");

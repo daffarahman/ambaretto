@@ -23,6 +23,7 @@ struct Input {
     float steer = 0; // Positive turns left; the car faces local -Z.
     bool handbrake = false;
     bool parking_brake = false;
+    bool player_controlled = false;
 };
 struct Wheel {
     Vec3 mount{0, 0, 0};
@@ -90,6 +91,8 @@ private:
     JPH::BodyID body_;
     std::array<Wheel, 4> wheels_{};
     float steer_ = 0;
+    int drive_direction_ = 0;
+    float direction_change_time_ = 0;
     CarTuning tuning_{};
     bool simulated_ = true;
 };

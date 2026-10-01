@@ -110,6 +110,7 @@ Interaction Player::interact() {
 
 void Player::step(Input driving, FootInput walking, float dt, FlightInput flight) {
     if (!driving_) driving = {0, 0, false, true};
+    driving.player_controlled = driving_;
     starter_car_.step(car_ == &starter_car_ ? driving : Input{0, 0, false, true}, dt);
     if (car_ != &starter_car_ && driving_) car_->step(driving, dt);
     if (plane_) {

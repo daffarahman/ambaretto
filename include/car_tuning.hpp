@@ -3,7 +3,7 @@
 
 namespace forza {
 struct CarTuning {
-    float wheel_radius = 0.34f;
+    float wheel_radius = 0.3f;
     float rest_length = 0.58f;
     float travel = 0.32f;
     float mount_height = 0.31f;
@@ -15,7 +15,7 @@ struct CarTuning {
     float motor_grip = 0.9f;
     float max_steer = 0.52f;
     float wheelbase = 2.5f;
-    float track_width = 1.64f;
+    float track_width = 1.480f;
     float top_speed = 240.0f / 3.6f;
     float acceleration = 9;
 };

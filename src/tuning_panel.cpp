@@ -7,8 +7,9 @@
 
 namespace forza {
 namespace {
-constexpr Color background{18, 27, 35, 248}, muted{154, 172, 183, 255};
-constexpr Color accent{80, 208, 181, 255}, track_color{53, 67, 78, 255};
+constexpr Color background{0, 0, 128, 255}, muted{192, 192, 192, 255};
+constexpr Color selected_color{0, 128, 128, 255}, ink{0, 0, 0, 255};
+constexpr Color accent = YELLOW, track_color = muted;
 constexpr std::array<int, 3> tab_starts{{0, suspension_controls, suspension_controls + handling_controls}};
 constexpr std::array<int, 3> tab_counts{{suspension_controls, handling_controls,
     int(tuning_controls.size()) - suspension_controls - handling_controls}};
@@ -27,11 +28,12 @@ struct Layout {
 };
 void button(Rectangle r, const char* text, bool selected = false) {
     const bool hover = CheckCollisionPointRec(GetMousePosition(), r);
-    DrawRectangleRec(r, selected ? Color{35, 89, 82, 255} : hover ? Color{60, 76, 88, 255} : track_color);
+    DrawRectangleRec(r, selected || hover ? selected_color : track_color);
+    DrawRectangleLinesEx(r, 1, RAYWHITE);
     int size = 16;
     while (size > 10 && forza::ui::measure_text(text, size) > r.width - 12) --size;
     forza::ui::draw_text(text, int(r.x + (r.width - forza::ui::measure_text(text, size)) / 2),
-        int(r.y + (r.height - size) / 2), size, selected ? accent : RAYWHITE);
+        int(r.y + (r.height - size) / 2), size, selected || hover ? RAYWHITE : ink);
 }
 void wrapped(const char* text, int x, int y, int width) {
     std::istringstream words(text);
@@ -111,11 +113,11 @@ TuningPanelAction TuningPanel::update(Car& car, int width, int height, const Tun
 void TuningPanel::draw(const Car& car, int width, int height) const {
     const Layout layout(bounds(width, height));
     const auto r = layout.panel;
-    DrawRectangleRec({r.x + 5, r.y + 5, r.width, r.height}, {0, 0, 0, 80});
+    DrawRectangleRec({r.x + 5, r.y + 5, r.width, r.height}, {0, 0, 0, 160});
     DrawRectangleRec(r, background);
-    DrawRectangle(int(r.x), int(r.y), int(r.width), 3, accent);
-    forza::ui::draw_text("CAR TUNING", int(r.x + 18), int(r.y + 15), 23, RAYWHITE);
-    forza::ui::draw_text("LIVE / parking brake   Esc closes", int(r.x + 18), int(r.y + 44), 13, accent);
+    DrawRectangleLinesEx(r, 2, RAYWHITE);
+    forza::ui::draw_text("CAR TUNING", int(r.x + 18), int(r.y + 15), 23, YELLOW);
+    forza::ui::draw_text("LIVE / parking brake   Esc closes", int(r.x + 18), int(r.y + 44), 13, RAYWHITE);
     button(layout.close(), "X");
     button(layout.tab(0), "Suspension", tab_ == 0);
     button(layout.tab(1), "Handling", tab_ == 1);
@@ -128,12 +130,14 @@ void TuningPanel::draw(const Car& car, int width, int height) const {
         const float value = car.tuning().*(control.value);
         const float upper = control.value == &CarTuning::travel ? std::min(control.max, car.tuning().rest_length - .05f) : control.max;
         const float fraction = std::clamp((value - control.min) / (upper - control.min), 0.0f, 1.0f);
+        if (selected_ == id) DrawRectangleRec({row.x - 6, row.y - 3, row.width + 12, 22}, selected_color);
         forza::ui::draw_text(control.label, int(row.x), int(row.y), 16, selected_ == id ? accent : RAYWHITE);
         const std::string text = TextFormat(control.format, double(value * control.display_scale));
-        forza::ui::draw_text(text.c_str(), int(row.x + row.width - forza::ui::measure_text(text.c_str(), 15)), int(row.y), 15, muted);
+        forza::ui::draw_text(text.c_str(), int(row.x + row.width - forza::ui::measure_text(text.c_str(), 15)), int(row.y), 15, RAYWHITE);
         DrawRectangleRec({slider.x, slider.y + 3, slider.width, 4}, track_color);
         DrawRectangleRec({slider.x, slider.y + 3, slider.width * fraction, 4}, accent);
-        DrawCircle(int(slider.x + slider.width * fraction), int(slider.y + 5), dragging_ == id ? 7 : 5, RAYWHITE);
+        const float thumb_width = dragging_ == id ? 14.0f : 10.0f;
+        DrawRectangleRec({slider.x + slider.width * fraction - thumb_width / 2, slider.y - 2, thumb_width, 14}, RAYWHITE);
     }
     wrapped(tuning_controls[selected_].hint, int(r.x + 18), int(r.y + r.height - 190), 348);
     forza::ui::draw_text("WHEEL CONTACT / compression / load", int(r.x + 18), int(r.y + r.height - 141), 13, muted);
@@ -141,7 +145,7 @@ void TuningPanel::draw(const Car& car, int width, int height) const {
     for (int i = 0; i < 4; ++i) {
         const auto& wheel = car.wheels()[i];
         const int x = int(r.x + 18 + (i % 2) * 178), y = int(r.y + r.height - 119 + (i / 2) * 26);
-        DrawCircle(x + 3, y + 7, 3, wheel.grounded ? accent : ORANGE);
+        DrawRectangle(x, y + 4, 6, 6, wheel.grounded ? accent : ORANGE);
         forza::ui::draw_text(TextFormat("%s %+.2fm %.1fkN", names[i], double(wheel.compression), double(wheel.normal_force / 1000)),
                  x + 13, y, 13, RAYWHITE);
     }

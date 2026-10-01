@@ -453,6 +453,8 @@ void Car::reset(const Vec3& center_of_mass, float yaw) {
         rotation, simulated_ ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
     physics.SetLinearAndAngularVelocity(body_, Vec3::sZero(), Vec3::sZero());
     steer_ = 0;
+    drive_direction_ = 0;
+    direction_change_time_ = 0;
     for (auto& wheel : wheels_) {
         wheel.grounded = wheel.skidding = false;
         wheel.spin = wheel.compression = wheel.normal_force = 0;
@@ -509,6 +511,34 @@ void Car::step(Input input, float dt) {
     input.throttle = clamp(input.throttle, -1, 1);
     input.steer = clamp(input.steer, -1, 1);
     const auto velocity_now = velocity();
+    bool direction_braking = false;
+    if (input.player_controlled) {
+        const float forward_speed = velocity_now.Dot(forward());
+        const int requested = input.throttle > .01f ? 1 : input.throttle < -.01f ? -1 : 0;
+        // Keep the previous direction while braking; suspension rocking near
+        // zero speed must not engage the opposite direction early.
+        if (std::abs(forward_speed) > .1f && (!requested || !drive_direction_ || requested == drive_direction_)) {
+            drive_direction_ = forward_speed > 0 ? 1 : -1;
+            direction_change_time_ = 0;
+        }
+        if (requested && drive_direction_ && requested != drive_direction_) {
+            direction_braking = true;
+            if (std::abs(forward_speed) <= .1f && !input.parking_brake && !input.handbrake) {
+                direction_change_time_ += dt;
+                if (direction_change_time_ >= .25f) {
+                    drive_direction_ = requested;
+                    direction_change_time_ = 0;
+                    direction_braking = false;
+                }
+            } else direction_change_time_ = 0;
+        } else {
+            direction_change_time_ = 0;
+            if (requested) drive_direction_ = requested;
+        }
+    } else {
+        drive_direction_ = 0;
+        direction_change_time_ = 0;
+    }
     const float speed = std::hypot(velocity_now.GetX(), velocity_now.GetZ());
     float steer_limit = std::min(tuning_.max_steer, std::atan(tuning_.wheelbase * 16 / std::max(speed * speed, 1.0f)));
     if (input.handbrake && speed > 4) steer_limit = std::min(tuning_.max_steer, steer_limit * float(1.3));
@@ -551,13 +581,16 @@ void Car::step(Input input, float dt) {
         const float engine_limit = mass * .25f * tuning_.acceleration * dt;
         const float motor_limit = std::min(normal_force * tuning_.motor_grip * dt, engine_limit);
         float long_impulse = clamp((desired - long_speed) * mass * float(0.25 * 0.34), -motor_limit, motor_limit);
-        if (std::abs(input.throttle) < float(0.01)) long_impulse = -long_speed * mass * float(0.25 * 0.012);
+        if (std::abs(input.throttle) < float(0.01))
+            long_impulse = input.player_controlled ? 0 : -long_speed * mass * float(0.25 * 0.012);
         if (input.handbrake && !wheel.front) {
             const float brake_limit = normal_force * float(0.12) * dt;
             long_impulse = clamp(-long_speed * mass * float(0.25 * 0.9), -brake_limit, brake_limit);
         }
-        if (input.parking_brake)
-            long_impulse = clamp(-long_speed * mass * 0.25f, -grip, grip);
+        if (input.parking_brake || direction_braking) {
+            const float brake_limit = grip * (input.parking_brake ? 1 : std::abs(input.throttle));
+            long_impulse = clamp(-long_speed * mass * 0.25f, -brake_limit, brake_limit);
+        }
         long_impulse = clamp(long_impulse, -remaining, remaining);
         physics.AddImpulse(body_, wheel_forward * long_impulse + wheel_right * lateral_impulse, wheel.ground_point);
         wheel.spin += long_speed / tuning_.wheel_radius * dt;

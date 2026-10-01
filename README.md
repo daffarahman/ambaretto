@@ -64,7 +64,7 @@ Gamepad defaults: left stick drives/walks and pitches/banks the plane; right sti
 
 | Key | Action |
 | --- | --- |
-| W / S | Drive forward / reverse |
+| W / S | Drive forward / reverse; opposite direction brakes first |
 | A / D | Steer left / right |
 | Space | Rear handbrake / drift |
 | E | Enter the nearest car or plane / steal a nearby stopped traffic car / exit when stopped on the ground |
@@ -80,6 +80,8 @@ Gamepad defaults: left stick drives/walks and pitches/banks the plane; right sti
 | Escape | Release the mouse and pause |
 | Left click | Capture the mouse and resume |
 | Window close button | Exit |
+
+Player-controlled cars coast when you release W/S or the left stick. Hold the opposite direction to brake to a stop; after a 0.25-second pause, the car drives in that direction. Releasing the input cancels the change. This works in both directions and in stolen cars. NPC braking is unchanged.
 
 Build speed before holding Space and A or D to start a slide. Use W to keep driving through it; release Space and straighten or countersteer to regain grip.
 

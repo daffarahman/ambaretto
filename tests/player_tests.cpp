@@ -84,6 +84,44 @@ void city_collisions_and_interaction() {
     require(player.driving() && player.character().velocity().Length() < 0.001f, "reset retained on-foot state or motion");
 }
 
+void car_coasting_and_direction_changes() {
+    const forza::Environment map;
+    forza::PhysicsWorld world(false);
+    forza::Car car(world);
+    forza::Player player(world, car, map);
+    const auto advance = [&](forza::Input input, int steps) {
+        for (int i = 0; i < steps; ++i) player.step(input, {});
+    };
+    const auto speed = [&] { return car.velocity().Dot(car.forward()); };
+    car.reset(forza::Vec3(0, .56f, 0));
+    advance({}, 240);
+    for (float direction : {1.0f, -1.0f}) {
+        advance({direction}, 240);
+        const float powered_speed = speed() * direction;
+        require(powered_speed > 4, "player car did not accelerate");
+        advance({}, 120);
+        require(speed() * direction > powered_speed * .9f, "releasing player throttle applied automatic brakes");
+        int steps = 0;
+        while (std::abs(speed()) > .1f && steps++ < 1200) advance({-direction}, 1);
+        require(steps < 1200, "opposite direction did not brake to a stop");
+        advance({-direction}, 20);
+        require(std::abs(speed()) < .1f, "opposite direction skipped the stopped pause");
+        advance({}, 60);
+        require(std::abs(speed()) < .1f, "released opposite input kept driving");
+        advance({-direction}, 20);
+        require(std::abs(speed()) < .1f, "released input did not cancel the direction-change timer");
+        advance({-direction}, 240);
+        require(speed() * direction < -4, "held opposite direction did not drive after braking");
+    }
+    advance({0, 0, false, true}, 240);
+    require(std::abs(speed()) < .1f, "player parking brake no longer stops the car");
+    car.reset(forza::Vec3(0, .56f, 0));
+    advance({}, 240);
+    advance({-1}, 12);
+    require(speed() < -.25f, "recovery retained the old drive direction");
+    std::cout << "Player car: coasting, both direction changes, stopped pause, release, parking and recovery passed\n";
+}
+
 void mouse_camera() {
     forza::ThirdPersonCamera camera;
     require(camera.move_direction(1, 1).Length() <= 1.001f, "diagonal movement is faster");
@@ -119,7 +157,7 @@ void model_tree_collisions() {
 }
 int main() {
     try {
-        character_movement(); city_collisions_and_interaction(); mouse_camera(); model_tree_collisions();
+        character_movement(); city_collisions_and_interaction(); car_coasting_and_direction_changes(); mouse_camera(); model_tree_collisions();
         std::cout << "All player checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

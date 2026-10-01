@@ -14,7 +14,12 @@ constexpr Item helps[] = {{"Controls...", MenuCommand::Controls}, {"About...", M
 constexpr const char* titles[] = {"File", "Edit", "Settings", "Help"};
 constexpr const Item* menus[] = {files, edits, settings, helps};
 constexpr int counts[] = {3, 2, 3, 2};
-Rectangle title_rect(int menu) { return {float(8 + menu * 120), 0, 120, menu_height}; }
+Rectangle title_rect(int menu) {
+    constexpr float gap = 48;
+    float x = 8;
+    for (int i = 0; i < menu; ++i) x += ui::measure_text(titles[i], 19) + gap;
+    return {x, 0, float(ui::measure_text(titles[menu], 19) + 24), menu_height};
+}
 Rectangle dropdown_rect(int menu) { return {title_rect(menu).x, menu_height, 302, float(counts[menu] * 32 + 8)}; }
 Rectangle item_rect(int menu, int item) { auto r = dropdown_rect(menu); return {r.x + 4, r.y + 4 + item * 32, r.width - 8, 32}; }
 Rectangle panel_rect() { return {float((GetScreenWidth() - 944) / 2), 64, 944, float(GetScreenHeight() - 96)}; }
@@ -191,8 +196,8 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
     } else if (popup_ == MenuCommand::Controls) {
         text("Keyboard and gamepad defaults. Edit bindings in Settings > Controller mapping.", r.x + 20, r.y + 58, 16, RAYWHITE);
         constexpr const char* lines[] = {
-            "Drive / walk: WASD or left stick. Space / B: brake. Shift / L-stick click: sprint.",
-            "On foot: Space / A: jump. E / Y: enter, steal, or exit a stopped vehicle.",
+            "Car: W/S or left stick. Opposite direction brakes, then reverses. Space / B: handbrake.",
+            "On foot: WASD / left stick. Shift / L-stick: sprint. Space / A: jump. E / Y: enter/exit.",
             "Plane: W/S or left stick Y: pitch. A/D or left stick X: bank.",
             "Plane throttle: Shift/Ctrl or RT/LT. Rudder: arrows or LB/RB. Flaps: F / X.",
             "Camera: mouse / right stick. Zoom: wheel / D-pad down or left.",
