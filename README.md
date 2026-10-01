@@ -83,6 +83,8 @@ Gamepad defaults: left stick drives/walks and pitches/banks the plane; right sti
 
 Player-controlled cars coast when you release W/S or the left stick. Hold the opposite direction to brake to a stop; after a 0.25-second pause, the car drives in that direction. Releasing the input cancels the change. This works in both directions and in stolen cars. NPC braking is unchanged.
 
+The player's car engine loops `assets/sounds/car-engine.wav`. Pitch and volume smoothly follow speed and throttle in forward and reverse; the loop idles when stopped and mutes while paused, on foot, or flying. Raylib handles streaming and looping. Run `powershell -NoProfile -ExecutionPolicy Bypass -File tests/engine_audio_smoke.ps1` to check audio initialization and WAV streaming on a machine with audio output.
+
 Build speed before holding Space and A or D to start a slide. Use W to keep driving through it; release Space and straighten or countersteer to regain grip.
 
 Press E while stopped or moving slowly to leave the car. Walk back within a few meters and press E to enter. The game checks for a free exit beside either door and behind the car, so buildings cannot trap the character inside a wall. The car applies its parking brake while you explore on foot.

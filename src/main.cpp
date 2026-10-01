@@ -325,6 +325,7 @@ int main(int argc, char** argv) {
     SetWindowMinSize(1024, 600);
     SetExitKey(KEY_NULL);
     SetTargetFPS(60);
+    InitAudioDevice();
     bool captured = screenshot.empty() && !aerial && !tuning_open && !start_controllers && !start_menu && !start_help;
     bool resume_capture = screenshot.empty() && !aerial;
     bool resume_aerial = aerial;
@@ -332,6 +333,20 @@ int main(int argc, char** argv) {
     if (captured) DisableCursor();
     {
         const forza::ui::FontResource ui_font;
+        Music engine{};
+        if (IsAudioDeviceReady()) {
+            const std::string bundled = std::string(GetApplicationDirectory()) + "assets/sounds/car-engine.wav";
+            engine = LoadMusicStream(FileExists(bundled.c_str()) ? bundled.c_str() : "assets/sounds/car-engine.wav");
+        }
+        const bool engine_ready = IsMusicValid(engine);
+        float engine_pitch = .7f, engine_volume = 0;
+        if (engine_ready) {
+            engine.looping = true;
+            SetMusicPitch(engine, engine_pitch);
+            SetMusicVolume(engine, 0);
+            PlayMusicStream(engine);
+            TraceLog(LOG_INFO, "AUDIO: Car engine loop ready");
+        } else TraceLog(LOG_WARNING, "AUDIO: Engine sound unavailable; continuing without it");
         const forza::Environment environment;
         forza::EnvironmentRenderer scenery(environment);
         forza::CarRenderer car_renderer;
@@ -554,6 +569,21 @@ int main(int argc, char** argv) {
                 if (!scene->player.flying() && scene->plane.position().GetY() < -.6f) scene->player.recover_plane();
                 accumulator -= double(forza::fixed_step);
             }
+            if (engine_ready) {
+                const auto& car = scene->player.car();
+                const float speed = car.velocity().Dot(car.forward());
+                // ponytail: speed/throttle approximate revs; use drivetrain RPM if gears are simulated.
+                const float revs = std::clamp(std::abs(speed) / (speed < 0 ? 11.0f : car.tuning().top_speed), 0.0f, 1.0f);
+                const float throttle = driving.throttle * speed >= 0 ? std::abs(driving.throttle) : 0;
+                const float target_pitch = .7f + 1.5f * revs + .2f * throttle;
+                const float target_volume = simulate && scene->player.driving() && screenshot.empty()
+                    ? .22f + .18f * revs + .25f * throttle : 0;
+                engine_pitch += (target_pitch - engine_pitch) * (1 - std::exp(-8 * frame));
+                engine_volume += (target_volume - engine_volume) * (1 - std::exp(-10 * frame));
+                SetMusicPitch(engine, engine_pitch);
+                SetMusicVolume(engine, engine_volume);
+                UpdateMusicStream(engine);
+            }
             const auto target = focus();
             const auto desired = orbit.desired_position(target, tuning_open || scene->player.driving(), !tuning_open && scene->player.flying());
             const float follow = 1 - std::exp(-12 * frame);
@@ -612,8 +642,10 @@ int main(int argc, char** argv) {
             }
         }
         if (!menu.save_pending(controls, mapping_path)) TraceLog(LOG_ERROR, "Could not save controller mappings; previous file retained");
+        if (engine_ready) UnloadMusicStream(engine);
     }
     EnableCursor();
+    if (IsAudioDeviceReady()) CloseAudioDevice();
     CloseWindow();
     return 0;
 }
