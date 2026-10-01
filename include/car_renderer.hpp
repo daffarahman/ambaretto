@@ -1,5 +1,6 @@
 #pragma once
 #include "vehicle.hpp"
+#include "day_night.hpp"
 #include <raylib.h>
 
 namespace forza {
@@ -9,6 +10,7 @@ public:
     ~CarRenderer();
     CarRenderer(const CarRenderer&) = delete;
     CarRenderer& operator=(const CarRenderer&) = delete;
+    void set_lighting(const Daylight& light) const { apply_daylight(shader_, light); }
     bool draw_body(const Car& car, const Camera3D& camera, Color paint = {235, 235, 224, 255}) const;
     bool draw_wheel(const Car& car, const Wheel& wheel, const Camera3D& camera) const;
 private:

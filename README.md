@@ -147,13 +147,23 @@ The **Performance** tab controls **Top speed** (80–400 km/h, default 240 km/h)
 
 ## Miami and Florida Keys map
 
+A full day lasts **24 real minutes**: one in-game hour per real minute. The 24-hour **HH:MM** clock starts at 08:00, advances during gameplay and aerial viewing, and pauses with menus or focus loss. Morning skies blend pink and purple, sunsets turn orange, and nights show stars and a moon. Sunlight, fog, the ocean and vehicles follow the cycle. Streetlights, building windows, neon signs, bridge lamps and runway lights fade on at dusk.
+
+Set a starting time with `--time HH:MM`, including for fixed-time screenshot previews:
+
+```bash
+./build/ucrt64-release/forzaambazon.exe --beach --time 06:15
+./build/ucrt64-release/forzaambazon.exe --beach --time 18:00
+./build/ucrt64-release/forzaambazon.exe --overview --time 23:00 --screenshot build/city-night.png
+```
+
 The sea world spans **10.24 by 10.24 kilometers**, with land extending roughly **4 by 5.7 kilometers**. Distances between districts are 40% shorter than the original layout, while cars, people, doors and building floors retain meter-based dimensions. This is compressed, stylized gameplay geography inspired by Miami and the Keys.
 
 Downtown and Brickell mix glass towers up to 96 meters tall, offices, apartments, shops, cafes and two malls. Angled blocks connect to small industrial areas, dense residential neighborhoods and the airport village. Buildings sit close to sidewalks, with extra frontage and back lots filling deep blocks. Local roads are 6.5-8 meters wide; main streets and causeways are 9-12 meters wide. Intersection markings leave junctions open instead of crossing each other. Miami Beach has pastel hotels, apartments, cafes and clubs, plus a sandy Atlantic beach. MacArthur and Venetian causeways connect it to downtown across Biscayne Bay. PortMiami has warehouses, a solid pier and a cruise ship.
 
 Follow **US 1 south** from downtown through Key Largo, Islamorada, Marathon, the Lower Keys and Key West. Each Key has its own street layout: skewed village blocks in Largo, branching marina streets in Islamorada, asymmetric blocks in Marathon, winding streets in the Lower Keys, and small old-town blocks in Key West. Narrow lanes and cul-de-sacs serve dense one- and two-story houses with varied roofs, colors and porches. Each Key has at most one non-house building: a small cafe on the first four Keys and the airport terminal on Key West. There are no hotels, towers, shops or gas stations in the Keys. Marinas have docks and boats. Eight bridge sections connect the region, including a compressed Seven Mile Bridge, with smooth ramps, concrete barriers, support piers and streetlights. Bridge decks share their geometry with suspension and character collision. The road network, including airport and port approaches, forms one connected component.
 
-F2 shows the whole region with district labels. The minimap follows the player and covers 1.4 kilometers. Start directly in another district:
+F2 shows the whole region with district labels. The wide minimap sits at the bottom left, covers 500 meters across, and rotates with the camera. The player marker sits below center to show more streets ahead, while nearby traffic and vehicles use the same rotation. The current location appears separately at the bottom right. Start directly in another district:
 
 ```bash
 ./build/ucrt64/forzaambazon.exe --beach
@@ -178,6 +188,7 @@ The car body uses `assets/models/trueno.glb`. The exported half-body is mirrored
 - `src/vehicle.cpp`: Jolt world, chassis collisions, raycast suspension, tire grip, and handbrake behavior.
 - `include/plane.hpp`, plane implementation in `src/vehicle.cpp`: aircraft rigid body, aerodynamics, flight controls, landing gear, damage, and reset.
 - `include/airport.hpp`: shared runway/apron/access-road layout used by terrain, rendering, and aircraft spawn.
+- `include/day_night.hpp`: 24-minute clock, sky palette, sun direction and shared lighting.
 - `src/main.cpp`: rendering, keyboard input, fixed step loop, chase camera, and a bounded skid mark buffer.
 - `src/car_renderer.cpp`: Trueno body/wheel loading, symmetry, wheel alignment, steering/spin animation, material lighting, and chassis orientation.
 - `include/car_tuning.hpp`, `src/tuning_panel.cpp`: runtime tuning defaults/limits, sliders, precision input, and wheel telemetry.
@@ -212,6 +223,8 @@ Open directly in tuning mode, or capture the panel:
 ```
 
 All source, build configuration, and checks use C++; no Go toolchain is needed.
+
+`day_night_cycle` checks the cycle length, pause, midnight rollover, 24-hour time validation, fractional frame timing and dawn/sunset colors.
 
 `controller_mapping` checks default and additional bindings, generic USB button/axis/D-pad capture, held-button handling, raw versus standardized layouts, analog deadzones/triggers, one-shot actions, disconnected pads, file replacement, round-trip persistence, and invalid-file handling. Preview the new UI with `--controllers`, `--menu`, or `--help-menu`, optionally combined with `--screenshot`.
 

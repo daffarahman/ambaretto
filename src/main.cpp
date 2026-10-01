@@ -297,6 +297,7 @@ void draw_hud(const Scene& scene, bool handbrake, bool captured, bool aerial, bo
 } // namespace
 
 int main(int argc, char** argv) {
+    forza::DayNight day_night;
     std::string screenshot;
     std::string start_district;
     bool performance_tuning = false;
@@ -316,6 +317,12 @@ int main(int argc, char** argv) {
         if (arg == "--airport") start_at_airport = true;
         if (arg == "--plane") { start_at_airport = true; start_in_plane = true; }
         if (arg == "--screenshot" && i + 1 < argc) screenshot = argv[++i];
+        if (arg == "--time") {
+            if (i + 1 >= argc || !day_night.set_time(argv[++i])) {
+                TraceLog(LOG_ERROR, "Time must use HH:MM (00:00 through 23:59)");
+                return 1;
+            }
+        }
     }
     unsigned int window_flags = FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE;
     if (!screenshot.empty()) window_flags |= FLAG_WINDOW_HIDDEN;
@@ -419,7 +426,7 @@ int main(int argc, char** argv) {
         int rendered_frames = 0;
         bool quit_requested = false;
         while (!quit_requested && !WindowShouldClose()) {
-            const float frame = std::min(GetFrameTime(), 0.1f);
+            const float elapsed = GetFrameTime(), frame = std::min(elapsed, 0.1f);
             bool mode_changed = false;
             const auto toggle_tuning = [&]() {
                 mode_changed = true;
@@ -513,6 +520,8 @@ int main(int argc, char** argv) {
             const bool active = !tuning_open && !menu.blocking() && !mode_changed &&
                 (!screenshot.empty() || (captured && IsWindowFocused() && !aerial));
             const bool simulate = !menu.blocking() && (active || (tuning_open && (!screenshot.empty() || IsWindowFocused())));
+            day_night.advance(elapsed, screenshot.empty() && !menu.blocking()
+                && (simulate || (aerial && IsWindowFocused())));
             if (active && screenshot.empty()) {
                 if (controls.pressed(Action::Recover)) {
                     scene->reset(); snap_camera(); accumulator = 0; jump_pending = false; flaps = false;
@@ -605,10 +614,13 @@ int main(int argc, char** argv) {
             rlSetClipPlanes(aerial ? 1.0 : 0.2, 30000);
             notice_time = std::max(0.0f, notice_time - frame);
             BeginDrawing();
-            ClearBackground({153, 203, 233, 255});
-            DrawRectangleGradientV(0, 0, GetScreenWidth(), GetScreenHeight(), {116, 175, 208, 255}, {210, 228, 227, 255});
+            const auto daylight = day_night.lighting();
+            ClearBackground(BLACK);
+            scenery.draw_sky(view, daylight, float(GetTime()));
+            car_renderer.set_lighting(daylight);
             BeginMode3D(view);
-            scenery.draw(view, float(GetTime()));
+            scenery.draw(view, float(GetTime()), daylight);
+            BeginShaderMode(scenery.object_shader());
             draw_skid_marks(scene->marks);
             draw_car(scene->car, car_renderer, view);
             for (std::size_t i = 0; i < scene->traffic.cars().size(); ++i) {
@@ -619,6 +631,7 @@ int main(int argc, char** argv) {
             }
             draw_plane(scene->plane, scene->player.flying());
             if (scene->player.on_foot()) draw_character(scene->player.character(), environment);
+            EndShaderMode();
             EndMode3D();
             if (aerial) for (std::size_t i : {std::size_t(0), std::size_t(1), std::size_t(2), std::size_t(6), std::size_t(7), std::size_t(8), std::size_t(9), std::size_t(10)}) {
                 const auto& island = environment.islands()[i];
@@ -630,11 +643,19 @@ int main(int argc, char** argv) {
                 forza::ui::draw_text(island.name, int(p.x) - width / 2, int(p.y), 16, RAYWHITE);
             }
             draw_hud(*scene, driving.handbrake, captured || tuning_open || !screenshot.empty(), aerial, tuning_open, flaps);
-            if (!tuning_open) scenery.minimap(environment, scene->car, scene->plane, scene->player.position(), scene->player.forward(), GetScreenWidth(), &scene->traffic);
+            if (!tuning_open) scenery.minimap(scene->car, scene->plane, scene->player.position(), scene->player.forward(), view, &scene->traffic);
+            const int clock_x = tuning_open ? 14 : GetScreenWidth() - 194, clock_y = tuning_open ? 198 : 46;
+            DrawRectangle(clock_x, clock_y, 180, 40, {19, 28, 45, 230});
+            const auto clock = day_night.clock();
+            forza::ui::draw_text(clock.data(), clock_x + (180 - forza::ui::measure_text(clock.data(), 24)) / 2,
+                clock_y + 8, 24, {174, 231, 246, 255});
             const auto region = scene->player.position();
-            forza::ui::draw_text(aerial ? "MIAMI & FLORIDA KEYS" : forza::Environment::district(region.GetX(), region.GetZ()), 26, GetScreenHeight() - 58, 24, RAYWHITE);
-            forza::ui::draw_text(tuning_open ? "Settings > Car tuning / Esc to close tuning" :
-                aerial ? "CONNECTED REGION  /  Settings > Aerial map to return" : "Green dots: traffic / Enter vehicle to steal / US 1 south to the Keys", 26, GetScreenHeight() - 30, 16, RAYWHITE);
+            if (!tuning_open) {
+                const char* location = aerial ? "MIAMI & FLORIDA KEYS" : forza::Environment::district(region.GetX(), region.GetZ());
+                const int width = forza::ui::measure_text(location, 20), x = GetScreenWidth() - width - 26;
+                DrawRectangle(x - 12, GetScreenHeight() - 50, width + 24, 36, {19, 28, 45, 230});
+                forza::ui::draw_text(location, x, GetScreenHeight() - 42, 20, RAYWHITE);
+            } else forza::ui::draw_text("Settings > Car tuning / Esc to close tuning", 26, GetScreenHeight() - 30, 16, RAYWHITE);
             if (notice_time > 0) forza::ui::draw_text(notice.c_str(), 26, scene->player.flying() ? 190 : 161, 20, RAYWHITE);
             if (tuning_open) tuning_panel.draw(scene->player.car(), GetScreenWidth(), GetScreenHeight());
             menu.draw(controls, mapping_path, captured);

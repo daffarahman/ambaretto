@@ -96,18 +96,23 @@ uniform sampler2D texture0;
 uniform vec4 colDiffuse;
 uniform vec3 cameraPosition;
 uniform vec3 emissionColor;
+uniform vec3 sunDirection;
+uniform vec3 sunColor;
+uniform vec3 ambientLight;
+uniform vec3 horizonColor;
+uniform float daylight;
 out vec4 finalColor;
 void main() {
     vec3 n = normalize(normal);
     if (!gl_FrontFacing) n = -n;
-    vec3 light = normalize(vec3(-0.45, 0.85, 0.30));
+    vec3 light = sunDirection;
     vec3 view = normalize(cameraPosition - worldPosition);
-    float lighting = 0.58 + 0.42 * max(dot(n, light), 0.0);
-    float highlight = pow(max(dot(n, normalize(light + view)), 0.0), 48.0) * 0.18;
+    vec3 lighting = ambientLight + sunColor * (0.42 * daylight * max(dot(n, light), 0.0));
+    float highlight = pow(max(dot(n, normalize(light + view)), 0.0), 48.0) * 0.18 * daylight;
     vec4 surface = texture(texture0, texCoord) * colDiffuse * color;
     vec3 shaded = surface.rgb * lighting + vec3(highlight) + emissionColor * 0.85;
     float fog = 1.0 - exp(-length(cameraPosition - worldPosition) * 0.00125);
-    finalColor = vec4(mix(shaded, vec3(0.64, 0.80, 0.87), fog * 0.80), surface.a);
+    finalColor = vec4(mix(shaded, horizonColor, fog * 0.80), surface.a);
 })glsl";
 } // namespace
 

@@ -2,7 +2,9 @@
 #include "environment_renderer.hpp"
 #include "traffic.hpp"
 #include "airport.hpp"
+#include "minimap.hpp"
 #include <rlgl.h>
+#include <raymath.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -187,14 +189,19 @@ in vec3 position;
 in vec3 normal;
 in vec4 color;
 uniform vec3 cameraPosition;
+uniform vec3 sunDirection;
+uniform vec3 sunColor;
+uniform vec3 ambientLight;
+uniform vec3 horizonColor;
+uniform float daylight;
 uniform sampler2D texture0;
 out vec4 finalColor;
 void main() {
     // World coordinates keep the four-meter tiles continuous across cells.
     vec4 surface = texture(texture0, position.xz / 4.0) * color;
-    float lighting = 0.58 + 0.42 * max(dot(normalize(normal), normalize(vec3(-0.45, 0.85, 0.30))), 0.0);
+    vec3 lighting = ambientLight + sunColor * (0.42 * daylight * max(dot(normalize(normal), sunDirection), 0.0));
     float fog = smoothstep(2500.0, 18000.0, distance(position.xz, cameraPosition.xz));
-    finalColor = vec4(mix(surface.rgb * lighting, vec3(0.64, 0.80, 0.87), fog * 0.80), surface.a);
+    finalColor = vec4(mix(surface.rgb * lighting, horizonColor, fog * 0.80), surface.a);
 })GLSL";
 const char* tree_vertex = R"GLSL(#version 330
 in vec3 vertexPosition;
@@ -219,8 +226,14 @@ in vec3 normal;
 in vec2 texCoord;
 in vec4 color;
 uniform vec3 cameraPosition;
+uniform vec3 sunDirection;
+uniform vec3 sunColor;
+uniform vec3 ambientLight;
+uniform vec3 horizonColor;
+uniform float daylight;
 uniform sampler2D texture0;
 uniform vec4 colDiffuse;
+uniform float emissiveStrength;
 out vec4 finalColor;
 void main() {
     vec4 surface = texture(texture0, texCoord) * colDiffuse * color;
@@ -228,9 +241,9 @@ void main() {
     if (surface.a < 0.3) discard;
     vec3 n = normalize(normal);
     if (!gl_FrontFacing) n = -n;
-    float lighting = 0.58 + 0.42 * max(dot(n, normalize(vec3(-0.45, 0.85, 0.30))), 0.0);
+    vec3 lighting = ambientLight + sunColor * (0.42 * daylight * max(dot(n, sunDirection), 0.0));
     float fog = smoothstep(2500.0, 18000.0, distance(position.xz, cameraPosition.xz));
-    finalColor = vec4(mix(surface.rgb * lighting, vec3(0.64, 0.80, 0.87), fog * 0.80), 1.0);
+    finalColor = vec4(mix(surface.rgb * (lighting + emissiveStrength), horizonColor, fog * 0.80), 1.0);
 })GLSL";
 const char* water_vertex = R"GLSL(#version 330
 in vec3 vertexPosition;
@@ -246,20 +259,85 @@ const char* water_fragment = R"GLSL(#version 330
 in vec3 position;
 uniform vec3 cameraPosition;
 uniform float time;
+uniform vec3 horizonColor;
+uniform vec3 sunDirection;
+uniform vec3 sunColor;
+uniform vec3 ambientLight;
+uniform float daylight;
 out vec4 finalColor;
 void main() {
     vec3 color = mix(vec3(0.10, 0.60, 0.67), vec3(0.06, 0.34, 0.52),
         0.5 + 0.5 * sin(position.x * 0.0007 + position.z * 0.0005));
-    float ripples = sin(position.x * 0.5 + position.z * 0.36 + time * 1.5) * sin(position.z * 0.21 - time);
     vec2 footprint = fwidth(position.xz * 0.5);
-    color += 0.028 * ripples * exp(-dot(footprint, footprint));
+    float ripples = sin(position.x * 0.5 + position.z * 0.36 + time * 1.5) * sin(position.z * 0.21 - time) * exp(-dot(footprint, footprint));
+    color += 0.028 * ripples;
+    color = color * (ambientLight * 0.8 + 0.6 * daylight) + horizonColor * (0.10 + 0.16 * (1.0 - daylight));
+    vec3 view = normalize(cameraPosition - position);
+    float reflection = pow(max(dot(reflect(-view, vec3(0, 1, 0)), sunDirection), 0.0), 90.0);
+    color += reflection * sunColor * daylight * (0.5 + 0.5 * ripples);
     float fog = smoothstep(5000.0, 21000.0, distance(position.xz, cameraPosition.xz));
-    finalColor = vec4(mix(color, vec3(0.64, 0.80, 0.87), fog), 1.0);
+    finalColor = vec4(mix(color, horizonColor, fog), 1.0);
+})GLSL";
+const char* light_fragment = R"GLSL(#version 330
+in vec3 position;
+in vec4 color;
+uniform vec3 cameraPosition;
+uniform float night;
+out vec4 finalColor;
+void main() {
+    float visibility = 1.0 - smoothstep(11000.0, 21000.0, distance(position.xz, cameraPosition.xz));
+    finalColor = vec4(color.rgb, color.a * night * visibility);
+})GLSL";
+const char* sky_fragment = R"GLSL(#version 330
+uniform vec2 screenSize;
+uniform vec3 cameraForward;
+uniform vec3 cameraRight;
+uniform vec3 cameraUp;
+uniform float tanFov;
+uniform vec3 horizonColor;
+uniform vec3 zenithColor;
+uniform vec3 sunDirection;
+uniform float night;
+uniform float time;
+out vec4 finalColor;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+void main() {
+    vec2 uv = gl_FragCoord.xy / screenSize * 2.0 - 1.0;
+    vec3 ray = normalize(cameraForward + cameraRight * uv.x * tanFov * screenSize.x / screenSize.y + cameraUp * uv.y * tanFov);
+    float height = max(ray.y, 0.0);
+    vec3 sky = mix(horizonColor, zenithColor, pow(clamp(height / 0.65, 0.0, 1.0), 0.55));
+    float sun = max(dot(ray, sunDirection), 0.0);
+    float above = smoothstep(-0.035, 0.035, sunDirection.y);
+    sky += vec3(1.0, 0.51, 0.25) * pow(sun, 20.0) * 0.30 * above;
+    sky = mix(sky, vec3(1.0, 0.89, 0.64), smoothstep(cos(0.020), cos(0.016), sun) * above);
+    float moon = smoothstep(cos(0.013), cos(0.009), dot(ray, -sunDirection));
+    sky = mix(sky, vec3(0.79, 0.86, 1.0), moon * night);
+    vec2 stars = vec2(atan(ray.z, ray.x) / 6.2831853 + 0.5, asin(clamp(ray.y, -1.0, 1.0)) / 3.1415927 + 0.5) * vec2(600, 300);
+    float seed = hash(floor(stars));
+    float star = (1.0 - smoothstep(0.03, 0.14, length(fract(stars) - 0.5))) * step(0.994, seed);
+    sky += vec3(0.74, 0.82, 1.0) * star * night * smoothstep(0.03, 0.18, ray.y) * (0.70 + 0.30 * sin(time * 1.2 + seed * 31));
+    // Long, soft cloud wisps pick up the pink/orange horizon at twilight.
+    float cloud = sin(ray.x * 19 + ray.z * 12 + time * 0.002) + sin(ray.x * 41 - ray.z * 27);
+    cloud = smoothstep(1.20, 1.90, cloud) * exp(-pow((ray.y - 0.23) * 5.0, 2.0));
+    sky = mix(sky, mix(horizonColor, vec3(1.0), 0.28), cloud * (1.0 - night) * 0.18);
+    finalColor = vec4(sky, 1.0);
 })GLSL";
 }
 
 EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
-    MeshBuilder ground, grass, sand, roads, city, water, signs;
+    MeshBuilder ground, grass, sand, roads, city, water, signs, lights, glows;
+    // ponytail: baked light pools batch thousands of lamps; use local point lights for moving illumination.
+    const auto light_pool = [&](Vec3 center, float radius, Color tint) {
+        for (int i = 0; i < 16; ++i) {
+            Vec3 a = center + Vec3(std::cos(i * pi / 8), 0, std::sin(i * pi / 8)) * radius;
+            Vec3 b = center + Vec3(std::cos((i + 1) * pi / 8), 0, std::sin((i + 1) * pi / 8)) * radius;
+            a.SetY(env.height(a.GetX(), a.GetZ()) + .13f); b.SetY(env.height(b.GetX(), b.GetZ()) + .13f);
+            Vec3 c = center; c.SetY(env.height(c.GetX(), c.GetZ()) + .13f);
+            const auto first = glows.colors.size();
+            glows.triangle(c, b, a, tint);
+            if (glows.colors.size() > first) { glows.colors[first + 7] = 0; glows.colors[first + 11] = 0; }
+        }
+    };
     grass_texture_ = load_terrain_texture("grass.png");
     sand_texture_ = load_terrain_texture("beach-sand.png");
     asphalt_texture_ = load_terrain_texture("asphalt.png");
@@ -318,6 +396,26 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             const Vec3 offset = side * (sign * (road.width / 2 - 1));
             marking(road.a + offset, road.b + offset, .18f, RAYWHITE);
         }
+        if (road.bridge < 0) for (float along = 18; along < length - 12; along += 40) {
+            const float sign = int(along / 40) % 2 ? -1.0f : 1.0f;
+            Vec3 p = road.a + direction * along + side * (sign * (road.width / 2 + .65f));
+            bool junction = false;
+            for (const auto& other : env.roads()) {
+                if (&other == &road) continue;
+                const Vec3 d = other.b - other.a;
+                const float t = std::clamp((p - other.a).Dot(d) / d.LengthSq(), 0.0f, 1.0f);
+                if ((p - other.a - d * t).Length() >= other.width / 2 + 1) continue;
+                if (std::abs(direction.Dot(d.Normalized())) < .98f || other.width > road.width
+                    || (other.width == road.width && &other < &road)) { junction = true; break; }
+            }
+            if (junction) continue;
+            p.SetY(env.height(p.GetX(), p.GetZ()));
+            const Vec3 lamp = p - side * sign + Vec3(0, 5.2f, 0);
+            city.box(p + Vec3(0, 2.6f, 0), Vec3(.12f, 5.2f, .12f), {69, 83, 94, 255});
+            city.box(lamp, Vec3(.65f, .16f, .65f), {219, 225, 216, 255});
+            lights.box(lamp - Vec3(0, .10f, 0), Vec3(.52f, .07f, .52f), {255, 211, 142, 255});
+            light_pool(road.a + direction * along, 8, {255, 195, 116, 85});
+        }
     }
 
     Image atlas = GenImageColor(256, 64 * sign_rows, BLANK);
@@ -348,6 +446,9 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
                 std::min(width, (b.face_east ? sz : sx) * .8f), 1.2f, row);
         };
         Color body = palette[b.style % 5];
+        constexpr Color window_tints[] = {{255, 205, 133, 255}, {150, 221, 255, 255},
+            {255, 159, 214, 255}, {255, 230, 178, 255}, {142, 231, 216, 255}};
+        const Color window_light = window_tints[b.style % 5];
         if (b.kind == BuildingKind::Tower) body = Color{89, static_cast<unsigned char>(140 + b.style * 9), 166, 255};
         if (b.kind == BuildingKind::Warehouse || b.kind == BuildingKind::Hangar) body = Color{149, 169, 174, 255};
         city.box(b.solid_center(), b.solid_size(), body);
@@ -362,12 +463,20 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
                 for (float side : {-1.0f, 1.0f}) {
                     city.box(Vec3(x, y, z + side * (sz / 2 + .04f)), Vec3(sx - 5, floor * .55f, .08f), glass);
                     city.box(Vec3(x + side * (sx / 2 + .04f), y, z), Vec3(.08f, floor * .55f, sz - 5), glass);
+                    int pane = 0;
+                    for (float dx = -sx / 2 + 3; dx < sx / 2 - 2; dx += 3.5f, ++pane)
+                        if ((pane + int(y * 10) + b.style) % 5 != 0)
+                            lights.box(Vec3(x + dx, y, z + side * (sz / 2 + .105f)), Vec3(1.8f, 1.4f, .03f), window_light);
+                    for (float dz = -sz / 2 + 3; dz < sz / 2 - 2; dz += 3.5f, ++pane)
+                        if ((pane + int(y * 10) + b.style) % 5 != 0)
+                            lights.box(Vec3(x + side * (sx / 2 + .105f), y, z + dz), Vec3(.03f, 1.4f, 1.8f), window_light);
                 }
                 if (b.kind == BuildingKind::Hotel || b.kind == BuildingKind::Apartment)
                     city.box(Vec3(x, y - 1.3f, z), Vec3(sx + .8f, .2f, sz + .8f), RAYWHITE);
             }
             const float cap = b.kind == BuildingKind::Tower ? 3.0f + b.style : 1.2f;
             city.box(Vec3(x, roof + cap / 2, z), Vec3(sx * (b.style % 2 ? .5f : .75f), cap, sz * .55f), body);
+            if (b.kind == BuildingKind::Tower) lights.box(Vec3(x, roof + cap + .2f, z), Vec3(.35f, .35f, .35f), {255, 63, 104, 255});
             if (b.kind == BuildingKind::Office || b.style == 3)
                 for (float dx : {-sx * .3f, sx * .3f})
                     city.box(Vec3(x + dx, roof + .65f, z), Vec3(2, 1.3f, 2), concrete);
@@ -389,9 +498,13 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
                 city.triangle(a, r1, c, body); city.triangle(d, e, r2, body);
             }
             city.box(face + Vec3(0, 1.05f, 0), b.face_east ? Vec3(.12f, 2.1f, 1) : Vec3(1, 2.1f, .12f), {91, 72, 55, 255});
-            for (float floor = 1.6f; floor < b.size.GetY(); floor += 3.1f) for (float side : {-1.0f, 1.0f})
+            for (float floor = 1.6f; floor < b.size.GetY(); floor += 3.1f) for (float side : {-1.0f, 1.0f}) {
                 city.box(face + sign_right * (side * (b.face_east ? sz : sx) * .28f) + Vec3(0, floor, 0),
                     b.face_east ? Vec3(.12f, 1.1f, 1.5f) : Vec3(1.5f, 1.1f, .12f), glass);
+                if (b.style != 3 || side > 0)
+                    lights.box(face + front * .08f + sign_right * (side * (b.face_east ? sz : sx) * .28f) + Vec3(0, floor, 0),
+                        b.face_east ? Vec3(.03f, 1.0f, 1.4f) : Vec3(1.4f, 1.0f, .03f), window_light);
+            }
             city.box(face + front + Vec3(0, 2.5f, 0), b.face_east ? Vec3(2, .2f, std::min(sz, 6.0f)) : Vec3(std::min(sx, 6.0f), .2f, 2), RAYWHITE);
         } else if (b.kind == BuildingKind::GasStation) {
             city.ribbon(env, Vec3(x, 0, z - sz / 2), Vec3(x, 0, z + sz / 2), sx, {173, 179, 175, 255}, .035f);
@@ -410,6 +523,11 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             city.box(face + front * .8f + Vec3(0, 2.6f, 0), awning_size, accent);
             const Vec3 window_size = b.face_east ? Vec3(.1f, 1.8f, sz - 3) : Vec3(sx - 3, 1.8f, .1f);
             city.box(face + Vec3(0, 1.3f, 0), window_size, glass);
+            lights.box(face + front * .09f + Vec3(0, 1.3f, 0), window_size,
+                club ? Color{235, 79, 213, 180} : Color{255, 203, 146, 130});
+            lights.box(face + front * 1.72f + Vec3(0, 2.6f, 0),
+                b.face_east ? Vec3(.05f, .12f, sz - 2) : Vec3(sx - 2, .12f, .05f),
+                club ? Color{255, 99, 222, 255} : Color{102, 224, 230, 255});
             shop_sign(club ? 2 : b.kind == BuildingKind::Shop ? 8 : 1, club ? 7 : 5, 14);
             if (b.kind == BuildingKind::Cafe) for (float side : {-2.8f, 2.8f}) {
                 const Vec3 table = face + front * 1.7f + sign_right * side;
@@ -456,6 +574,8 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             const Vec3 p = bridge.point(d / length) + side * (sign * (bridge.width / 2 - .8f));
             city.box(p + Vec3(0, 4, 0), Vec3(.18f, 8, .18f), {86, 111, 121, 255});
             city.box(p + Vec3(0, 8, 0) - side * sign, Vec3(2.5f, .2f, .6f), {252, 236, 170, 255}, heading);
+            lights.box(p + Vec3(0, 7.86f, 0) - side * sign, Vec3(2.1f, .07f, .45f), {255, 215, 148, 255}, heading);
+            if (sign > 0) light_pool(bridge.point(d / length), bridge.width / 2 - .7f, {255, 195, 116, 100});
         }
     }
     for (const auto& port : env.ports()) {
@@ -467,6 +587,8 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         for (float d = 10; d < 220; d += 25) {
             const Vec3 p = port.center + direction * d;
             city.box(p - Vec3(0, 3, 0), Vec3(.7f, 6, .7f), {91, 84, 64, 255});
+            city.box(p + side * 3 + Vec3(0, 1.5f, 0), Vec3(.12f, 3, .12f), concrete);
+            lights.box(p + side * 3 + Vec3(0, 3.1f, 0), Vec3(.3f, .2f, .3f), {131, 223, 255, 255});
             if (d < 30) continue;
             const Vec3 boat = p + side * 14;
             city.box(Vec3(boat.GetX(), .65f, boat.GetZ()), Vec3(5, 1.3f, 13), RAYWHITE);
@@ -507,8 +629,14 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             city.ribbon(env, Vec3(ax + stripe, 0, rz + end * 164), Vec3(ax + stripe, 0, rz + end * 154), 1.4f, RAYWHITE, .09f);
         city.ribbon(env, Vec3(airport.apron_x(), 0, airport.apron_z()), Vec3(airport.apron_x(), 0, airport.plane_z()), .25f, YELLOW, .09f);
         city.ribbon(env, Vec3(airport.apron_x(), 0, airport.plane_z()), Vec3(ax, 0, airport.plane_z()), .25f, YELLOW, .09f);
-        for (int x = -160; x <= 160; x += 20) for (float side : {-11.8f, 11.8f})
+        for (int x = -160; x <= 160; x += 20) for (float side : {-11.8f, 11.8f}) {
             city.box(Vec3(ax + side, Airport::elevation + .17f, rz + x), Vec3(.3f, .25f, .3f), {245, 233, 166, 255});
+            lights.box(Vec3(ax + side, Airport::elevation + .31f, rz + x), Vec3(.35f, .10f, .35f), {255, 236, 177, 255});
+            light_pool(Vec3(ax + side, Airport::elevation, rz + x), 1.8f, {255, 218, 144, 90});
+        }
+        for (float side : {-8.0f, -4.0f, 0.0f, 4.0f, 8.0f}) for (float end : {-1.0f, 1.0f})
+            lights.box(Vec3(ax + side, Airport::elevation + .18f, rz + end * 165), Vec3(.45f, .16f, .45f),
+                end == airport.departure ? Color{255, 63, 69, 255} : Color{100, 255, 166, 255});
         const Vec3 sock(airport.apron_x() + 20, Airport::elevation, rz + airport.departure * 132);
         city.box(sock + Vec3(0, 3, 0), Vec3(.18f, 6, .18f), concrete);
         for (int i = 0; i < 5; ++i)
@@ -528,8 +656,13 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     }
     terrain_ = ground.upload(); grass_ = grass.upload(); sand_ = sand.upload(); roads_ = roads.upload();
     city_ = city.upload(); ocean_ = water.upload(); signs_ = signs.upload();
+    lights_ = lights.upload(); glows_ = glows.upload();
     land_shader_ = LoadShaderFromMemory(land_vertex, land_fragment);
     water_shader_ = LoadShaderFromMemory(water_vertex, water_fragment);
+    sky_shader_ = LoadShaderFromMemory(nullptr, sky_fragment);
+    light_shader_ = LoadShaderFromMemory(land_vertex, light_fragment);
+    if (lights_.materials) lights_.materials[0].shader = light_shader_;
+    if (glows_.materials) glows_.materials[0].shader = light_shader_;
     for (Model* model : {&terrain_, &grass_, &sand_, &roads_, &city_})
         if (model->materials) model->materials[0].shader = land_shader_;
     if (grass_.materials && grass_texture_.id) SetMaterialTexture(&grass_.materials[0], MATERIAL_MAP_DIFFUSE, grass_texture_);
@@ -548,11 +681,12 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         signs_.materials[0].shader = tree_shader_;
         SetMaterialTexture(&signs_.materials[0], MATERIAL_MAP_DIFFUSE, sign_texture_);
     }
+    sign_emission_ = GetShaderLocation(tree_shader_, "emissiveStrength");
     load_minimap(env);
 }
 
 void EnvironmentRenderer::load_minimap(const Environment& env) {
-    constexpr int size = 1024;
+    constexpr int size = 2048;
     Image map = GenImageColor(size, size, {43, 116, 148, 255});
     for (int z = 0; z < size; ++z) for (int x = 0; x < size; ++x) {
         const float y = env.terrain_height((x + .5f) * (2 * Environment::extent / size) - Environment::extent,
@@ -578,7 +712,8 @@ void EnvironmentRenderer::load_minimap(const Environment& env) {
     }
     for (const auto& b : env.buildings())
         ImageDrawRectangle(&map, pixel(b.center.GetX() - b.size.GetX() / 2), pixel(b.center.GetZ() - b.size.GetZ() / 2),
-            std::max(1, int(b.size.GetX() / 16)), std::max(1, int(b.size.GetZ() / 16)), {157, 164, 162, 255});
+            std::max(1, int(b.size.GetX() * size / (2 * Environment::extent))),
+            std::max(1, int(b.size.GetZ() * size / (2 * Environment::extent))), {157, 164, 162, 255});
     minimap_texture_ = LoadTextureFromImage(map); UnloadImage(map);
     SetTextureFilter(minimap_texture_, TEXTURE_FILTER_BILINEAR);
 }
@@ -629,6 +764,7 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     UnloadModel(terrain_); UnloadModel(city_); UnloadModel(ocean_);
     UnloadModel(grass_); UnloadModel(sand_);
     UnloadModel(roads_); UnloadModel(signs_);
+    UnloadModel(lights_); UnloadModel(glows_);
     if (trees_.meshes || trees_.materials) UnloadModel(trees_);
     if (tree_texture_.id != 0 && tree_texture_.id != rlGetTextureIdDefault()) UnloadTexture(tree_texture_);
     if (grass_texture_.id != 0) UnloadTexture(grass_texture_);
@@ -637,9 +773,30 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     if (sign_texture_.id) UnloadTexture(sign_texture_);
     if (minimap_texture_.id) UnloadTexture(minimap_texture_);
     UnloadShader(land_shader_); UnloadShader(water_shader_);
+    UnloadShader(sky_shader_); UnloadShader(light_shader_);
     if (tree_shader_.id != 0) UnloadShader(tree_shader_);
 }
-void EnvironmentRenderer::draw(const Camera3D& camera, float time) {
+void EnvironmentRenderer::draw_sky(const Camera3D& camera, const Daylight& light, float time) {
+    const Vector2 screen{float(GetScreenWidth()), float(GetScreenHeight())};
+    const Vector3 forward = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
+    const Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
+    const Vector3 up = Vector3CrossProduct(right, forward);
+    const float tan_fov = std::tan(camera.fovy * pi / 360);
+    const auto vec3 = [&](const char* name, const Vector3& value) {
+        SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, name), &value, SHADER_UNIFORM_VEC3);
+    };
+    SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "screenSize"), &screen, SHADER_UNIFORM_VEC2);
+    SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "tanFov"), &tan_fov, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "night"), &light.night, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "time"), &time, SHADER_UNIFORM_FLOAT);
+    vec3("cameraForward", forward); vec3("cameraRight", right); vec3("cameraUp", up);
+    vec3("horizonColor", light.horizon); vec3("zenithColor", light.zenith); vec3("sunDirection", light.sun_direction);
+    BeginShaderMode(sky_shader_);
+    DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
+    EndShaderMode();
+}
+void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Daylight& light) {
+    for (Shader shader : {land_shader_, water_shader_, tree_shader_}) apply_daylight(shader, light);
     SetShaderValue(land_shader_, land_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(water_shader_, water_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(water_shader_, water_time_, &time, SHADER_UNIFORM_FLOAT);
@@ -650,7 +807,11 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time) {
     DrawModel(roads_, {0, 0, 0}, 1, WHITE);
     DrawModel(city_, {0, 0, 0}, 1, WHITE);
     SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
+    const float sign_emission = light.night * .8f;
+    SetShaderValue(tree_shader_, sign_emission_, &sign_emission, SHADER_UNIFORM_FLOAT);
     rlDisableBackfaceCulling(); DrawModel(signs_, {0, 0, 0}, 1, WHITE); rlDrawRenderBatchActive(); rlEnableBackfaceCulling();
+    const float no_emission = 0;
+    SetShaderValue(tree_shader_, sign_emission_, &no_emission, SHADER_UNIFORM_FLOAT);
     if (trees_ready_) {
         SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
         rlDrawRenderBatchActive();
@@ -659,34 +820,47 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time) {
         rlDrawRenderBatchActive();
         rlEnableBackfaceCulling();
     }
-}
-void EnvironmentRenderer::minimap(const Environment&, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, int screen_width, const Traffic* traffic) const {
-    const float left = float(screen_width - 220), top = 52, range = 700, scale = 100 / range;
-    DrawRectangle(int(left - 8), int(top - 8), 216, 248, {22, 39, 48, 230});
-    const float pixels = minimap_texture_.width / (2 * Environment::extent);
-    const Rectangle source{(player_position.GetX() - range + Environment::extent) * pixels,
-        (player_position.GetZ() - range + Environment::extent) * pixels, range * 2 * pixels, range * 2 * pixels};
-    DrawTexturePro(minimap_texture_, source, {left, top, 200, 200}, {0, 0}, 0, WHITE);
-    const auto dot = [&](Vec3 p) {
-        return Vector2{left + 100 + (p.GetX() - player_position.GetX()) * scale,
-            top + 100 + (p.GetZ() - player_position.GetZ()) * scale};
-    };
-    const auto inside = [&](Vector2 p) { return p.x > left + 3 && p.x < left + 197 && p.y > top + 3 && p.y < top + 197; };
-    if (traffic) for (const auto& vehicle : traffic->cars()) {
-        const auto p = dot(vehicle.car->position());
-        if (inside(p)) DrawCircleV(p, 2.3f, vehicle.npc ? GREEN : SKYBLUE);
+    if (light.night > .001f) {
+        SetShaderValue(light_shader_, GetShaderLocation(light_shader_, "cameraPosition"), &camera.position, SHADER_UNIFORM_VEC3);
+        SetShaderValue(light_shader_, GetShaderLocation(light_shader_, "night"), &light.night, SHADER_UNIFORM_FLOAT);
+        BeginBlendMode(BLEND_ADDITIVE);
+        DrawModel(lights_, {0, 0, 0}, 1, WHITE);
+        rlDisableDepthMask(); DrawModel(glows_, {0, 0, 0}, 1, WHITE); rlDrawRenderBatchActive(); rlEnableDepthMask();
+        EndBlendMode();
     }
-    const auto car_dot = dot(car.position());
-    if (inside(car_dot)) DrawRectangle(int(car_dot.x - 3), int(car_dot.y - 3), 6, 6, SKYBLUE);
-    const auto plane_dot = dot(plane.position());
-    if (inside(plane_dot)) DrawPoly(plane_dot, 3, 5, -90, YELLOW);
-    const Vector2 center{left + 100, top + 100};
-    DrawCircleV(center, 4, ORANGE);
-    DrawLineEx(center, {center.x + player_forward.GetX() * 12, center.y + player_forward.GetZ() * 12}, 2, RAYWHITE);
-    std::string title = Environment::district(player_position.GetX(), player_position.GetZ());
-    const auto slash = title.find(" /");
-    if (slash != std::string::npos) title.resize(slash);
-    forza::ui::draw_text(title.c_str(), int(left + 5), int(top + 203), 11, RAYWHITE);
-    forza::ui::draw_text("N UP  /  1.4 KM", int(left + 5), int(top + 217), 10, {157, 190, 200, 255});
+}
+void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Traffic* traffic) const {
+    const MinimapView map(GetScreenHeight(), player_position, player_forward, camera);
+    const auto bounds = map.bounds;
+    DrawRectangle(int(bounds.x - 4), int(bounds.y - 4), int(bounds.width + 8), int(bounds.height + 8), {19, 28, 45, 235});
+    BeginScissorMode(int(bounds.x), int(bounds.y), int(bounds.width), int(bounds.height));
+    DrawRectangleRec(bounds, {43, 116, 148, 255});
+    const float size = 2 * Environment::extent * map.scale;
+    // Draw only the finite world texture; the ocean backdrop fills views beyond its edge.
+    DrawTexturePro(minimap_texture_, {0, 0, float(minimap_texture_.width), float(minimap_texture_.height)},
+        {map.anchor.x, map.anchor.y, size, size},
+        {(player_position.GetX() + Environment::extent) * map.scale,
+            (player_position.GetZ() + Environment::extent) * map.scale}, map.rotation(), WHITE);
+    if (traffic) for (const auto& vehicle : traffic->cars()) {
+        const auto p = map.project(vehicle.car->position());
+        if (map.contains(p)) DrawCircleV(p, 2.3f, vehicle.npc ? GREEN : SKYBLUE);
+    }
+    const auto car_dot = map.project(car.position());
+    if (map.contains(car_dot)) DrawRectangle(int(car_dot.x - 3), int(car_dot.y - 3), 6, 6, SKYBLUE);
+    const auto plane_dot = map.project(plane.position());
+    if (map.contains(plane_dot)) {
+        const auto heading = map.project(plane.position() + plane.forward());
+        DrawPoly(plane_dot, 3, 5, std::atan2(heading.y - plane_dot.y, heading.x - plane_dot.x) * RAD2DEG, YELLOW);
+    }
+    Vec3 heading(player_forward.GetX(), 0, player_forward.GetZ());
+    heading = heading.LengthSq() > 1e-8f ? heading.Normalized() : map.forward;
+    const auto tip = map.project(player_position + heading * 15);
+    const Vector2 delta{tip.x - map.anchor.x, tip.y - map.anchor.y};
+    const Vector2 a{map.anchor.x - delta.x * .5f - delta.y * .55f, map.anchor.y - delta.y * .5f + delta.x * .55f};
+    const Vector2 b{map.anchor.x - delta.x * .5f + delta.y * .55f, map.anchor.y - delta.y * .5f - delta.x * .55f};
+    DrawCircleV(map.anchor, 8, {19, 28, 45, 230});
+    DrawTriangle(tip, b, a, RAYWHITE);
+    EndScissorMode();
+    DrawRectangleLinesEx(bounds, 2, {115, 157, 174, 255});
 }
 } // namespace forza
