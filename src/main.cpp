@@ -136,15 +136,16 @@ void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const C
     }
     for (const auto& wheel : car.wheels()) {
         const auto mount = car.position() + car.rotate(wheel.mount);
-        DrawLine3D(render_vector(mount), render_vector(wheel.center), LIGHTGRAY);
+        const auto center = car.wheel_center(wheel);
+        DrawLine3D(render_vector(mount), render_vector(center), LIGHTGRAY);
         if (renderer.draw_wheel(car, wheel, camera)) continue;
         auto axis = car.rotate(forza::Vec3(1, 0, 0));
         if (wheel.front) axis = forza::Quat::sRotation(car.rotate(forza::Vec3(0, 1, 0)), car.steering()) * axis;
         const float radius = car.tuning().wheel_radius, size = radius / forza::wheel_radius;
-        DrawCylinderEx(render_vector(wheel.center - axis * (0.13f * size)),
-                       render_vector(wheel.center + axis * (0.13f * size)), radius, radius, 16, BLACK);
-        DrawCylinderEx(render_vector(wheel.center - axis * (0.14f * size)),
-                       render_vector(wheel.center + axis * (0.14f * size)), radius * .5f, radius * .5f, 16, DARKGRAY);
+        DrawCylinderEx(render_vector(center - axis * (0.13f * size)),
+                       render_vector(center + axis * (0.13f * size)), radius, radius, 16, BLACK);
+        DrawCylinderEx(render_vector(center - axis * (0.14f * size)),
+                       render_vector(center + axis * (0.14f * size)), radius * .5f, radius * .5f, 16, DARKGRAY);
     }
 }
 

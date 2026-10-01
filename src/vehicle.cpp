@@ -523,7 +523,10 @@ void Car::step(Input input, float dt) {
             continue;
         }
         const Vec3 point_velocity = physics.GetPointVelocity(body_, wheel.ground_point);
-        const float normal_force = clamp(tuning_.spring_rate * wheel.compression - tuning_.damper_rate * point_velocity.Dot(up),
+        // Ray length changes with motion into/out of the road, not travel along it.
+        // Ground contact already requires normal.Dot(up) > .35, so division is safe.
+        const float suspension_speed = point_velocity.Dot(wheel.ground_normal) / wheel.ground_normal.Dot(up);
+        const float normal_force = clamp(tuning_.spring_rate * wheel.compression - tuning_.damper_rate * suspension_speed,
             0, tuning_.max_spring_force);
         wheel.normal_force = normal_force;
         physics.AddImpulse(body_, up * (normal_force * dt), wheel.ground_point);

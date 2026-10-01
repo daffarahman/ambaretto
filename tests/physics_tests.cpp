@@ -52,6 +52,33 @@ void test_no_wheelie() {
     require(peak_pitch < 12.6 && front_air < 60, "acceleration lifted the front wheels");
 }
 
+void test_speed_independent_suspension() {
+    forza::PhysicsWorld world(false);
+    forza::Car car(world);
+    tick(world, car, {0, 0, false, true}, 480);
+    const float rest_height = car.position().GetY();
+    for (float target : {80.0f, 240.0f, 400.0f}) {
+        auto tuning = car.tuning(); tuning.top_speed = target / 3.6f; car.set_tuning(tuning);
+        float peak_height_error = 0, peak_wheel_error = 0;
+        for (int i = 0; i < 120 * 25; ++i) {
+            tick(world, car, {1, 0, false}, 1);
+            for (const auto& wheel : car.wheels()) {
+                const auto local = car.rotation().Conjugated() * (car.wheel_center(wheel) - car.position());
+                peak_wheel_error = std::max(peak_wheel_error, std::hypot(local.GetX() - wheel.mount.GetX(), local.GetZ() - wheel.mount.GetZ()));
+                require(std::abs(local.GetY() - wheel.mount.GetY() + tuning.rest_length) <= tuning.travel + .001f,
+                    "wheel exceeded suspension travel after physics integration");
+                if (i > 120 * 23) require(wheel.grounded, "steady high-speed driving lost tire contact");
+            }
+            if (i > 120 * 23) peak_height_error = std::max(peak_height_error, std::abs(car.position().GetY() - rest_height));
+        }
+        std::cout << "Suspension at " << car.velocity().Length() * 3.6f << " km/h: ride-height error "
+            << peak_height_error << " m, axle alignment error " << peak_wheel_error << " m\n";
+        require(car.velocity().Length() * 3.6f > target - 2, "suspension speed check did not reach target speed");
+        require(peak_height_error < .015f, "forward speed changed the car's steady ride height");
+        require(peak_wheel_error < .001f, "rendered wheels lagged behind the chassis after physics integration");
+    }
+}
+
 void test_grip_steering() {
     forza::PhysicsWorld world(false);
     forza::Car car(world);
@@ -196,6 +223,7 @@ int main() {
     try {
         test_settle_drive_reverse();
         test_no_wheelie();
+        test_speed_independent_suspension();
         test_grip_steering();
         test_high_speed_steering();
         test_drift_recovery();

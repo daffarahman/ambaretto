@@ -73,6 +73,10 @@ public:
     Vec3 rotate(const Vec3& local) const { return rotation() * local; }
     Vec3 forward() const { return rotate(Vec3(0, 0, -1)); }
     const std::array<Wheel, 4>& wheels() const { return wheels_; }
+    // Contact samples precede world integration; draw tires with the body's current pose.
+    Vec3 wheel_center(const Wheel& wheel) const {
+        return position() + rotate(wheel.mount - Vec3(0, tuning_.rest_length - wheel.compression, 0));
+    }
     float steering() const { return steer_; }
     JPH::BodyID body_id() const { return body_; }
     const CarTuning& tuning() const { return tuning_; }
