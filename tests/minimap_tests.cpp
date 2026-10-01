@@ -1,4 +1,5 @@
 #include "minimap.hpp"
+#include "world_map.hpp"
 #include <iostream>
 #include <stdexcept>
 
@@ -46,7 +47,49 @@ int main() {
             require(map.contains(map.anchor) && map.contains({map.bounds.x + 6, map.bounds.y + 6}), "visible markers rejected");
             require(!map.contains({map.bounds.x + 5, map.bounds.y + 6}) && !map.contains({map.bounds.x + 314, map.bounds.y + 175}), "markers escaped clipped bounds");
         }
-        std::cout << "Camera-relative minimap rotation, markers, fallback, zoom and layout passed.\n";
+        const Rectangle viewport{20, 60, 1000, 600};
+        const Vector2 viewport_center{520, 360};
+        forza::WorldMapView map;
+        require(near(map.scale, .5f), "world map default zoom changed");
+        map.fit(viewport, extent);
+        require(near(map.center, {0, 0}) && near(map.scale, 600 / (2 * extent)), "fit did not show whole map");
+        const auto upper = map.project(Vec3(-extent, 0, -extent), viewport);
+        const auto lower = map.project(Vec3(extent, 0, extent), viewport);
+        require(upper.x >= viewport.x && near(upper.y, viewport.y) && lower.x <= viewport.x + viewport.width
+            && near(lower.y, viewport.y + viewport.height), "fitted map escaped viewport");
+        const Rectangle developed{-1200, -850, 3400, 5700};
+        map.fit(viewport, developed, extent);
+        require(near(map.center, {500, 2000}) && near(map.scale, 600.0f / 5700), "developed region fit lost midpoint or aspect ratio");
+        for (Vec3 corner : {Vec3(developed.x, 0, developed.y), Vec3(developed.x + developed.width, 0, developed.y + developed.height)}) {
+            const auto edge = map.project(corner, viewport);
+            require(edge.x >= viewport.x - .002f && edge.x <= viewport.x + viewport.width + .002f
+                && edge.y >= viewport.y - .002f && edge.y <= viewport.y + viewport.height + .002f, "developed region escaped fitted viewport");
+        }
+        map.focus(player, viewport, extent);
+        require(near(map.project(player, viewport), viewport_center) && near(map.scale, 1000.0f / 1800), "focus lost player or 1800m range");
+        for (Vec3 point : {player, Vec3(800, 100, -200), Vec3(-extent, 0, extent)})
+            require(near(map.world(map.project(point, viewport), viewport), {point.GetX(), point.GetZ()}), "world/screen projection did not round trip");
+        const Vector2 cursor{800, 170};
+        const auto anchored = map.world(cursor, viewport);
+        map.zoom(2, cursor, viewport, extent);
+        require(near(map.world(cursor, viewport), anchored), "zoom moved world point under cursor");
+        const auto before_pan = map.project(player, viewport);
+        map.pan({150, -90}, extent);
+        require(near(map.project(player, viewport), {before_pan.x + 150, before_pan.y - 90}), "drag moved content opposite pointer");
+        map.zoom(100000, viewport_center, viewport, extent);
+        require(near(map.scale, 2) && std::isfinite(map.scale), "maximum zoom is unbounded");
+        map.zoom(-100000, viewport_center, viewport, extent);
+        require(near(map.scale, 600 / (2 * extent)), "minimum zoom lost fitted map scale");
+        map.pan({-1000000, 1000000}, extent);
+        require(near(map.center, {extent, -extent}), "pan escaped world bounds");
+        map.focus(Vec3(extent * 2, 0, -extent * 2), viewport, extent);
+        require(near(map.center, {extent, -extent}), "focus escaped world bounds");
+        map.center = {extent * 2, -extent * 2}; map.scale = .001f;
+        map.constrain({0, 0, 512, 256}, extent);
+        require(near(map.center, {extent, -extent}) && near(map.scale, 256 / (2 * extent)), "resize lost zoom/center bounds");
+        map.constrain({0, 0, 1024, 600}, extent);
+        require(near(map.scale, 600 / (2 * extent)), "larger viewport did not update minimum zoom");
+        std::cout << "Camera-relative minimap and interactive world-map projection, pan, zoom and bounds passed.\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

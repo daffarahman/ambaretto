@@ -9,7 +9,7 @@ constexpr Color blue{0, 0, 128, 255}, gray{192, 192, 192, 255}, ink{0, 0, 0, 255
 struct Item { const char* label; MenuCommand command; };
 constexpr Item files[] = {{"Resume game", MenuCommand::Resume}, {"Pause game", MenuCommand::Pause}, {"Quit", MenuCommand::Quit}};
 constexpr Item edits[] = {{"Recover vehicle", MenuCommand::Recover}, {"Restore car tuning", MenuCommand::CarDefaults}};
-constexpr Item settings[] = {{"Aerial map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Controller mapping...", MenuCommand::Controllers}};
+constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Controller mapping...", MenuCommand::Controllers}};
 constexpr Item helps[] = {{"Controls...", MenuCommand::Controls}, {"About...", MenuCommand::About}};
 constexpr const char* titles[] = {"File", "Edit", "Settings", "Help"};
 constexpr const Item* menus[] = {files, edits, settings, helps};
@@ -153,7 +153,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         if (dropdown_ == i) DrawRectangleRec(r, blue);
         text(titles[i], r.x + 12, 6, 19, dropdown_ == i ? RAYWHITE : ink);
     }
-    text(captured ? "F10: menu   Esc: pause" : "F10 / arrows / Enter: menu", float(GetScreenWidth() - 365), 8, 15);
+    text(captured ? "F10: menu   Esc: map" : "F10 / arrows / Enter: menu", float(GetScreenWidth() - 365), 8, 15);
     if (dropdown_ >= 0) {
         box(dropdown_rect(dropdown_));
         for (int i = 0; i < counts[dropdown_]; ++i) {
@@ -202,7 +202,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             "Plane throttle: Shift/Ctrl or RT/LT. Rudder: arrows or LB/RB. Flaps: F / X.",
             "Camera: mouse / right stick. Zoom: wheel / D-pad down or left.",
             "Recover: R / D-pad up. Map: F2 / Back. Tuning: F3 / D-pad right.",
-            "Esc: pause. Start: pause/resume. F10: menubar; arrows and Enter navigate.",
+            "Esc: map / close. Start: pause/resume. F10: menubar; arrows and Enter navigate.",
             "Tuning: drag sliders; arrows adjust; Shift is fine adjustment.",
             "Tuning camera: right-drag outside panel; scroll to zoom. Menus pause physics."
         };

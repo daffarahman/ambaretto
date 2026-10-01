@@ -16,6 +16,13 @@ int main() {
         std::filesystem::create_directories(folder);
         ControllerMapping mapping;
         require(mapping.bindings[int(Action::Forward)].front().code == KEY_W, "keyboard defaults changed");
+        ControllerState escape;
+        escape.keys[KEY_ESCAPE] = true;
+        mapping.update(escape);
+        require(mapping.pressed(Action::Map) && !mapping.pressed(Action::Pause), "Escape must open the map instead of pause");
+        mapping.update(escape);
+        require(!mapping.pressed(Action::Map), "held Escape repeatedly toggled the map");
+        mapping.update({});
         require(mapping.add(Action::Forward, {BindingKind::Key, KEY_UP}), "extra key rejected");
         require(mapping.add(Action::Forward, {BindingKind::Button, GAMEPAD_BUTTON_RIGHT_FACE_DOWN}), "extra gamepad button rejected");
         require(mapping.add(Action::Forward, {BindingKind::Axis, GAMEPAD_AXIS_RIGHT_TRIGGER}), "trigger binding rejected");

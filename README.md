@@ -43,7 +43,7 @@ cmake --build --preset ucrt64
 
 ## Controls
 
-The DOS-style menubar groups commands under **File** (resume, pause, quit), **Edit** (recover vehicle, restore car tuning), **Settings** (aerial map, car tuning, controller mapping), and **Help** (controls, about). Press **F10** to release the mouse and open it; navigate with arrows and Enter, or click menus while paused. Escape closes menus. Opening a dropdown or dialog pauses gameplay, including flight and live tuning. Resume through File, a gameplay click, or the mapped Pause/resume button (Start by default).
+The DOS-style menubar groups commands under **File** (resume, pause, quit), **Edit** (recover vehicle, restore car tuning), **Settings** (world map, car tuning, controller mapping), and **Help** (controls, about). Press **F10** to release the mouse and open it; navigate with arrows and Enter, or click menus while paused. Escape closes menus. Opening a dropdown or dialog pauses gameplay, including flight and live tuning. Resume through File, a gameplay click, or the mapped Pause/resume button (Start by default).
 
 Open **Settings > Controller mapping** to select an action and **Add binding**, then press a keyboard key or gamepad button, or move a stick/trigger. Added bindings coexist with defaults; select a binding and **Remove binding** to replace a default. Up/Down selects actions, Left/Right selects bindings; scroll either list for more entries. Escape cancels capture; F10 is reserved for the menubar. **Defaults** restores all keyboard/gamepad bindings. **Deadzone** cycles 5–50% in 5% steps to tune stick drift. Changes save immediately; **Save & close** or Escape also retries any pending save. Save failures keep the editor open, display an error, and leave the previous file intact.
 
@@ -74,10 +74,10 @@ Gamepad defaults: left stick drives/walks and pitches/banks the plane; right sti
 | Mouse | Orbit the third-person camera |
 | Mouse wheel | Zoom the camera |
 | R | Recover the car, or return the piloted plane to the airport |
-| F2 | Toggle the Miami and Keys aerial view |
+| F2 | Toggle the Miami and Keys world map |
 | F3 | Open / close live car tuning |
 | F10 | Open / close the menubar |
-| Escape | Release the mouse and pause |
+| Escape | Open / close the world map; close or cancel menus |
 | Left click | Capture the mouse and resume |
 | Window close button | Exit |
 
@@ -126,7 +126,7 @@ For takeoff, hold Shift until throttle reaches 100%, release the brake, accelera
 
 The plane is an **850 kg Jolt rigid body** with collision shapes for the fuselage, wings, horizontal tail, and fin, plus three raycast spring/damper landing struts and tire friction. Aerodynamics use air-density and speed squared, angle-dependent lift, parasite/induced drag, reduced lift beyond stall, sideslip forces, propeller thrust, and damped elevator/aileron/rudder moments. The equations follow [NASA's lift equation](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/lift-equation/) and [drag equation](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/modern-drag-equation/), with coefficients tuned for this game. It is a simplified flight model. Gravity acts without power or airspeed, and the plane can glide with the engine off.
 
-Flying continues beyond the island over the ocean. Entering the water recovers the piloted aircraft at the nearest airfield; R also clears damage, velocity, and throttle. The flight camera has a wider zoom range, and the HUD shows airspeed, altitude above ground, throttle, flaps, stall, and damage. Escape, focus loss, and aerial view pause flight. F3 car tuning is available after leaving the plane.
+Flying continues beyond the island over the ocean. Entering the water recovers the piloted aircraft at the nearest airfield; R also clears damage, velocity, and throttle. The flight camera has a wider zoom range, and the HUD shows airspeed, altitude above ground, throttle, flaps, stall, and damage. Escape, focus loss, and world map pause flight. F3 car tuning is available after leaving the plane.
 
 Start directly beside the airport or already seated in the plane:
 
@@ -137,7 +137,7 @@ Start directly beside the airport or already seated in the plane:
 ./build/ucrt64/forzaambazon.exe --plane --screenshot build/plane-preview.png
 ```
 
-The character uses Jolt's virtual capsule controller for slopes, steps, jumping, and collision with buildings, trees, and the vehicle. Its body turns toward movement and animates while walking or running. Mouse movement orbits the camera in either mode; the driving camera gradually follows the car again after you stop moving the mouse. Camera sweeps keep the view clear of walls and terrain. Focus loss and aerial view pause gameplay and release the mouse.
+The character uses Jolt's virtual capsule controller for slopes, steps, jumping, and collision with buildings, trees, and the vehicle. Its body turns toward movement and animates while walking or running. Mouse movement orbits the camera in either mode; the driving camera gradually follows the car again after you stop moving the mouse. Camera sweeps keep the view clear of walls and terrain. Focus loss and world map pause gameplay and release the mouse.
 
 Press **F3** to tune the current car. The panel releases the mouse, frames the car for inspection, disables driving/character input, and applies the parking brake. Physics keeps running so suspension changes settle in front of you. Drag the sliders or scroll over a row; Up/Down selects a setting and Left/Right adjusts it. Hold Shift for finer edits. Right-drag outside the panel to orbit the car and scroll outside it to zoom. Panel clicks cannot recapture the mouse or move the camera. F3, Escape, or the Close button returns to the previous camera and mouse capture state. Losing window focus pauses the simulation and cancels slider dragging; click to recapture after closing the panel if focus was lost.
 
@@ -147,14 +147,14 @@ The **Performance** tab controls **Top speed** (80–400 km/h, default 240 km/h)
 
 ## Miami and Florida Keys map
 
-A full day lasts **24 real minutes**: one in-game hour per real minute. The 24-hour **HH:MM** clock starts at 08:00, advances during gameplay and aerial viewing, and pauses with menus or focus loss. Morning skies blend pink and purple, sunsets turn orange, and nights show stars and a moon. Sunlight, fog, the ocean and vehicles follow the cycle. Streetlights, building windows, neon signs, bridge lamps and runway lights fade on at dusk.
+A full day lasts **24 real minutes**: one in-game hour per real minute. The 24-hour **HH:MM** clock starts at 08:00, advances during gameplay, and pauses with the world map, menus or focus loss. Morning skies blend pink and purple, sunsets turn orange, and nights show stars and a moon. Sunlight, fog, the ocean and vehicles follow the cycle. Streetlights, building windows, neon signs, bridge lamps and runway lights fade on at dusk.
 
 Set a starting time with `--time HH:MM`, including for fixed-time screenshot previews:
 
 ```bash
 ./build/ucrt64-release/forzaambazon.exe --beach --time 06:15
 ./build/ucrt64-release/forzaambazon.exe --beach --time 18:00
-./build/ucrt64-release/forzaambazon.exe --overview --time 23:00 --screenshot build/city-night.png
+./build/ucrt64-release/forzaambazon.exe --beach --time 23:00 --screenshot build/city-night.png
 ```
 
 The sea world spans **10.24 by 10.24 kilometers**, with land extending roughly **4 by 5.7 kilometers**. Distances between districts are 40% shorter than the original layout, while cars, people, doors and building floors retain meter-based dimensions. This is compressed, stylized gameplay geography inspired by Miami and the Keys.
@@ -163,7 +163,7 @@ Downtown and Brickell mix glass towers up to 96 meters tall, offices, apartments
 
 Follow **US 1 south** from downtown through Key Largo, Islamorada, Marathon, the Lower Keys and Key West. Each Key has its own street layout: skewed village blocks in Largo, branching marina streets in Islamorada, asymmetric blocks in Marathon, winding streets in the Lower Keys, and small old-town blocks in Key West. Narrow lanes and cul-de-sacs serve dense one- and two-story houses with varied roofs, colors and porches. Each Key has at most one non-house building: a small cafe on the first four Keys and the airport terminal on Key West. There are no hotels, towers, shops or gas stations in the Keys. Marinas have docks and boats. Eight bridge sections connect the region, including a compressed Seven Mile Bridge, with smooth ramps, concrete barriers, support piers and streetlights. Bridge decks share their geometry with suspension and character collision. The road network, including airport and port approaches, forms one connected component.
 
-F2 shows the whole region with district labels. The wide minimap sits at the bottom left, covers 500 meters across, and rotates with the camera. The player marker sits below center to show more streets ahead, while nearby traffic and vehicles use the same rotation. The current location appears separately at the bottom right. Start directly in another district:
+Escape or F2 opens an interactive, north-up 2D world map and pauses gameplay. Drag with the left mouse button to pan; scroll to zoom around the pointer. Arrow keys, WASD or mapped movement/look controls also pan, and +/- or mapped zoom controls change zoom. Home or **Region** fits the whole map; C or **Player** centers the map on your position. F2, Escape or **Close** returns to gameplay. The map shows district labels, airports, your position and vehicles, with NPC traffic visible when zoomed in. The clock pauses with the map. The wide minimap sits at the bottom left, covers 500 meters across, and rotates with the camera. The player marker sits below center to show more streets ahead, while nearby traffic and vehicles use the same rotation. The current location appears separately at the bottom right. Start directly in another district:
 
 ```bash
 ./build/ucrt64/forzaambazon.exe --beach
@@ -232,6 +232,7 @@ For a rendered map preview (saves the image and exits):
 
 ```bash
 ./build/ucrt64/forzaambazon.exe --overview --screenshot build/city-overview.png
+./build/ucrt64/forzaambazon.exe --map --screenshot build/player-map.png
 ```
 
 Start on foot, or capture a character preview:

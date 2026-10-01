@@ -21,7 +21,7 @@ const std::array<const char*, action_count> action_labels{{
     "Forward / pitch down", "Reverse / pitch up", "Left / bank left", "Right / bank right",
     "Handbrake / wheel brake", "Enter / exit vehicle", "Sprint", "Jump",
     "Plane throttle up", "Plane throttle down", "Rudder left", "Rudder right", "Toggle flaps",
-    "Recover vehicle", "Aerial map", "Car tuning", "Pause / resume",
+    "Recover vehicle", "World map", "Car tuning", "Pause / resume",
     "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out"
 }};
 namespace {
@@ -151,7 +151,7 @@ void ControllerMapping::defaults() {
     for (int k : {KEY_LEFT_SHIFT, KEY_RIGHT_SHIFT}) { key(Action::Sprint, k); key(Action::ThrottleUp, k); }
     for (int k : {KEY_LEFT_CONTROL, KEY_RIGHT_CONTROL}) key(Action::ThrottleDown, k);
     key(Action::RudderLeft, KEY_LEFT); key(Action::RudderRight, KEY_RIGHT); key(Action::Flaps, KEY_F);
-    key(Action::Recover, KEY_R); key(Action::Map, KEY_F2); key(Action::Tuning, KEY_F3); key(Action::Pause, KEY_ESCAPE);
+    key(Action::Recover, KEY_R); key(Action::Map, KEY_F2); key(Action::Map, KEY_ESCAPE); key(Action::Tuning, KEY_F3);
     axis(Action::Forward, GAMEPAD_AXIS_LEFT_Y, -1); axis(Action::Backward, GAMEPAD_AXIS_LEFT_Y);
     axis(Action::Left, GAMEPAD_AXIS_LEFT_X, -1); axis(Action::Right, GAMEPAD_AXIS_LEFT_X);
     button(Action::Brake, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT); button(Action::Interact, GAMEPAD_BUTTON_RIGHT_FACE_UP);

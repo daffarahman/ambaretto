@@ -863,4 +863,50 @@ void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 playe
     EndScissorMode();
     DrawRectangleLinesEx(bounds, 2, {115, 157, 174, 255});
 }
+void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Traffic* traffic) const {
+    BeginScissorMode(int(viewport.x), int(viewport.y), int(viewport.width), int(viewport.height));
+    DrawRectangleRec(viewport, {43, 116, 148, 255});
+    const auto corner = view.project(Vec3(-Environment::extent, 0, -Environment::extent), viewport);
+    const float size = 2 * Environment::extent * view.scale;
+    DrawTexturePro(minimap_texture_, {0, 0, float(minimap_texture_.width), float(minimap_texture_.height)},
+        {corner.x, corner.y, size, size}, {0, 0}, 0, WHITE);
+    const auto inside = [&](Vector2 p) { return p.x >= viewport.x + 8 && p.x <= viewport.x + viewport.width - 8
+        && p.y >= viewport.y + 8 && p.y <= viewport.y + viewport.height - 8; };
+    for (std::size_t i : {std::size_t(0), std::size_t(1), std::size_t(2), std::size_t(6), std::size_t(7), std::size_t(8), std::size_t(9), std::size_t(10)}) {
+        if (i == 2 && view.scale < .15f) continue;
+        const auto& island = Environment::islands()[i];
+        const auto p = view.project(island.center, viewport);
+        if (!inside(p)) continue;
+        const int width = forza::ui::measure_text(island.name, 16);
+        DrawRectangle(int(p.x) - width / 2 - 5, int(p.y) - 28, width + 10, 24, {19, 28, 45, 205});
+        forza::ui::draw_text(island.name, int(p.x) - width / 2, int(p.y) - 24, 16, RAYWHITE);
+    }
+    for (const auto& airport : airports) {
+        const auto p = view.project(Vec3(airport.center_x, 0, airport.runway_z), viewport);
+        if (inside(p)) DrawRectangle(int(p.x - 4), int(p.y - 4), 8, 8, YELLOW);
+    }
+    if (traffic) for (const auto& vehicle : traffic->cars()) {
+        if (vehicle.npc && view.scale < .15f) continue;
+        const auto p = view.project(vehicle.car->position(), viewport);
+        if (inside(p)) DrawCircleV(p, 2.5f, vehicle.npc ? GREEN : SKYBLUE);
+    }
+    const auto parked_car = view.project(car.position(), viewport);
+    if (inside(parked_car)) DrawRectangle(int(parked_car.x - 4), int(parked_car.y - 4), 8, 8, SKYBLUE);
+    const auto aircraft = view.project(plane.position(), viewport);
+    if (inside(aircraft)) DrawPoly(aircraft, 3, 7, std::atan2(plane.forward().GetZ(), plane.forward().GetX()) * RAD2DEG, YELLOW);
+    const auto player = view.project(player_position, viewport);
+    if (inside(player)) {
+        DrawCircleV(player, 11, {19, 28, 45, 255});
+        DrawPoly(player, 3, 9, std::atan2(player_forward.GetZ(), player_forward.GetX()) * RAD2DEG, RAYWHITE);
+        forza::ui::draw_text("YOU", int(player.x + 14), int(player.y - 7), 14, RAYWHITE);
+    }
+    const float bar_meters = view.scale >= .5f ? 100 : view.scale >= .15f ? 500 : 1000;
+    const float bar_width = bar_meters * view.scale;
+    const float bx = viewport.x + 18, by = viewport.y + viewport.height - 20;
+    DrawRectangle(int(bx - 6), int(by - 28), int(bar_width + 20), 40, {19, 28, 45, 210});
+    DrawLineEx({bx, by}, {bx + bar_width, by}, 3, RAYWHITE);
+    forza::ui::draw_text(TextFormat("%.0f m", double(bar_meters)), int(bx), int(by - 23), 14, RAYWHITE);
+    EndScissorMode();
+    DrawRectangleLinesEx(viewport, 2, {115, 157, 174, 255});
+}
 } // namespace forza

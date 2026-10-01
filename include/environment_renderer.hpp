@@ -2,6 +2,7 @@
 #include "environment.hpp"
 #include "plane.hpp"
 #include "day_night.hpp"
+#include "world_map.hpp"
 #include <raylib.h>
 
 namespace forza {
@@ -16,6 +17,7 @@ public:
     void draw(const Camera3D& camera, float time, const Daylight& light);
     Shader object_shader() const { return land_shader_; }
     void minimap(const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Traffic* traffic = nullptr) const;
+    void world_map(const WorldMapView& view, Rectangle viewport, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Traffic* traffic = nullptr) const;
 private:
     void load_trees(const Environment& environment);
     void load_minimap(const Environment& environment);
