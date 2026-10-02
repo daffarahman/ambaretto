@@ -305,6 +305,22 @@ Environment::Environment() {
             for (float sz = -size.GetZ() / 2; sz <= size.GetZ() / 2; sz += size.GetZ() / 4)
                 if (road(x + sx, z + sz) || height(x + sx, z + sz) < 2.9f
                     || std::abs(height(x + sx, z + sz) - height(x, z)) > .35f) return false;
+        // Leave the seaward side of coastal streets open, including second-row lots.
+        Vec3 frontage = Vec3::sZero();
+        float nearest = 10000;
+        for (const auto& street : roads()) {
+            const float t = std::clamp(segment_fraction(street.a, street.b, x, z), 0.0f, 1.0f);
+            const Vec3 p = street.a + (street.b - street.a) * t;
+            const float distance = std::hypot(x - p.GetX(), z - p.GetZ());
+            if (distance < nearest) { nearest = distance; frontage = p; }
+        }
+        const Vec3 outward = Vec3(x - frontage.GetX(), 0, z - frontage.GetZ()).NormalizedOr(Vec3::sAxisX());
+        // ponytail: nearby shores only (220 m); extend the probe for wider waterfront setbacks.
+        for (float distance = nearest; distance <= 220; distance += 5) {
+            const Vec3 p = frontage + outward * distance;
+            if (road(p.GetX(), p.GetZ())) break; // Another street makes this an inland block.
+            if (coast_radius(p.GetX(), p.GetZ()) >= 1) return false;
+        }
         buildings_.push_back({Vec3(x, height(x, z) + size.GetY() / 2, z), size, int(random() % 5), kind, east, positive});
         return true;
     };

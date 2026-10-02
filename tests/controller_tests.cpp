@@ -16,6 +16,23 @@ int main() {
         std::filesystem::create_directories(folder);
         ControllerMapping mapping;
         require(mapping.bindings[int(Action::Forward)].front().code == KEY_W, "keyboard defaults changed");
+        static_assert(int(Action::ZoomOut) == 22 && int(Action::Horn) == 23, "existing action IDs must stay stable");
+        const std::vector<Binding> horn_defaults{{BindingKind::Key, KEY_H}, {BindingKind::Button, GAMEPAD_BUTTON_RIGHT_THUMB}};
+        require(mapping.bindings[int(Action::Horn)] == horn_defaults, "horn defaults must be H and right-stick click");
+        ControllerState horn;
+        horn.keys[KEY_H] = true; mapping.update(horn);
+        require(mapping.value(Action::Horn) == 1 && mapping.pressed(Action::Horn), "keyboard horn did not activate");
+        mapping.update(horn);
+        require(mapping.value(Action::Horn) == 1 && !mapping.pressed(Action::Horn), "held horn must remain active without repeating its leading edge");
+        horn.keys[KEY_H] = false; mapping.update(horn);
+        require(mapping.value(Action::Horn) == 0, "released keyboard horn remained active");
+        horn.pads[3].connected = true; horn.pads[3].buttons[GAMEPAD_BUTTON_RIGHT_THUMB] = true;
+        mapping.update(horn);
+        require(mapping.value(Action::Horn) == 1 && mapping.value(Action::Sprint) == 0, "gamepad horn conflicted with left-stick sprint");
+        mapping.update(horn);
+        require(mapping.value(Action::Horn) == 1 && !mapping.pressed(Action::Horn), "held gamepad horn did not stay active");
+        horn.pads[3].connected = false; mapping.update(horn);
+        require(mapping.value(Action::Horn) == 0, "disconnected gamepad retained horn input");
         ControllerState escape;
         escape.keys[KEY_ESCAPE] = true;
         mapping.update(escape);
@@ -64,6 +81,13 @@ int main() {
         require(bool(capture.poll(input)), "released USB button could not be captured again");
         usb.buttons[7] = true; mapping.update(input);
         require(mapping.pressed(Action::Interact) && mapping.value(Action::Jump) == 0, "raw USB buttons leaked into Xbox mappings or did not reach gameplay");
+        require(mapping.add(Action::Horn, {BindingKind::JoystickButton, 11}), "generic USB horn remap was rejected");
+        usb.buttons[11] = true; mapping.update(input);
+        require(mapping.value(Action::Horn) == 1 && mapping.pressed(Action::Horn), "generic USB horn button did not reach its action");
+        mapping.update(input);
+        require(mapping.value(Action::Horn) == 1 && !mapping.pressed(Action::Horn), "generic USB held horn stopped or repeated its edge");
+        usb.buttons[11] = false; mapping.update(input);
+        require(mapping.value(Action::Horn) == 0, "generic USB horn button release was ignored");
         capture.start(input);
         usb.axes[4] = -.9f;
         captured = capture.poll(input);
@@ -110,10 +134,16 @@ int main() {
         std::ofstream(path) << "version=1\n; Partial files retain other defaults\n[forward]\nkey=265\n";
         require(loaded.load(path, error) && loaded.bindings[int(Action::Forward)].size() == 1 &&
             !loaded.bindings[int(Action::Interact)].empty(), "partial mapping did not retain unspecified defaults");
+        require(loaded.bindings[int(Action::Horn)] == horn_defaults, "legacy file without a horn section did not retain new horn defaults");
+        std::ofstream(path) << "version=1\n[zoom_out]\nkey=334\n[horn]\n";
+        require(loaded.load(path, error) && loaded.bindings[int(Action::ZoomOut)] == std::vector<Binding>{{BindingKind::Key, 334}} &&
+            loaded.bindings[int(Action::Horn)].empty(), "explicitly unbound horn or existing INI section was not preserved");
+        require(loaded.save(path, error) && mapping.load(path, error) && mapping.bindings[int(Action::Horn)].empty(),
+            "intentionally unbound horn did not round-trip");
         require(!loaded.save(folder / "missing" / "controls.ini", error), "save error was hidden");
         std::filesystem::remove(path);
         std::filesystem::remove(folder);
-        std::cout << "Controller defaults, raw USB capture/buttons/axes/D-pad, analog input, edges, disconnect, persistence and validation passed\n";
+        std::cout << "Controller defaults, held/remapped horn, raw USB input, analog input, edges, disconnect, legacy persistence and validation passed\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << "Controller check failed: " << error.what() << '\n'; return 1; }
 }

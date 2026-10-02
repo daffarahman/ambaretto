@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,9 @@ namespace forza {
 namespace {
 constexpr float pi = 3.14159265359f;
 constexpr int sign_rows = 10;
+std::pair<int, int> cell(Vec3 position) {
+    return {int(std::floor(position.GetX() / 256)), int(std::floor(position.GetZ() / 256))};
+}
 Texture2D load_terrain_texture(const char* filename) {
     const std::string relative = std::string("assets/textures/") + filename;
     const std::string bundled = std::string(GetApplicationDirectory()) + relative;
@@ -127,6 +131,22 @@ struct MeshBuilder {
         UploadMesh(&mesh, false);
         return LoadModelFromMesh(mesh);
     }
+    std::vector<Model> upload_chunks() const {
+        std::map<std::pair<int, int>, MeshBuilder> cells;
+        for (std::size_t i = 0; i < positions.size(); i += 9) {
+            const Vec3 center((positions[i] + positions[i + 3] + positions[i + 6]) / 3,
+                0, (positions[i + 2] + positions[i + 5] + positions[i + 8]) / 3);
+            auto& mesh = cells[cell(center)];
+            mesh.positions.insert(mesh.positions.end(), positions.begin() + i, positions.begin() + i + 9);
+            mesh.normals.insert(mesh.normals.end(), normals.begin() + i, normals.begin() + i + 9);
+            const auto vertex = i / 3;
+            mesh.texcoords.insert(mesh.texcoords.end(), texcoords.begin() + vertex * 2, texcoords.begin() + vertex * 2 + 6);
+            mesh.colors.insert(mesh.colors.end(), colors.begin() + vertex * 4, colors.begin() + vertex * 4 + 12);
+        }
+        std::vector<Model> models;
+        for (const auto& part : cells) models.push_back(part.second.upload());
+        return models;
+    }
 };
 Mesh batch_tree_mesh(const Mesh& source, const std::vector<Tree>& trees, const Vec3& origin) {
     Mesh mesh{};
@@ -184,7 +204,7 @@ void main() {
     color = vertexColor;
     gl_Position = mvp * vec4(vertexPosition, 1.0);
 })GLSL";
-const char* land_fragment = R"GLSL(#version 330
+const std::string land_fragment = std::string(R"GLSL(#version 330
 in vec3 position;
 in vec3 normal;
 in vec4 color;
@@ -196,12 +216,15 @@ uniform vec3 horizonColor;
 uniform float daylight;
 uniform sampler2D texture0;
 out vec4 finalColor;
+)GLSL") + scene_lighting_glsl() + R"GLSL(
 void main() {
     // World coordinates keep the four-meter tiles continuous across cells.
     vec4 surface = texture(texture0, position.xz / 4.0) * color;
-    vec3 lighting = ambientLight + sunColor * (0.42 * daylight * max(dot(normalize(normal), sunDirection), 0.0));
-    float fog = smoothstep(2500.0, 18000.0, distance(position.xz, cameraPosition.xz));
-    finalColor = vec4(mix(surface.rgb * lighting, horizonColor, fog * 0.80), surface.a);
+    vec3 n = normalize(normal);
+    vec3 lighting = ambientLight + sunColor * (0.42 * daylight * max(dot(n, sunDirection), 0.0) * scene_shadow(position, n, sunDirection));
+    lighting += scene_local_light(position, n, normalize(cameraPosition - position), 0.0);
+    float fog = smoothstep(viewDistance * 0.65, viewDistance, distance(position.xz, cameraPosition.xz));
+    finalColor = vec4(mix(surface.rgb * lighting, horizonColor, fog) * brightness, surface.a);
 })GLSL";
 const char* tree_vertex = R"GLSL(#version 330
 in vec3 vertexPosition;
@@ -220,7 +243,7 @@ void main() {
     color = vertexColor;
     gl_Position = mvp * vec4(vertexPosition, 1.0);
 })GLSL";
-const char* tree_fragment = R"GLSL(#version 330
+const std::string tree_fragment = std::string(R"GLSL(#version 330
 in vec3 position;
 in vec3 normal;
 in vec2 texCoord;
@@ -235,15 +258,17 @@ uniform sampler2D texture0;
 uniform vec4 colDiffuse;
 uniform float emissiveStrength;
 out vec4 finalColor;
+)GLSL") + scene_lighting_glsl() + R"GLSL(
 void main() {
     vec4 surface = texture(texture0, texCoord) * colDiffuse * color;
     // Leaf cards need holes that neither hide scenery nor write depth.
     if (surface.a < 0.3) discard;
     vec3 n = normalize(normal);
     if (!gl_FrontFacing) n = -n;
-    vec3 lighting = ambientLight + sunColor * (0.42 * daylight * max(dot(n, sunDirection), 0.0));
-    float fog = smoothstep(2500.0, 18000.0, distance(position.xz, cameraPosition.xz));
-    finalColor = vec4(mix(surface.rgb * (lighting + emissiveStrength), horizonColor, fog * 0.80), 1.0);
+    vec3 lighting = ambientLight + sunColor * (0.42 * daylight * max(dot(n, sunDirection), 0.0) * scene_shadow(position, n, sunDirection));
+    lighting += scene_local_light(position, n, normalize(cameraPosition - position), 0.0);
+    float fog = smoothstep(viewDistance * 0.65, viewDistance, distance(position.xz, cameraPosition.xz));
+    finalColor = vec4(mix(surface.rgb * (lighting + emissiveStrength), horizonColor, fog) * brightness, 1.0);
 })GLSL";
 const char* water_vertex = R"GLSL(#version 330
 in vec3 vertexPosition;
@@ -255,7 +280,7 @@ void main() {
     position.y += sin(position.x * 0.06 + time * 0.7) * 0.10 + cos(position.z * 0.08 + time) * 0.08;
     gl_Position = mvp * vec4(position, 1.0);
 })GLSL";
-const char* water_fragment = R"GLSL(#version 330
+const std::string water_fragment = std::string(R"GLSL(#version 330
 in vec3 position;
 uniform vec3 cameraPosition;
 uniform float time;
@@ -265,28 +290,33 @@ uniform vec3 sunColor;
 uniform vec3 ambientLight;
 uniform float daylight;
 out vec4 finalColor;
+)GLSL") + scene_lighting_glsl() + R"GLSL(
 void main() {
     vec3 color = mix(vec3(0.10, 0.60, 0.67), vec3(0.06, 0.34, 0.52),
         0.5 + 0.5 * sin(position.x * 0.0007 + position.z * 0.0005));
     vec2 footprint = fwidth(position.xz * 0.5);
     float ripples = sin(position.x * 0.5 + position.z * 0.36 + time * 1.5) * sin(position.z * 0.21 - time) * exp(-dot(footprint, footprint));
     color += 0.028 * ripples;
-    color = color * (ambientLight * 0.8 + 0.6 * daylight) + horizonColor * (0.10 + 0.16 * (1.0 - daylight));
+    float shadow = scene_shadow(position, vec3(0, 1, 0), sunDirection);
+    color = color * (ambientLight * 0.8 + 0.6 * daylight * shadow) + horizonColor * (0.10 + 0.16 * (1.0 - daylight));
     vec3 view = normalize(cameraPosition - position);
     float reflection = pow(max(dot(reflect(-view, vec3(0, 1, 0)), sunDirection), 0.0), 90.0);
-    color += reflection * sunColor * daylight * (0.5 + 0.5 * ripples);
-    float fog = smoothstep(5000.0, 21000.0, distance(position.xz, cameraPosition.xz));
-    finalColor = vec4(mix(color, horizonColor, fog), 1.0);
+    color += reflection * sunColor * daylight * shadow * (0.5 + 0.5 * ripples);
+    color += scene_local_light(position, vec3(0, 1, 0), view, 32.0) * 0.2;
+    float fog = smoothstep(viewDistance * 0.65, viewDistance, distance(position.xz, cameraPosition.xz));
+    finalColor = vec4(mix(color, horizonColor, fog) * brightness, 1.0);
 })GLSL";
 const char* light_fragment = R"GLSL(#version 330
 in vec3 position;
 in vec4 color;
 uniform vec3 cameraPosition;
 uniform float night;
+uniform float brightness;
+uniform float viewDistance;
 out vec4 finalColor;
 void main() {
-    float visibility = 1.0 - smoothstep(11000.0, 21000.0, distance(position.xz, cameraPosition.xz));
-    finalColor = vec4(color.rgb, color.a * night * visibility);
+    float visibility = 1.0 - smoothstep(viewDistance * 0.75, viewDistance, distance(position.xz, cameraPosition.xz));
+    finalColor = vec4(color.rgb * brightness, color.a * night * visibility);
 })GLSL";
 const char* sky_fragment = R"GLSL(#version 330
 uniform vec2 screenSize;
@@ -299,6 +329,7 @@ uniform vec3 zenithColor;
 uniform vec3 sunDirection;
 uniform float night;
 uniform float time;
+uniform float brightness;
 out vec4 finalColor;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void main() {
@@ -320,13 +351,27 @@ void main() {
     float cloud = sin(ray.x * 19 + ray.z * 12 + time * 0.002) + sin(ray.x * 41 - ray.z * 27);
     cloud = smoothstep(1.20, 1.90, cloud) * exp(-pow((ray.y - 0.23) * 5.0, 2.0));
     sky = mix(sky, mix(horizonColor, vec3(1.0), 0.28), cloud * (1.0 - night) * 0.18);
-    finalColor = vec4(sky, 1.0);
+    finalColor = vec4(sky * brightness, 1.0);
 })GLSL";
 }
 
+EnvironmentRenderer::Chunk EnvironmentRenderer::chunk(Model model) {
+    const auto box = GetModelBoundingBox(model);
+    const Vector3 center = Vector3Scale(Vector3Add(box.min, box.max), .5f);
+    return {model, center, std::hypot(box.max.x - center.x, box.max.z - center.z)};
+}
+bool EnvironmentRenderer::nearby(const Chunk& part, const Vector3& focus, float distance) {
+    const float range = distance + part.radius;
+    const float dx = part.center.x - focus.x, dz = part.center.z - focus.z;
+    return dx * dx + dz * dz <= range * range;
+}
 EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     MeshBuilder ground, grass, sand, roads, city, water, signs, lights, glows;
-    // ponytail: baked light pools batch thousands of lamps; use local point lights for moving illumination.
+    const auto add_light = [&](Vec3 position, Color color, float radius) {
+        local_lights_.push_back({{position.GetX(), position.GetY(), position.GetZ()},
+            {color.r / 255.0f, color.g / 255.0f, color.b / 255.0f}, radius});
+    };
+    // ponytail: distant pools stay baked; nearby point lights illuminate moving objects.
     const auto light_pool = [&](Vec3 center, float radius, Color tint) {
         for (int i = 0; i < 16; ++i) {
             Vec3 a = center + Vec3(std::cos(i * pi / 8), 0, std::sin(i * pi / 8)) * radius;
@@ -414,6 +459,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             city.box(p + Vec3(0, 2.6f, 0), Vec3(.12f, 5.2f, .12f), {69, 83, 94, 255});
             city.box(lamp, Vec3(.65f, .16f, .65f), {219, 225, 216, 255});
             lights.box(lamp - Vec3(0, .10f, 0), Vec3(.52f, .07f, .52f), {255, 211, 142, 255});
+            add_light(lamp - Vec3(0, .10f, 0), {255, 211, 142, 255}, 18);
             light_pool(road.a + direction * along, 8, {255, 195, 116, 85});
         }
     }
@@ -525,6 +571,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             city.box(face + Vec3(0, 1.3f, 0), window_size, glass);
             lights.box(face + front * .09f + Vec3(0, 1.3f, 0), window_size,
                 club ? Color{235, 79, 213, 180} : Color{255, 203, 146, 130});
+            add_light(face + front * .09f + Vec3(0, 1.3f, 0), club ? Color{235, 79, 213, 255} : Color{255, 203, 146, 255}, 12);
             lights.box(face + front * 1.72f + Vec3(0, 2.6f, 0),
                 b.face_east ? Vec3(.05f, .12f, sz - 2) : Vec3(sx - 2, .12f, .05f),
                 club ? Color{255, 99, 222, 255} : Color{102, 224, 230, 255});
@@ -575,6 +622,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             city.box(p + Vec3(0, 4, 0), Vec3(.18f, 8, .18f), {86, 111, 121, 255});
             city.box(p + Vec3(0, 8, 0) - side * sign, Vec3(2.5f, .2f, .6f), {252, 236, 170, 255}, heading);
             lights.box(p + Vec3(0, 7.86f, 0) - side * sign, Vec3(2.1f, .07f, .45f), {255, 215, 148, 255}, heading);
+            add_light(p + Vec3(0, 7.86f, 0) - side * sign, {255, 215, 148, 255}, 24);
             if (sign > 0) light_pool(bridge.point(d / length), bridge.width / 2 - .7f, {255, 195, 116, 100});
         }
     }
@@ -589,6 +637,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             city.box(p - Vec3(0, 3, 0), Vec3(.7f, 6, .7f), {91, 84, 64, 255});
             city.box(p + side * 3 + Vec3(0, 1.5f, 0), Vec3(.12f, 3, .12f), concrete);
             lights.box(p + side * 3 + Vec3(0, 3.1f, 0), Vec3(.3f, .2f, .3f), {131, 223, 255, 255});
+            add_light(p + side * 3 + Vec3(0, 3.1f, 0), {131, 223, 255, 255}, 12);
             if (d < 30) continue;
             const Vec3 boat = p + side * 14;
             city.box(Vec3(boat.GetX(), .65f, boat.GetZ()), Vec3(5, 1.3f, 13), RAYWHITE);
@@ -632,6 +681,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         for (int x = -160; x <= 160; x += 20) for (float side : {-11.8f, 11.8f}) {
             city.box(Vec3(ax + side, Airport::elevation + .17f, rz + x), Vec3(.3f, .25f, .3f), {245, 233, 166, 255});
             lights.box(Vec3(ax + side, Airport::elevation + .31f, rz + x), Vec3(.35f, .10f, .35f), {255, 236, 177, 255});
+            add_light(Vec3(ax + side, Airport::elevation + .31f, rz + x), {255, 236, 177, 255}, 6);
             light_pool(Vec3(ax + side, Airport::elevation, rz + x), 1.8f, {255, 218, 144, 90});
         }
         for (float side : {-8.0f, -4.0f, 0.0f, 4.0f, 8.0f}) for (float end : {-1.0f, 1.0f})
@@ -655,16 +705,18 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         water.quad(a, c, d, b, WHITE);
     }
     terrain_ = ground.upload(); grass_ = grass.upload(); sand_ = sand.upload(); roads_ = roads.upload();
-    city_ = city.upload(); ocean_ = water.upload(); signs_ = signs.upload();
+    for (Model model : city.upload_chunks()) city_chunks_.push_back(chunk(model));
+    ocean_ = water.upload(); signs_ = signs.upload();
     lights_ = lights.upload(); glows_ = glows.upload();
-    land_shader_ = LoadShaderFromMemory(land_vertex, land_fragment);
-    water_shader_ = LoadShaderFromMemory(water_vertex, water_fragment);
+    land_shader_ = LoadShaderFromMemory(land_vertex, land_fragment.c_str());
+    water_shader_ = LoadShaderFromMemory(water_vertex, water_fragment.c_str());
     sky_shader_ = LoadShaderFromMemory(nullptr, sky_fragment);
     light_shader_ = LoadShaderFromMemory(land_vertex, light_fragment);
     if (lights_.materials) lights_.materials[0].shader = light_shader_;
     if (glows_.materials) glows_.materials[0].shader = light_shader_;
-    for (Model* model : {&terrain_, &grass_, &sand_, &roads_, &city_})
+    for (Model* model : {&terrain_, &grass_, &sand_, &roads_})
         if (model->materials) model->materials[0].shader = land_shader_;
+    for (auto& part : city_chunks_) part.model.materials[0].shader = land_shader_;
     if (grass_.materials && grass_texture_.id) SetMaterialTexture(&grass_.materials[0], MATERIAL_MAP_DIFFUSE, grass_texture_);
     if (sand_.materials && sand_texture_.id) SetMaterialTexture(&sand_.materials[0], MATERIAL_MAP_DIFFUSE, sand_texture_);
     if (roads_.materials && asphalt_texture_.id) SetMaterialTexture(&roads_.materials[0], MATERIAL_MAP_DIFFUSE, asphalt_texture_);
@@ -674,7 +726,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     water_time_ = GetShaderLocation(water_shader_, "time");
     load_trees(env);
     if (!tree_shader_.id) {
-        tree_shader_ = LoadShaderFromMemory(tree_vertex, tree_fragment);
+        tree_shader_ = LoadShaderFromMemory(tree_vertex, tree_fragment.c_str());
         tree_camera_ = GetShaderLocation(tree_shader_, "cameraPosition");
     }
     if (signs_.materials) {
@@ -739,7 +791,7 @@ void EnvironmentRenderer::load_trees(const Environment& env) {
     const auto bounds = GetModelBoundingBox(trees_);
     // Center the trunk in X/Z and put the root on the shared terrain height.
     const Vec3 origin((bounds.min.x + bounds.max.x) / 2, bounds.min.y, (bounds.min.z + bounds.max.z) / 2);
-    tree_shader_ = LoadShaderFromMemory(tree_vertex, tree_fragment);
+    tree_shader_ = LoadShaderFromMemory(tree_vertex, tree_fragment.c_str());
     tree_camera_ = GetShaderLocation(tree_shader_, "cameraPosition");
     tree_texture_ = trees_.materials[trees_.meshMaterial[0]].maps[MATERIAL_MAP_DIFFUSE].texture;
     if (tree_texture_.id != 0 && tree_texture_.id != rlGetTextureIdDefault()) {
@@ -747,24 +799,32 @@ void EnvironmentRenderer::load_trees(const Environment& env) {
         SetTextureFilter(tree_texture_, TEXTURE_FILTER_TRILINEAR);
         SetTextureWrap(tree_texture_, TEXTURE_WRAP_CLAMP);
     }
+    std::map<std::pair<int, int>, std::vector<Tree>> cells;
+    for (const auto& tree : env.trees()) cells[cell(tree.base)].push_back(tree);
     for (int i = 0; i < trees_.meshCount; ++i) {
-        Mesh batch = batch_tree_mesh(trees_.meshes[i], env.trees(), origin);
-        UnloadMesh(trees_.meshes[i]);
-        trees_.meshes[i] = batch;
         auto& material = trees_.materials[trees_.meshMaterial[i]];
         material.shader = tree_shader_;
         if (material.maps[MATERIAL_MAP_DIFFUSE].texture.id == tree_texture_.id)
             material.maps[MATERIAL_MAP_DIFFUSE].texture = tree_texture_;
+        for (const auto& part : cells) {
+            Model model = LoadModelFromMesh(batch_tree_mesh(trees_.meshes[i], part.second, origin));
+            model.materials[0].shader = tree_shader_;
+            model.materials[0].maps[MATERIAL_MAP_DIFFUSE] = material.maps[MATERIAL_MAP_DIFFUSE];
+            tree_chunks_.push_back(chunk(model));
+        }
     }
     trees_ready_ = true;
     TraceLog(LOG_INFO, "TREES: Loaded tree1.glb for all %i island trees", int(env.trees().size()));
+    TraceLog(LOG_INFO, "SCENE: %i city chunks, %i tree chunks, %i local lamps", int(city_chunks_.size()), int(tree_chunks_.size()), int(local_lights_.size()));
 }
 
 EnvironmentRenderer::~EnvironmentRenderer() {
-    UnloadModel(terrain_); UnloadModel(city_); UnloadModel(ocean_);
+    UnloadModel(terrain_); UnloadModel(ocean_);
     UnloadModel(grass_); UnloadModel(sand_);
     UnloadModel(roads_); UnloadModel(signs_);
     UnloadModel(lights_); UnloadModel(glows_);
+    for (auto& part : city_chunks_) UnloadModel(part.model);
+    for (auto& part : tree_chunks_) UnloadModel(part.model);
     if (trees_.meshes || trees_.materials) UnloadModel(trees_);
     if (tree_texture_.id != 0 && tree_texture_.id != rlGetTextureIdDefault()) UnloadTexture(tree_texture_);
     if (grass_texture_.id != 0) UnloadTexture(grass_texture_);
@@ -776,7 +836,7 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     UnloadShader(sky_shader_); UnloadShader(light_shader_);
     if (tree_shader_.id != 0) UnloadShader(tree_shader_);
 }
-void EnvironmentRenderer::draw_sky(const Camera3D& camera, const Daylight& light, float time) {
+void EnvironmentRenderer::draw_sky(const Camera3D& camera, const Daylight& light, float time, const GraphicsSettings& settings) {
     const Vector2 screen{float(GetScreenWidth()), float(GetScreenHeight())};
     const Vector3 forward = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
     const Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
@@ -789,14 +849,15 @@ void EnvironmentRenderer::draw_sky(const Camera3D& camera, const Daylight& light
     SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "tanFov"), &tan_fov, SHADER_UNIFORM_FLOAT);
     SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "night"), &light.night, SHADER_UNIFORM_FLOAT);
     SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "time"), &time, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "brightness"), &settings.brightness, SHADER_UNIFORM_FLOAT);
     vec3("cameraForward", forward); vec3("cameraRight", right); vec3("cameraUp", up);
     vec3("horizonColor", light.horizon); vec3("zenithColor", light.zenith); vec3("sunDirection", light.sun_direction);
     BeginShaderMode(sky_shader_);
     DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
     EndShaderMode();
 }
-void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Daylight& light) {
-    for (Shader shader : {land_shader_, water_shader_, tree_shader_}) apply_daylight(shader, light);
+void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Daylight& light, const SceneLighting& lighting, const GraphicsSettings& settings) {
+    for (Shader shader : {land_shader_, water_shader_, tree_shader_}) lighting.apply(shader, camera, light, settings);
     SetShaderValue(land_shader_, land_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(water_shader_, water_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(water_shader_, water_time_, &time, SHADER_UNIFORM_FLOAT);
@@ -805,7 +866,7 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Dayligh
     DrawModel(grass_, {0, 0, 0}, 1, WHITE);
     DrawModel(sand_, {0, 0, 0}, 1, WHITE);
     DrawModel(roads_, {0, 0, 0}, 1, WHITE);
-    DrawModel(city_, {0, 0, 0}, 1, WHITE);
+    for (const auto& part : city_chunks_) if (nearby(part, camera.position, settings.view_distance)) DrawModel(part.model, {0, 0, 0}, 1, WHITE);
     SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     const float sign_emission = light.night * .8f;
     SetShaderValue(tree_shader_, sign_emission_, &sign_emission, SHADER_UNIFORM_FLOAT);
@@ -816,18 +877,36 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Dayligh
         SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
         rlDrawRenderBatchActive();
         rlDisableBackfaceCulling();
-        DrawModel(trees_, {0, 0, 0}, 1, WHITE);
+        for (const auto& part : tree_chunks_) if (nearby(part, camera.position, settings.view_distance)) DrawModel(part.model, {0, 0, 0}, 1, WHITE);
         rlDrawRenderBatchActive();
         rlEnableBackfaceCulling();
     }
     if (light.night > .001f) {
         SetShaderValue(light_shader_, GetShaderLocation(light_shader_, "cameraPosition"), &camera.position, SHADER_UNIFORM_VEC3);
         SetShaderValue(light_shader_, GetShaderLocation(light_shader_, "night"), &light.night, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(light_shader_, GetShaderLocation(light_shader_, "brightness"), &settings.brightness, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(light_shader_, GetShaderLocation(light_shader_, "viewDistance"), &settings.view_distance, SHADER_UNIFORM_FLOAT);
         BeginBlendMode(BLEND_ADDITIVE);
         DrawModel(lights_, {0, 0, 0}, 1, WHITE);
         rlDisableDepthMask(); DrawModel(glows_, {0, 0, 0}, 1, WHITE); rlDrawRenderBatchActive(); rlEnableDepthMask();
         EndBlendMode();
     }
+}
+void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float distance) {
+    const auto draw = [&](Model& model) {
+        for (int i = 0; i < model.meshCount; ++i) {
+            Material material = model.materials[model.meshMaterial[i]];
+            material.shader = shader;
+            DrawMesh(model.meshes[i], material, model.transform);
+        }
+    };
+    rlDrawRenderBatchActive();
+    rlDisableBackfaceCulling();
+    for (auto& part : city_chunks_) if (nearby(part, focus, distance)) draw(part.model);
+    for (auto& part : tree_chunks_) if (nearby(part, focus, distance)) draw(part.model);
+    if (signs_.meshes) draw(signs_);
+    rlDrawRenderBatchActive();
+    rlEnableBackfaceCulling();
 }
 void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Traffic* traffic) const {
     const MinimapView map(GetScreenHeight(), player_position, player_forward, camera);

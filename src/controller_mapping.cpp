@@ -22,13 +22,13 @@ const std::array<const char*, action_count> action_labels{{
     "Handbrake / wheel brake", "Enter / exit vehicle", "Sprint", "Jump",
     "Plane throttle up", "Plane throttle down", "Rudder left", "Rudder right", "Toggle flaps",
     "Recover vehicle", "World map", "Car tuning", "Pause / resume",
-    "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out"
+    "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out", "Car horn"
 }};
 namespace {
 constexpr std::array<const char*, action_count> ids{{
     "forward", "backward", "left", "right", "brake", "interact", "sprint", "jump",
     "throttle_up", "throttle_down", "rudder_left", "rudder_right", "flaps", "recover",
-    "map", "tuning", "pause", "look_left", "look_right", "look_up", "look_down", "zoom_in", "zoom_out"
+    "map", "tuning", "pause", "look_left", "look_right", "look_up", "look_down", "zoom_in", "zoom_out", "horn"
 }};
 bool valid(Binding b) {
     if (b.kind == BindingKind::Key) return b.code > 0 && b.code < 512 && b.direction == 1;
@@ -164,6 +164,7 @@ void ControllerMapping::defaults() {
     axis(Action::LookLeft, GAMEPAD_AXIS_RIGHT_X, -1); axis(Action::LookRight, GAMEPAD_AXIS_RIGHT_X);
     axis(Action::LookUp, GAMEPAD_AXIS_RIGHT_Y, -1); axis(Action::LookDown, GAMEPAD_AXIS_RIGHT_Y);
     button(Action::ZoomIn, GAMEPAD_BUTTON_LEFT_FACE_DOWN); button(Action::ZoomOut, GAMEPAD_BUTTON_LEFT_FACE_LEFT);
+    key(Action::Horn, KEY_H); button(Action::Horn, GAMEPAD_BUTTON_RIGHT_THUMB);
 }
 bool ControllerMapping::add(Action a, Binding b) {
     if (int(a) < 0 || int(a) >= action_count || !valid(b)) return false;

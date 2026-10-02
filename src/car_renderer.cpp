@@ -87,7 +87,7 @@ void main() {
     color = vertexColor;
     gl_Position = mvp * vec4(vertexPosition, 1.0);
 })glsl";
-const char* fragment_shader = R"glsl(#version 330
+const std::string fragment_shader = std::string(R"glsl(#version 330
 in vec3 worldPosition;
 in vec3 normal;
 in vec2 texCoord;
@@ -101,23 +101,26 @@ uniform vec3 sunColor;
 uniform vec3 ambientLight;
 uniform vec3 horizonColor;
 uniform float daylight;
+)glsl") + scene_lighting_glsl() + R"glsl(
 out vec4 finalColor;
 void main() {
     vec3 n = normalize(normal);
     if (!gl_FrontFacing) n = -n;
     vec3 light = sunDirection;
     vec3 view = normalize(cameraPosition - worldPosition);
-    vec3 lighting = ambientLight + sunColor * (0.42 * daylight * max(dot(n, light), 0.0));
-    float highlight = pow(max(dot(n, normalize(light + view)), 0.0), 48.0) * 0.18 * daylight;
+    float shadow = scene_shadow(worldPosition, n, light);
+    vec3 lighting = ambientLight + sunColor * (0.42 * daylight * max(dot(n, light), 0.0) * shadow);
+    lighting += scene_local_light(worldPosition, n, view, 48.0);
+    float highlight = pow(max(dot(n, normalize(light + view)), 0.0), 48.0) * 0.18 * daylight * shadow;
     vec4 surface = texture(texture0, texCoord) * colDiffuse * color;
     vec3 shaded = surface.rgb * lighting + vec3(highlight) + emissionColor * 0.85;
-    float fog = 1.0 - exp(-length(cameraPosition - worldPosition) * 0.00125);
-    finalColor = vec4(mix(shaded, horizonColor, fog * 0.80), surface.a);
+    float fog = smoothstep(viewDistance * 0.65, viewDistance, distance(cameraPosition.xz, worldPosition.xz));
+    finalColor = vec4(mix(shaded, horizonColor, fog) * brightness, surface.a);
 })glsl";
 } // namespace
 
 CarRenderer::CarRenderer() {
-    shader_ = LoadShaderFromMemory(vertex_shader, fragment_shader);
+    shader_ = LoadShaderFromMemory(vertex_shader, fragment_shader.c_str());
     shader_.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocation(shader_, "matModel");
     shader_.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(shader_, "matNormal");
     camera_location_ = GetShaderLocation(shader_, "cameraPosition");
@@ -220,17 +223,17 @@ CarRenderer::~CarRenderer() {
     if (shader_.id != 0) UnloadShader(shader_);
 }
 
-bool CarRenderer::draw_body(const Car& car, const Camera3D& camera, Color paint) const {
+bool CarRenderer::draw_body(const Car& car, const Camera3D& camera, Color paint, Shader override_shader) const {
     if (!ready_) return false;
     const auto q = car.rotation();
     const auto p = car.position();
     const Matrix transform = MatrixMultiply(QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()}),
         MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
-    draw_model(body_, transform, camera, paint);
+    draw_model(body_, transform, camera, paint, override_shader);
     return true;
 }
 
-bool CarRenderer::draw_wheel(const Car& car, const Wheel& wheel, const Camera3D& camera) const {
+bool CarRenderer::draw_wheel(const Car& car, const Wheel& wheel, const Camera3D& camera, Shader override_shader) const {
     if (!wheel_ready_) return false;
     // Orient the detailed rim outward on each side. Spin about chassis +X
     // after this turn so both sides roll in the same physical direction.
@@ -242,24 +245,27 @@ bool CarRenderer::draw_wheel(const Car& car, const Wheel& wheel, const Camera3D&
     const float size = car.tuning().wheel_radius / wheel_radius;
     const Matrix transform = MatrixMultiply(MatrixMultiply(MatrixScale(size, size, size),
         QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()})), MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
-    draw_model(wheel_, transform, camera);
+    draw_model(wheel_, transform, camera, BLANK, override_shader);
     return true;
 }
 
-void CarRenderer::draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Color paint) const {
-    SetShaderValue(shader_, camera_location_, &camera.position, SHADER_UNIFORM_VEC3);
+void CarRenderer::draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Color paint, Shader override_shader) const {
+    if (!override_shader.id) SetShaderValue(shader_, camera_location_, &camera.position, SHADER_UNIFORM_VEC3);
     // Both source GLBs mark every material as double-sided.
     rlDrawRenderBatchActive();
     rlDisableBackfaceCulling();
     for (int i = 0; i < model.meshCount; ++i) {
         auto& material = model.materials[model.meshMaterial[i]];
+        const Shader original_shader = material.shader;
+        if (override_shader.id) material.shader = override_shader;
         const Color original = material.maps[MATERIAL_MAP_DIFFUSE].color;
         if (i == 0 && paint.a != 0) material.maps[MATERIAL_MAP_DIFFUSE].color = paint;
         const auto color = material.maps[MATERIAL_MAP_EMISSION].color;
         const Vector3 emission{color.r / 255.0f, color.g / 255.0f, color.b / 255.0f};
-        SetShaderValue(shader_, emission_location_, &emission, SHADER_UNIFORM_VEC3);
+        if (!override_shader.id) SetShaderValue(shader_, emission_location_, &emission, SHADER_UNIFORM_VEC3);
         DrawMesh(model.meshes[i], material, transform);
         material.maps[MATERIAL_MAP_DIFFUSE].color = original;
+        material.shader = original_shader;
     }
     rlEnableBackfaceCulling();
 }

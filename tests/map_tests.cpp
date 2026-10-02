@@ -70,6 +70,18 @@ void map_layout(const Environment& map, PhysicsWorld& world) {
     std::cout << "Compact layout: " << map.buildings().size() << " buildings; mean frontage gap "
         << frontage_gap / map.buildings().size() << " m; houses " << kinds[int(BuildingKind::House)] << '\n';
     require(map.buildings().size() >= 800 && frontage_gap / map.buildings().size() < 10, "streets still have sparse building frontage");
+    // Bayfront Avenue and the outer South Beach street retain continuous seaside views.
+    int inland_frontage = 0;
+    for (const auto& b : map.buildings()) {
+        const float left = b.center.GetX() - b.size.GetX() / 2;
+        const float right = b.center.GetX() + b.size.GetX() / 2;
+        if (std::abs(b.center.GetZ()) < 180) {
+            require(!(left > 245 && left < 420), "Bayfront building blocks the water view");
+            require(!(left > 1474 && left < 1630), "South Beach building blocks the beach view");
+            if ((right < 235 && right > 180) || (right < 1466 && right > 1400)) ++inland_frontage;
+        }
+    }
+    require(inland_frontage >= 10, "coastal streets lost their inland building frontage");
     require(tallest > 70 && tallest < 110 && kinds[int(BuildingKind::Mall)] >= 2 && kinds[int(BuildingKind::Hotel)] >= 15
         && kinds[int(BuildingKind::Cafe)] >= 10 && kinds[int(BuildingKind::Club)] >= 8
         && kinds[int(BuildingKind::House)] >= 250

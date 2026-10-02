@@ -4,6 +4,7 @@
 
 namespace forza {
 class Plane;
+struct Road;
 
 struct TrafficCar {
     std::unique_ptr<Car> car;
@@ -14,6 +15,11 @@ struct TrafficCar {
     Vec3 point = Vec3::sZero();
     Input input{};
     float plan_time = 0;
+    float horn_time = 0, horn_cooldown = 0, blocked_time = 0, pass_retry = 0;
+    bool blocked = false;
+    const Car* pass_blocker = nullptr;
+    const Road* pass_road = nullptr;
+    Vec3 pass_end = Vec3::sZero(), pass_direction = Vec3::sZero();
 };
 
 // Nearby traffic uses the player's dynamic chassis and suspension. Distant

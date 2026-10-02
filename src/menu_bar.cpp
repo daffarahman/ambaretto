@@ -9,11 +9,11 @@ constexpr Color blue{0, 0, 128, 255}, gray{192, 192, 192, 255}, ink{0, 0, 0, 255
 struct Item { const char* label; MenuCommand command; };
 constexpr Item files[] = {{"Resume game", MenuCommand::Resume}, {"Pause game", MenuCommand::Pause}, {"Quit", MenuCommand::Quit}};
 constexpr Item edits[] = {{"Recover vehicle", MenuCommand::Recover}, {"Restore car tuning", MenuCommand::CarDefaults}};
-constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Controller mapping...", MenuCommand::Controllers}};
+constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Graphics...", MenuCommand::Graphics}, {"Controller mapping...", MenuCommand::Controllers}};
 constexpr Item helps[] = {{"Controls...", MenuCommand::Controls}, {"About...", MenuCommand::About}};
 constexpr const char* titles[] = {"File", "Edit", "Settings", "Help"};
 constexpr const Item* menus[] = {files, edits, settings, helps};
-constexpr int counts[] = {3, 2, 3, 2};
+constexpr int counts[] = {3, 2, 4, 2};
 Rectangle title_rect(int menu) {
     constexpr float gap = 48;
     float x = 8;
@@ -197,6 +197,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         text("Keyboard and gamepad defaults. Edit bindings in Settings > Controller mapping.", r.x + 20, r.y + 58, 16, RAYWHITE);
         constexpr const char* lines[] = {
             "Car: W/S or left stick. Opposite direction brakes, then reverses. Space / B: handbrake.",
+            "Car horn: hold H / right-stick click. Remap keys and USB/gamepad buttons in Settings.",
             "On foot: WASD / left stick. Shift / L-stick: sprint. Space / A: jump. E / Y: enter/exit.",
             "Plane: W/S or left stick Y: pitch. A/D or left stick X: bank.",
             "Plane throttle: Shift/Ctrl or RT/LT. Rudder: arrows or LB/RB. Flaps: F / X.",
@@ -206,7 +207,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             "Tuning: drag sliders; arrows adjust; Shift is fine adjustment.",
             "Tuning camera: right-drag outside panel; scroll to zoom. Menus pause physics."
         };
-        for (int i = 0; i < 9; ++i) text(lines[i], r.x + 20, r.y + 108 + i * 30, 16, RAYWHITE);
+        for (int i = 0; i < int(std::size(lines)); ++i) text(lines[i], r.x + 20, r.y + 108 + i * 30, 16, RAYWHITE);
         button(4, "Close");
     } else {
         text("FORZA AMBAZON", r.x + 20, r.y + 90, 26, RAYWHITE);

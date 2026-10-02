@@ -5,6 +5,9 @@
 #include "car_renderer.hpp"
 #include "tuning_panel.hpp"
 #include "menu_bar.hpp"
+#include "graphics_panel.hpp"
+#include "scene_lighting.hpp"
+#include "vehicle_audio.hpp"
 #include "player.hpp"
 #include "third_person_camera.hpp"
 #include "airport.hpp"
@@ -111,10 +114,16 @@ void draw_box(const forza::Vec3& center, const forza::Quat& rotation,
     std::array<Vector3, 8> p{};
     for (std::size_t i = 0; i < p.size(); ++i) p[i] = render_vector(center + rotation * local[i]);
     constexpr int faces[6][4] = {{0,1,2,3}, {5,4,7,6}, {4,0,3,7}, {1,5,6,2}, {3,2,6,7}, {4,5,1,0}};
+    rlBegin(RL_TRIANGLES);
+    rlColor4ub(tint.r, tint.g, tint.b, tint.a);
     for (const auto& face : faces) {
-        DrawTriangle3D(p[face[2]], p[face[1]], p[face[0]], tint);
-        DrawTriangle3D(p[face[3]], p[face[2]], p[face[0]], tint);
+        const auto normal = rotation * (local[face[1]] - local[face[2]]).Cross(local[face[0]] - local[face[2]]).Normalized();
+        rlNormal3f(normal.GetX(), normal.GetY(), normal.GetZ());
+        rlTexCoord2f(0, 0);
+        for (int index : {face[2], face[1], face[0], face[3], face[2], face[0]})
+            rlVertex3f(p[index].x, p[index].y, p[index].z);
     }
+    rlEnd();
     constexpr int edges[12][2] = {{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}};
     if (outline) for (const auto& edge : edges) DrawLine3D(p[edge[0]], p[edge[1]], MAROON);
 }
@@ -126,8 +135,8 @@ Color traffic_paint(std::size_t index) {
 }
 
 void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const Camera3D& camera,
-              Color paint = {235, 235, 224, 255}) {
-    if (!renderer.draw_body(car, camera, paint)) {
+              Color paint = {235, 235, 224, 255}, Shader override_shader = {}) {
+    if (!renderer.draw_body(car, camera, paint, override_shader)) {
         const auto basis = car.rotation();
         draw_box(car.position() + car.rotate(forza::Vec3(0, forza::chassis_offset, 0)), basis,
                  forza::Vec3(float(1.85), float(0.5), float(3.7)), paint);
@@ -138,7 +147,7 @@ void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const C
         const auto mount = car.position() + car.rotate(wheel.mount);
         const auto center = car.wheel_center(wheel);
         DrawLine3D(render_vector(mount), render_vector(center), LIGHTGRAY);
-        if (renderer.draw_wheel(car, wheel, camera)) continue;
+        if (renderer.draw_wheel(car, wheel, camera, override_shader)) continue;
         auto axis = car.rotate(forza::Vec3(1, 0, 0));
         if (wheel.front) axis = forza::Quat::sRotation(car.rotate(forza::Vec3(0, 1, 0)), car.steering()) * axis;
         const float radius = car.tuning().wheel_radius, size = radius / forza::wheel_radius;
@@ -296,6 +305,8 @@ int main(int argc, char** argv) {
     std::string start_district;
     bool performance_tuning = false;
     bool start_controllers = false, start_menu = false, start_help = false;
+    bool start_graphics = false;
+    std::string quality;
     bool map_open = false, start_region_map = false, start_on_foot = false, tuning_open = false, start_at_airport = false, start_in_plane = false, start_at_traffic = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -307,6 +318,8 @@ int main(int argc, char** argv) {
         if (arg == "--tuning") tuning_open = true;
         if (arg == "--performance") { tuning_open = true; performance_tuning = true; }
         if (arg == "--controllers") start_controllers = true;
+        if (arg == "--graphics") start_graphics = true;
+        if (arg == "--quality" && i + 1 < argc) quality = argv[++i];
         if (arg == "--menu") start_menu = true;
         if (arg == "--help-menu") start_help = true;
         if (arg == "--airport") start_at_airport = true;
@@ -328,31 +341,38 @@ int main(int argc, char** argv) {
     SetExitKey(KEY_NULL);
     SetTargetFPS(60);
     InitAudioDevice();
-    bool captured = screenshot.empty() && !map_open && !tuning_open && !start_controllers && !start_menu && !start_help;
+    bool captured = screenshot.empty() && !map_open && !tuning_open && !start_controllers && !start_menu && !start_help && !start_graphics;
     bool resume_capture = screenshot.empty() && !map_open;
     bool resume_map = map_open;
     if (tuning_open) map_open = false;
     if (captured) DisableCursor();
     {
         const forza::ui::FontResource ui_font;
-        Music engine{};
-        if (IsAudioDeviceReady()) {
-            const std::string bundled = std::string(GetApplicationDirectory()) + "assets/sounds/car-engine.wav";
-            engine = LoadMusicStream(FileExists(bundled.c_str()) ? bundled.c_str() : "assets/sounds/car-engine.wav");
-        }
-        const bool engine_ready = IsMusicValid(engine);
-        float engine_pitch = .7f, engine_volume = 0;
-        if (engine_ready) {
-            engine.looping = true;
-            SetMusicPitch(engine, engine_pitch);
-            SetMusicVolume(engine, 0);
-            PlayMusicStream(engine);
-            TraceLog(LOG_INFO, "AUDIO: Car engine loop ready");
-        } else TraceLog(LOG_WARNING, "AUDIO: Engine sound unavailable; continuing without it");
+        forza::VehicleAudio vehicle_audio;
         const forza::Environment environment;
         forza::EnvironmentRenderer scenery(environment);
         forza::CarRenderer car_renderer;
         forza::TuningPanel tuning_panel;
+        forza::GraphicsPanel graphics_panel;
+        forza::SceneLighting lighting;
+        forza::GraphicsSettings graphics;
+        const auto graphics_path = std::filesystem::path(GetApplicationDirectory()) / "graphics-settings.ini";
+        std::string graphics_status;
+        if (std::filesystem::exists(graphics_path)) graphics.load(graphics_path, graphics_status);
+        if (!quality.empty()) {
+            if (quality == "low") graphics.apply_preset(forza::GraphicsPreset::Low);
+            else if (quality == "balanced") graphics.apply_preset(forza::GraphicsPreset::Balanced);
+            else if (quality == "high") graphics.apply_preset(forza::GraphicsPreset::High);
+            else { TraceLog(LOG_ERROR, "Quality must be low, balanced, or high"); return 1; }
+        }
+        const auto pacing = [&]() {
+            if (graphics.vsync) SetWindowState(FLAG_VSYNC_HINT); else ClearWindowState(FLAG_VSYNC_HINT);
+            SetTargetFPS(graphics.fps_limit);
+        };
+        pacing();
+        bool graphics_resume_capture = captured, graphics_resume_map = map_open;
+        forza::GraphicsSettings graphics_original = graphics;
+        if (start_graphics) { graphics_panel.open(graphics); map_open = false; }
         using forza::Action;
         using forza::MenuCommand;
         forza::ControllerMapping controls;
@@ -429,6 +449,7 @@ int main(int argc, char** argv) {
         double accumulator = 0;
         float notice_time = mapping_error.empty() ? 0 : 8;
         std::string notice = mapping_error;
+        if (!graphics_status.empty()) { notice = "Graphics defaults in use: " + graphics_status; notice_time = 8; TraceLog(LOG_WARNING, "%s", notice.c_str()); }
         bool jump_pending = false, discard_mouse = true, orbit_dragging = false, map_dragging = false, flaps = false;
         int rendered_frames = 0;
         bool quit_requested = false;
@@ -476,13 +497,45 @@ int main(int argc, char** argv) {
                 if (!IsWindowFocused()) {
                     if (captured) EnableCursor();
                     captured = false; resume_capture = false;
-                    tuning_panel.cancel_drag(); orbit_dragging = false; map_dragging = false; discard_mouse = true;
+                    tuning_panel.cancel_drag(); graphics_panel.cancel_drag(); orbit_dragging = false; map_dragging = false; discard_mouse = true;
                 }
                 const auto command = menu.update(controls, mapping_path, !captured, controller_input);
                 if (menu.blocking() || menu.interacted()) {
                     mode_changed = true; jump_pending = false; discard_mouse = true;
-                    tuning_panel.cancel_drag(); orbit_dragging = false; map_dragging = false;
+                    tuning_panel.cancel_drag(); graphics_panel.cancel_drag(); orbit_dragging = false; map_dragging = false;
                     if (captured) { captured = false; EnableCursor(); }
+                }
+                const auto close_graphics = [&](bool cancel) {
+                    if (cancel) { graphics = graphics_original; pacing(); }
+                    graphics_panel.close(); map_open = graphics_resume_map;
+                    captured = graphics_resume_capture && IsWindowFocused() && !map_open && !menu.blocking();
+                    if (captured) DisableCursor(); else EnableCursor();
+                    discard_mouse = true; mode_changed = true;
+                };
+                const bool graphics_to_map = graphics_panel.visible() && command == MenuCommand::Map;
+                if (graphics_panel.visible() && command != MenuCommand::None && command != MenuCommand::Graphics) close_graphics(true);
+                if (graphics_to_map) map_open = false;
+                if (command == MenuCommand::Graphics && !graphics_panel.visible()) {
+                    if (tuning_open) toggle_tuning();
+                    graphics_original = graphics;
+                    graphics_resume_capture = captured; graphics_resume_map = map_open;
+                    graphics_panel.open(graphics); graphics_status.clear();
+                    captured = false; map_open = false; EnableCursor(); mode_changed = true;
+                    jump_pending = false; accumulator = 0;
+                }
+                if (graphics_panel.visible() && !mode_changed && !menu.blocking() && !menu.interacted()) {
+                    const auto action = graphics_panel.update();
+                    if (action == forza::GraphicsPanelAction::Preview) {
+                        const auto old = graphics;
+                        graphics = graphics_panel.pending();
+                        if (old.vsync != graphics.vsync || old.fps_limit != graphics.fps_limit) pacing();
+                        graphics_status.clear();
+                    } else if (action == forza::GraphicsPanelAction::Apply) {
+                        if (graphics_panel.pending().save(graphics_path, graphics_status)) {
+                            graphics = graphics_panel.pending(); pacing(); close_graphics(false);
+                            notice = "Graphics settings saved"; notice_time = 3;
+                        }
+                    } else if (action == forza::GraphicsPanelAction::Cancel) close_graphics(true);
                 }
                 if (command == MenuCommand::Quit) quit_requested = true;
                 if (command == MenuCommand::Resume) {
@@ -498,7 +551,7 @@ int main(int argc, char** argv) {
                     scene->reset(); snap_camera(); accumulator = 0; jump_pending = false; flaps = false;
                 }
                 if (command == MenuCommand::CarDefaults) scene->player.car().set_tuning({});
-                const bool shortcuts = IsWindowFocused() && !menu.blocking() && !menu.interacted();
+                const bool shortcuts = IsWindowFocused() && !menu.blocking() && !menu.interacted() && !graphics_panel.visible() && !mode_changed;
                 if (command == MenuCommand::Tuning || (shortcuts && controls.pressed(Action::Tuning))) {
                     if (scene->player.flying()) { notice = "Land and exit the plane before tuning the car"; notice_time = 3; }
                     else toggle_tuning();
@@ -559,14 +612,14 @@ int main(int argc, char** argv) {
                     orbit_dragging = dragging;
                     SetMouseCursor(tuning_open && !outside ? MOUSE_CURSOR_DEFAULT : dragging ? MOUSE_CURSOR_RESIZE_ALL : MOUSE_CURSOR_DEFAULT);
                 }
-                if (!captured && !map_open && !tuning_open && !menu.blocking() && !mode_changed && IsWindowFocused() &&
+                if (!captured && !map_open && !tuning_open && !graphics_panel.visible() && !menu.blocking() && !mode_changed && IsWindowFocused() &&
                     GetMousePosition().y >= forza::menu_height && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                     captured = true; DisableCursor(); discard_mouse = true;
                 }
             }
-            const bool active = !map_open && !tuning_open && !menu.blocking() && !mode_changed &&
+            const bool active = !map_open && !tuning_open && !graphics_panel.visible() && !menu.blocking() && !mode_changed &&
                 (!screenshot.empty() || (captured && IsWindowFocused()));
-            const bool simulate = !map_open && !menu.blocking() && (active || (tuning_open && (!screenshot.empty() || IsWindowFocused())));
+            const bool simulate = !map_open && !graphics_panel.visible() && !menu.blocking() && (active || (tuning_open && (!screenshot.empty() || IsWindowFocused())));
             day_night.advance(elapsed, screenshot.empty() && simulate);
             if (active && screenshot.empty()) {
                 if (controls.pressed(Action::Recover)) {
@@ -629,21 +682,6 @@ int main(int argc, char** argv) {
                 if (!scene->player.flying() && scene->plane.position().GetY() < -.6f) scene->player.recover_plane();
                 accumulator -= double(forza::fixed_step);
             }
-            if (engine_ready) {
-                const auto& car = scene->player.car();
-                const float speed = car.velocity().Dot(car.forward());
-                // ponytail: speed/throttle approximate revs; use drivetrain RPM if gears are simulated.
-                const float revs = std::clamp(std::abs(speed) / (speed < 0 ? 11.0f : car.tuning().top_speed), 0.0f, 1.0f);
-                const float throttle = driving.throttle * speed >= 0 ? std::abs(driving.throttle) : 0;
-                const float target_pitch = .7f + 1.5f * revs + .2f * throttle;
-                const float target_volume = simulate && scene->player.driving() && screenshot.empty()
-                    ? .22f + .18f * revs + .25f * throttle : 0;
-                engine_pitch += (target_pitch - engine_pitch) * (1 - std::exp(-8 * frame));
-                engine_volume += (target_volume - engine_volume) * (1 - std::exp(-10 * frame));
-                SetMusicPitch(engine, engine_pitch);
-                SetMusicVolume(engine, engine_volume);
-                UpdateMusicStream(engine);
-            }
             const auto target = focus();
             const auto desired = orbit.desired_position(target, tuning_open || scene->player.driving(), !tuning_open && scene->player.flying());
             const float follow = 1 - std::exp(-12 * frame);
@@ -655,12 +693,64 @@ int main(int argc, char** argv) {
             const float fraction = scene->world.camera_fraction(camera_target, offset,
                 (tuning_open || scene->player.driving()) ? scene->player.car().body_id() : scene->player.flying() ? scene->plane.body_id() : JPH::BodyID());
             camera.position = render_vector(camera_target + offset * fraction);
+            vehicle_audio.update(scene->traffic, scene->player.car(), scene->player.position(),
+                orbit.forward().Cross(forza::Vec3::sAxisY()), scene->player.driving(),
+                active && controls.value(Action::Horn) > .5f, simulate && screenshot.empty(), frame, driving.throttle);
             const Camera3D view = camera;
             rlSetClipPlanes(0.2, 30000);
             notice_time = std::max(0.0f, notice_time - frame);
             BeginDrawing();
             const auto daylight = day_night.lighting();
             ClearBackground(BLACK);
+            if (!map_open) {
+                std::array<forza::SceneLight, forza::SceneLighting::max_lights> nearby_lights{};
+                int light_count = 0;
+                if (graphics.local_lights && daylight.night > .01f) {
+                    const auto headlights = [&](const forza::Car& car) {
+                        if (light_count + 2 > forza::SceneLighting::max_lights) return;
+                        for (float side : {-1.0f, 1.0f}) nearby_lights[light_count++] = {
+                            render_vector(car.position() + car.rotate(forza::Vec3(side * .65f, .40f, -1.83f))),
+                            {2.6f * daylight.night, 2.3f * daylight.night, 1.8f * daylight.night}, 48,
+                            render_vector((car.forward() + forza::Vec3(0, -.13f, 0)).Normalized()), .87f};
+                    };
+                    headlights(scene->player.car());
+                    for (const auto& vehicle : scene->traffic.cars())
+                        if (light_count < 6 && vehicle.car.get() != &scene->player.car() && vehicle.car->simulated() &&
+                            (vehicle.car->position() - scene->player.position()).LengthSq() < 45 * 45) headlights(*vehicle.car);
+                    const int first_lamp = light_count;
+                    std::array<float, forza::SceneLighting::max_lights> distances{};
+                    distances.fill(1e30f);
+                    const auto p = scene->player.position();
+                    for (const auto& lamp : scenery.lights()) {
+                        const float distance = (forza::Vec3(lamp.position.x, lamp.position.y, lamp.position.z) - p).LengthSq();
+                        if (distance > (lamp.radius + 50) * (lamp.radius + 50)) continue;
+                        for (int i = first_lamp; i < forza::SceneLighting::max_lights; ++i) if (distance < distances[i]) {
+                            for (int j = forza::SceneLighting::max_lights - 1; j > i; --j) { distances[j] = distances[j - 1]; nearby_lights[j] = nearby_lights[j - 1]; }
+                            distances[i] = distance; nearby_lights[i] = lamp;
+                            nearby_lights[i].color.x *= daylight.night; nearby_lights[i].color.y *= daylight.night; nearby_lights[i].color.z *= daylight.night;
+                            light_count = std::min(light_count + 1, forza::SceneLighting::max_lights); break;
+                        }
+                    }
+                }
+                lighting.set_lights(nearby_lights.data(), light_count);
+                const auto shadow_focus = render_vector(scene->player.position());
+                if (lighting.begin_shadow(shadow_focus, daylight, graphics)) {
+                    const auto shader = lighting.shadow_shader();
+                    // Include tall, sunward casters throughout the light's depth volume.
+                    scenery.draw_shadow(shader, shadow_focus, graphics.shadow_distance * 3 + 250);
+                    draw_car(scene->car, car_renderer, view, {235, 235, 224, 255}, shader);
+                    for (std::size_t i = 0; i < scene->traffic.cars().size(); ++i) {
+                        const auto& vehicle = scene->traffic.cars()[i];
+                        if (vehicle.car->simulated() && (vehicle.car->position() - scene->player.position()).LengthSq() <
+                            (graphics.shadow_distance + 15) * (graphics.shadow_distance + 15))
+                            draw_car(*vehicle.car, car_renderer, view, traffic_paint(i), shader);
+                    }
+                    if ((scene->plane.position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
+                        draw_plane(scene->plane, scene->player.flying());
+                    if (scene->player.on_foot()) draw_character(scene->player.character(), environment);
+                    lighting.end_shadow();
+                }
+            }
             if (map_open) {
                 ClearBackground({0, 0, 112, 255});
                 forza::ui::draw_text("MIAMI & FLORIDA KEYS / MAP", 26, 48, 22, RAYWHITE);
@@ -678,24 +768,25 @@ int main(int argc, char** argv) {
                 forza::ui::draw_text("Drag: pan / Wheel: zoom / Arrows or left stick: pan", 26, GetScreenHeight() - 66, 16, RAYWHITE);
                 forza::ui::draw_text("Home: region / C: player / +/-: zoom / F2 or Esc: close", 26, GetScreenHeight() - 40, 16, RAYWHITE);
             } else {
-                scenery.draw_sky(view, daylight, float(GetTime()));
-                car_renderer.set_lighting(daylight);
+                scenery.draw_sky(view, daylight, float(GetTime()), graphics);
+                car_renderer.set_lighting(lighting, view, daylight, graphics);
                 BeginMode3D(view);
-                scenery.draw(view, float(GetTime()), daylight);
+                scenery.draw(view, float(GetTime()), daylight, lighting, graphics);
                 BeginShaderMode(scenery.object_shader());
                 draw_skid_marks(scene->marks);
                 draw_car(scene->car, car_renderer, view);
                 for (std::size_t i = 0; i < scene->traffic.cars().size(); ++i) {
                     const auto& vehicle = scene->traffic.cars()[i];
                     if (!vehicle.car->simulated()) continue;
-                    if ((vehicle.car->position() - scene->player.position()).LengthSq() > 1000 * 1000) continue;
+                    const auto delta = vehicle.car->position() - forza::Vec3(view.position.x, view.position.y, view.position.z);
+                    if (delta.GetX() * delta.GetX() + delta.GetZ() * delta.GetZ() > graphics.view_distance * graphics.view_distance) continue;
                     draw_car(*vehicle.car, car_renderer, view, traffic_paint(i));
                 }
                 draw_plane(scene->plane, scene->player.flying());
                 if (scene->player.on_foot()) draw_character(scene->player.character(), environment);
                 EndShaderMode();
                 EndMode3D();
-                draw_hud(*scene, driving.handbrake, captured || tuning_open || !screenshot.empty(), tuning_open, flaps);
+                draw_hud(*scene, driving.handbrake, captured || tuning_open || graphics_panel.visible() || !screenshot.empty(), tuning_open, flaps);
                 if (!tuning_open) scenery.minimap(scene->car, scene->plane, scene->player.position(), scene->player.forward(), view, &scene->traffic);
                 const auto region = scene->player.position();
                 if (!tuning_open) {
@@ -712,6 +803,7 @@ int main(int argc, char** argv) {
             const auto clock = day_night.clock();
             forza::ui::draw_text(clock.data(), clock_x + (180 - forza::ui::measure_text(clock.data(), 24)) / 2,
                 clock_y + 8, 24, {174, 231, 246, 255});
+            if (graphics_panel.visible()) graphics_panel.draw(float(GetFPS()), graphics_status.empty() && lighting.warning() ? lighting.warning() : graphics_status);
             menu.draw(controls, mapping_path, captured);
             EndDrawing();
             if (!screenshot.empty() && ++rendered_frames >= 90) {
@@ -722,7 +814,6 @@ int main(int argc, char** argv) {
             }
         }
         if (!menu.save_pending(controls, mapping_path)) TraceLog(LOG_ERROR, "Could not save controller mappings; previous file retained");
-        if (engine_ready) UnloadMusicStream(engine);
     }
     EnableCursor();
     if (IsAudioDeviceReady()) CloseAudioDevice();

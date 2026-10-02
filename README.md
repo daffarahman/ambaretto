@@ -43,7 +43,11 @@ cmake --build --preset ucrt64
 
 ## Controls
 
-The DOS-style menubar groups commands under **File** (resume, pause, quit), **Edit** (recover vehicle, restore car tuning), **Settings** (world map, car tuning, controller mapping), and **Help** (controls, about). Press **F10** to release the mouse and open it; navigate with arrows and Enter, or click menus while paused. Escape closes menus. Opening a dropdown or dialog pauses gameplay, including flight and live tuning. Resume through File, a gameplay click, or the mapped Pause/resume button (Start by default).
+The DOS-style menubar groups commands under **File** (resume, pause, quit), **Edit** (recover vehicle, restore car tuning), **Settings** (world map, car tuning, graphics, controller mapping), and **Help** (controls, about). Press **F10** to release the mouse and open it; navigate with arrows and Enter, or click menus while paused. Escape closes menus. Opening a dropdown or dialog pauses gameplay, including flight and live tuning. Resume through File, a gameplay click, or the mapped Pause/resume button (Start by default).
+
+Open **Settings > Graphics** for the blue DOS graphics panel. **Low**, **Balanced** (default), and **High** presets adjust rendering cost; individual changes become **Custom**. Controls include sunlight shadows (Off / 512 / 1024 / 2048), soft edges, shadow distance (30–180 m), nearby city and vehicle lights, view distance (500–6000 m), brightness (60–150%), VSync, and frame limits (30 / 60 / 120 / 144 / 240 / unlimited). The panel explains each control and shows current FPS. Tab selects controls and buttons; arrows adjust, Shift makes smaller slider steps, and mouse dragging or scrolling adjusts values. Ctrl+D restores Balanced.
+
+Changes preview immediately while gameplay and the clock pause. **Apply & save** writes `graphics-settings.ini` beside the executable; **Cancel / Escape** restores the previous settings. A failed save leaves the panel open and the previous file intact. Invalid settings files retain defaults and display a notice. Cars, buildings, and trees cast nearby sunlight shadows, including transparent leaf gaps; streetlights, shops, runway fixtures and directional headlights illuminate nearby surfaces at night. City and tree batches are split into spatial chunks so shorter view distances reduce GPU work. Distant illuminated windows remain visible when nearby lights are disabled. VSync can cap rendering to the monitor rate even with Unlimited selected. Use `--graphics` to start in the panel or `--quality low|balanced|high` for a temporary preset without saving it.
 
 Open **Settings > Controller mapping** to select an action and **Add binding**, then press a keyboard key or gamepad button, or move a stick/trigger. Added bindings coexist with defaults; select a binding and **Remove binding** to replace a default. Up/Down selects actions, Left/Right selects bindings; scroll either list for more entries. Escape cancels capture; F10 is reserved for the menubar. **Defaults** restores all keyboard/gamepad bindings. **Deadzone** cycles 5–50% in 5% steps to tune stick drift. Changes save immediately; **Save & close** or Escape also retries any pending save. Save failures keep the editor open, display an error, and leave the previous file intact.
 
@@ -67,6 +71,7 @@ Gamepad defaults: left stick drives/walks and pitches/banks the plane; right sti
 | W / S | Drive forward / reverse; opposite direction brakes first |
 | A / D | Steer left / right |
 | Space | Rear handbrake / drift |
+| H / gamepad right-stick click | Hold the car horn; remappable in Controller mapping |
 | E | Enter the nearest car or plane / steal a nearby stopped traffic car / exit when stopped on the ground |
 | WASD (on foot) | Move relative to the camera |
 | Shift (on foot) | Sprint |
@@ -83,7 +88,7 @@ Gamepad defaults: left stick drives/walks and pitches/banks the plane; right sti
 
 Player-controlled cars coast when you release W/S or the left stick. Hold the opposite direction to brake to a stop; after a 0.25-second pause, the car drives in that direction. Releasing the input cancels the change. This works in both directions and in stolen cars. NPC braking is unchanged.
 
-The player's car engine loops `assets/sounds/car-engine.wav`. Pitch and volume smoothly follow speed and throttle in forward and reverse; the loop idles when stopped and mutes while paused, on foot, or flying. Raylib handles streaming and looping. Run `powershell -NoProfile -ExecutionPolicy Bypass -File tests/engine_audio_smoke.ps1` to check audio initialization and WAV streaming on a machine with audio output.
+Player and nearby NPC engines loop `assets/sounds/car-engine.wav`, with pitch and volume following speed and throttle. Hold **H** or **right-stick click** while driving to sound `assets/sounds/car-horn.wav`; release to stop. The horn's quiet tail is removed and its seam crossfaded in memory at startup, leaving the original asset unchanged. Raylib streams the continuous loop. Nearby cars use distance attenuation and stereo panning; shared audio data and a fixed voice pool bound the decoding and mixing cost. Vehicle audio fades while gameplay is paused, and the player's engine is silent on foot or in the plane. Run `powershell -NoProfile -ExecutionPolicy Bypass -File tests/engine_audio_smoke.ps1` to check audio initialization and WAV streaming on a machine with audio output.
 
 Build speed before holding Space and A or D to start a slide. Use W to keep driving through it; release Space and straighten or countersteer to regain grip.
 
@@ -91,9 +96,11 @@ Press E while stopped or moving slowly to leave the car. Walk back within a few 
 
 ### NPC traffic and stealing cars
 
-354 NPC cars travel through downtown, Miami Beach, the airport neighborhoods, both bay causeways, the Keys villages, and the full Overseas Highway. Local traffic follows the same street corners used to build the map. Up to 48 nearby NPC cars use full Jolt physics; distant traffic advances along its lanes and becomes physical when you approach. Stolen cars remain physical and retain your ownership between districts. Cars keep dark tinted windows without visible NPC occupants. Traffic slows for corners, queues behind vehicles, and stops when you approach on foot. Green minimap dots mark NPC cars; blue dots mark cars available to reenter after taking them.
+354 NPC cars travel through downtown, Miami Beach, the airport neighborhoods, both bay causeways, the Keys villages, and the full Overseas Highway. Local traffic follows the same street corners used to build the map. Up to 48 nearby NPC cars use full Jolt physics; distant traffic advances along its lanes and becomes physical when you approach. Stolen cars remain physical and retain your ownership between districts. Cars keep dark tinted windows without visible NPC occupants. Traffic slows for corners, queues behind vehicles, and stops when you approach on foot. A sudden obstruction gets a brief warning horn; a long vehicle queue gets spaced horn bursts with an 8–11-second cooldown. Pedestrians get a single danger warning and continued yielding, with no repeated queue horns. Green minimap dots mark NPC cars; blue dots mark cars available to reenter after taking them.
 
-Leave your car with E, walk beside a stopped traffic car, and press E when **Press E to steal traffic car** appears. Entry requires a clear path, a distance within 3.3 meters, and speed below 2.5 m/s. Stealing stops the car's AI control and gives you immediate WASD control. The camera, speed display, drifting, F3 tuning, and R/water recovery all follow the car you take. Exit and reenter it as usual, or steal another car. Abandoned cars stay parked, and tuning stays with each individual car for the session. Displaced or stuck NPC cars recover into clear road space when more than 35 meters from the player.
+After waiting behind a stationary vehicle, NPCs can pass on straight roads at least 9 meters wide. They check road edges, nearby obstacles, approaching cars and the complete merge path before changing lanes, pass at up to 4.5 m/s, and return to their route. Bridges, junctions, narrow streets and blocked passing lanes remain single-file. Passing searches run only for blocked cars, at most once per second; normal steering plans retain their existing rate. Six nearby NPC audio pairs reuse shared engine/horn recordings, with no file loading or audio allocation during gameplay.
+
+Leave your car with E, walk beside a stopped traffic car, and press E when **Press E to steal traffic car** appears. Entry requires a clear path, a distance within 3.3 meters, and speed below 2.5 m/s. Stealing stops the car's AI control and gives you immediate WASD control. The camera, speed display, drifting, F3 tuning, and R/water recovery all follow the car you take. Exit and reenter it as usual, or steal another car. Abandoned cars stay parked, and tuning stays with each individual car for the session. Displaced NPC cars recover into clear road space when more than 35 meters from the player; ordinary traffic queues wait or pass instead of teleporting.
 
 Start beside a traffic car, ready to steal it, or capture a preview:
 
@@ -226,7 +233,11 @@ All source, build configuration, and checks use C++; no Go toolchain is needed.
 
 `day_night_cycle` checks the cycle length, pause, midnight rollover, 24-hour time validation, fractional frame timing and dawn/sunset colors.
 
+`graphics_settings` checks presets, validation, atomic file replacement, failed-save preservation, reversible previews and keyboard/slider interaction at the minimum window size. `scene_lighting` creates a hidden OpenGL window and checks actual framebuffer pixels for sunlight shadows, quality changes, local light toggles, directional headlights and brightness.
+
 `controller_mapping` checks default and additional bindings, generic USB button/axis/D-pad capture, held-button handling, raw versus standardized layouts, analog deadzones/triggers, one-shot actions, disconnected pads, file replacement, round-trip persistence, and invalid-file handling. Preview the new UI with `--controllers`, `--menu`, or `--help-menu`, optionally combined with `--screenshot`.
+
+`vehicle_audio` checks the supplied recordings' trimmed loop lengths, quiet gaps, circular crossfade seams, native WAV decoding and positional falloff/panning. Run `vehicle_audio_tests.exe --playback` for a muted continuous-stream check across several horn loops. `traffic_and_theft` also checks danger/queue horn timing, pedestrian yielding, passing and merging, blocked/oncoming lanes, narrow streets and bridges.
 
 For a rendered map preview (saves the image and exits):
 

@@ -118,8 +118,9 @@ void braking_and_theft() {
 
     Car& second = *traffic.cars()[1].car;
     second.set_simulated(true);
-    second.reset(ground(map, 200, 85));
-    player.character().reset(ground(map, 198, 85, .08f));
+    // Board on Bayfront Lane, clear of procedural building and tree lots.
+    second.reset(ground(map, 180, 85));
+    player.character().reset(ground(map, 178, 85, .08f));
     require(player.can_steal() && player.interact() == Interaction::Entered && &player.car() == &second,
         "could not switch to a second NPC car");
     tick(player, 240);
@@ -137,32 +138,169 @@ void braking_and_theft() {
     require(player.interact() == Interaction::Exited, "plane exit broke with traffic enabled");
 }
 
+void isolate(Traffic& traffic, std::size_t keep = 0) {
+    for (std::size_t i = 0; i < traffic.cars().size(); ++i) {
+        if (i == keep) continue;
+        traffic.steal(*traffic.cars()[i].car);
+        traffic.cars()[i].car->set_simulated(false);
+    }
+    traffic.cars()[keep].car->set_simulated(true);
+}
+
 void traffic_obstructions() {
     Environment map;
     PhysicsWorld world(map);
     Car starter(world);
     Traffic traffic(world, map);
-    Player player(world, starter, map, nullptr, &traffic);
-    starter.reset(ground(map, 4, 74));
+    isolate(traffic);
+    starter.reset(ground(map, 2.2f, 155));
     Car& follower = *traffic.cars().front().car;
-    follower.reset(ground(map, 4, 100));
+    follower.reset(ground(map, 2.2f, 178));
     const Vec3 parked = starter.position();
-    tick(player, 1200, {0, 0, false, true});
+    bool queued = false, passed = false;
+    float closest = 100, widest = 0;
+    for (int step = 0; step < 120 * 20; ++step) {
+        starter.step({0, 0, false, true});
+        traffic.step(&starter, starter, nullptr, nullptr, starter.position());
+        world.step();
+        closest = std::min(closest, (follower.position() - starter.position()).Length());
+        widest = std::max(widest, std::abs(follower.position().GetX()));
+        queued |= follower.velocity().Length() < 1 && follower.position().GetZ() > 159;
+        passed |= traffic.cars().front().pass_blocker != nullptr;
+    }
     std::cout << "Parked car displacement: " << (starter.position() - parked).Length()
         << "; follower clearance: " << (follower.position() - starter.position()).Length()
         << ", speed " << follower.velocity().Length() << '\n';
     require((starter.position() - parked).Length() < .8f, "traffic rear-ended the parked player car");
-    require(follower.position().GetZ() > starter.position().GetZ() + 4 && follower.velocity().Length() < 1,
-        "NPC did not queue behind a parked car");
+    require(queued && passed && follower.position().GetZ() < 140 && std::abs(follower.position().GetX() - 2.2f) < 1,
+        "NPC did not safely pass and return to its lane");
+    require(closest > 3.5f && widest < 3.3f, "passing car left its road or clipped the parked car");
+}
+
+void traffic_horns_and_safety() {
+    Environment map;
+    // A suddenly appearing stopped car gets a short warning, including between cached plans.
+    {
+        PhysicsWorld world(map); Car starter(world); Traffic traffic(world, map);
+        isolate(traffic);
+        Car& follower = *traffic.cars().front().car;
+        starter.reset(ground(map, -180, 155));
+        follower.reset(ground(map, 2.2f, 175));
+        for (int step = 0; step < 240; ++step) {
+            starter.step({0, 0, false, true});
+            traffic.step(&starter, starter, nullptr, nullptr, follower.position()); world.step();
+        }
+        require(follower.velocity().Length() > 4, "warning check did not reach driving speed");
+        starter.reset(ground(map, follower.position().GetX(), follower.position().GetZ() - 12));
+        bool warned = false;
+        for (int step = 0; step < 60; ++step) {
+            starter.step({0, 0, false, true});
+            traffic.step(&starter, starter, nullptr, nullptr, follower.position()); world.step();
+            warned |= traffic.cars().front().horn_time > 0;
+        }
+        require(warned && traffic.cars().front().horn_time == 0 && traffic.cars().front().horn_cooldown > 7,
+            "sudden vehicle warning was absent, held, or repeated");
+        traffic.steal(follower);
+        require(traffic.cars().front().horn_time == 0 && traffic.cars().front().horn_cooldown == 0,
+            "stolen car retained its NPC horn state");
+    }
+    // One warning for a pedestrian stepping into the lane; standing there never provokes queue horns.
+    {
+        PhysicsWorld world(map); Car starter(world); Traffic traffic(world, map);
+        isolate(traffic);
+        Car& follower = *traffic.cars().front().car;
+        starter.reset(ground(map, -180, 155)); follower.reset(ground(map, 2.2f, 175));
+        for (int step = 0; step < 240; ++step) {
+            starter.step({0, 0, false, true});
+            traffic.step(&starter, starter, nullptr, nullptr, follower.position()); world.step();
+        }
+        const Vec3 pedestrian = ground(map, follower.position().GetX(), follower.position().GetZ() - 8, .08f);
+        float closest = 100; int bursts = 0; bool horn = false;
+        for (int step = 0; step < 120 * 14; ++step) {
+            starter.step({0, 0, false, true});
+            traffic.step(&starter, starter, nullptr, &pedestrian, follower.position()); world.step();
+            const bool active = traffic.cars().front().horn_time > 0;
+            if (active && !horn) ++bursts;
+            horn = active; closest = std::min(closest, (follower.position() - pedestrian).Length());
+            require(!traffic.cars().front().pass_blocker, "NPC overtook a pedestrian in its lane");
+        }
+        require(bursts == 1 && closest > 3.5f && follower.velocity().Length() < .5f,
+            "NPC pedestrian warning or continued yielding was unsafe");
+    }
+    // A parked car in the opposite lane prevents passing; long queues get separated bursts and no recovery teleport.
+    {
+        PhysicsWorld world(map); Car starter(world); Traffic traffic(world, map);
+        isolate(traffic);
+        Car& follower = *traffic.cars().front().car;
+        Car& opposite = *traffic.cars()[1].car;
+        opposite.set_simulated(true); opposite.reset(ground(map, -2.2f, 156), 3.14159265f);
+        starter.reset(ground(map, 2.2f, 155)); follower.reset(ground(map, 2.2f, 178));
+        int bursts = 0; bool horn = false; float first = -1, previous = -1;
+        for (int step = 0; step < 120 * 26; ++step) {
+            starter.step({0, 0, false, true});
+            traffic.step(&starter, starter, nullptr, nullptr, ground(map, 2.2f, 225)); world.step();
+            const bool active = traffic.cars().front().horn_time > 0;
+            if (active && !horn) {
+                const float now = step * fixed_step;
+                if (previous >= 0) require(now - previous > 7.9f, "queue horn repeated without its cooldown");
+                else first = now;
+                previous = now; ++bursts;
+            }
+            horn = active;
+            require(!traffic.cars().front().pass_blocker, "NPC passed into an occupied opposite lane");
+        }
+        require(bursts >= 2 && bursts <= 3 && first > 6, "long queue horn timing was absent or excessive");
+        require(follower.position().GetZ() > 165 && follower.position().GetZ() < 169
+            && follower.velocity().Length() < .5f, "queued NPC collided or teleported around its obstruction");
+    }
+    // An approaching car is projected through the whole pass, rather than just checked at its current location.
+    {
+        PhysicsWorld world(map); Car starter(world); Traffic traffic(world, map);
+        isolate(traffic);
+        Car& follower = *traffic.cars().front().car;
+        Car& opposite = *traffic.cars()[1].car;
+        opposite.set_simulated(true); opposite.reset(ground(map, -2.2f, 137), 3.14159265f);
+        starter.reset(ground(map, 2.2f, 155)); follower.reset(ground(map, 2.2f, 178));
+        for (int step = 0; step < 120 * 10; ++step) {
+            starter.step({0, 0, false, true}); opposite.step({.04f, 0});
+            traffic.step(&opposite, starter, nullptr, nullptr, follower.position()); world.step();
+            require(!traffic.cars().front().pass_blocker, "NPC started a pass into approaching traffic");
+        }
+        require(follower.position().GetZ() > 165 && std::abs(follower.position().GetX() - 2.2f) < .5f,
+            "NPC left its lane while waiting for approaching traffic");
+    }
+    // Narrow residential streets and bridge decks stay single-file even with a clear opposite lane.
+    for (bool bridge : {false, true}) {
+        PhysicsWorld world(map); Car starter(world); Traffic traffic(world, map);
+        const std::size_t index = bridge ? traffic.cars().size() - 1 : 16 * 3;
+        isolate(traffic, index);
+        Car& follower = *traffic.cars()[index].car;
+        const float x = bridge ? -362.2f : -1042.2f, z = bridge ? 1000 : 0;
+        constexpr float direction = 1, yaw = 3.14159265f;
+        follower.reset(ground(map, x, z), yaw);
+        starter.reset(ground(map, x, z + direction * 24), yaw);
+        for (int step = 0; step < 120 * 12; ++step) {
+            starter.step({0, 0, false, true});
+            traffic.step(&starter, starter, nullptr, nullptr, starter.position()); world.step();
+            require(!traffic.cars()[index].pass_blocker, "NPC overtook on a narrow street or bridge");
+        }
+        std::cout << "Queue " << (bridge ? "bridge" : "narrow") << ": " << follower.position().GetX()
+            << ',' << follower.position().GetZ() << " speed=" << follower.velocity().Length()
+            << " clearance=" << (follower.position() - starter.position()).Length() << '\n';
+        require(std::abs(follower.position().GetX() - x) < .6f && follower.velocity().Length() < .5f
+            && (follower.position() - starter.position()).Length() > 8,
+            "NPC did not safely queue on a narrow street or bridge");
+    }
 }
 } // namespace
 int main(int argc, char** argv) {
     try {
         const std::string check = argc > 1 ? argv[1] : "all";
-        require(check == "all" || check == "roads" || check == "theft" || check == "obstructions", "unknown traffic check");
+        require(check == "all" || check == "roads" || check == "theft" || check == "obstructions" || check == "safety", "unknown traffic check");
         if (check == "all" || check == "roads") roads_and_driving();
         if (check == "all" || check == "theft") braking_and_theft();
         if (check == "all" || check == "obstructions") traffic_obstructions();
+        if (check == "all" || check == "safety") traffic_horns_and_safety();
         std::cout << "All traffic and theft checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

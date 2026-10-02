@@ -9,7 +9,7 @@ namespace forza {
 enum class Action {
     Forward, Backward, Left, Right, Brake, Interact, Sprint, Jump,
     ThrottleUp, ThrottleDown, RudderLeft, RudderRight, Flaps, Recover,
-    Map, Tuning, Pause, LookLeft, LookRight, LookUp, LookDown, ZoomIn, ZoomOut, Count
+    Map, Tuning, Pause, LookLeft, LookRight, LookUp, LookDown, ZoomIn, ZoomOut, Horn, Count
 };
 constexpr int action_count = int(Action::Count);
 extern const std::array<const char*, action_count> action_labels;
