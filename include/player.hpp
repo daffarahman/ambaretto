@@ -26,7 +26,7 @@ struct BodyPartPose {
 
 class Character {
 public:
-    explicit Character(PhysicsWorld& world);
+    explicit Character(PhysicsWorld& world, const Environment* environment = nullptr);
     ~Character();
     Character(const Character&) = delete;
     Character& operator=(const Character&) = delete;
@@ -34,6 +34,8 @@ public:
     void step(FootInput input, float dt = fixed_step);
     void set_enabled(bool enabled);
     bool ragdolling() const;
+    bool swimming() const;
+    void start_swimming(const Vec3& surface, float yaw = 0);
     // Velocity is inherited by every body; impulse is applied to the torso in N s.
     void ragdoll(const Vec3& inherited_velocity, const Vec3& impulse = Vec3::sZero());
     void hit_by(const Car& car, float dt = fixed_step);

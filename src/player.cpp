@@ -7,7 +7,7 @@
 
 namespace forza {
 Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane, Traffic* traffic, Pedestrians* pedestrians)
-    : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world), plane_(plane), traffic_(traffic),
+    : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world, &environment), plane_(plane), traffic_(traffic),
       pedestrians_(pedestrians) { reset(); }
 
 void Player::reset() {
@@ -57,7 +57,9 @@ Player::EntryTarget Player::entry_target() const {
                               float range, bool allowed, Car* car = nullptr) {
         const Vec3 difference = feet - position;
         const float distance = difference.Length();
-        if (!allowed || velocity.Length() > 2.5f || distance > range || distance >= nearest
+        if (!allowed || (position.GetY() < Environment::water_level + .1f
+            && environment_.terrain_height(position.GetX(), position.GetZ()) < Environment::water_level - 1)
+            || velocity.Length() > 2.5f || distance > range || distance >= nearest
             || std::abs(difference.GetY()) > 1.8f) return;
         if (world_.camera_fraction(eye, position + Vec3(0, .7f, 0) - eye, body) < .98f) return;
         result = {kind, car}; nearest = distance;
@@ -90,21 +92,30 @@ Interaction Player::interact() {
         return Interaction::Entered;
     }
     const Vec3 inherited_velocity = flying_ ? plane_->velocity() : car_->velocity();
+    const bool water_exit = position().GetY() < Environment::water_level + .1f
+        && environment_.terrain_height(position().GetX(), position().GetZ()) < Environment::water_level - 1;
     const bool bailout = inherited_velocity.Length() > 2.5f || (flying_ && !plane_->grounded());
-    // Try both doors, then farther alongside and behind the car. Each exit
-    // needs ground, free capsule space, and a clear path from the vehicle.
+    // Try both doors, then farther alongside and behind the vehicle.
+    // Water exits also search around submerged wrecks for free surface space.
     const Vec3 car_exits[] = {Vec3(-2, 0, 0.35f), Vec3(2, 0, 0.35f),
         Vec3(-2.8f, 0, 0.35f), Vec3(2.8f, 0, 0.35f), Vec3(0, 0, 3.4f)};
     const Vec3 plane_exits[] = {Vec3(-1.9f, 0, -1.8f), Vec3(1.9f, 0, -1.8f),
         Vec3(-6.3f, 0, 0), Vec3(6.3f, 0, 0), Vec3(0, 0, 4.2f)};
     const auto& exits = flying_ ? plane_exits : car_exits;
     const Vec3 vehicle_position = position();
-    const Quat rotation = flying_ ? plane_->rotation() : car_->rotation();
+    const Vec3 heading = forward();
+    const float yaw = std::atan2(-heading.GetX(), -heading.GetZ());
+    const Quat rotation = water_exit ? Quat::sRotation(Vec3::sAxisY(), yaw) : flying_ ? plane_->rotation() : car_->rotation();
     const JPH::BodyID body = flying_ ? plane_->body_id() : car_->body_id();
-    for (const auto& local : exits) {
+    for (int i = 0; i < (water_exit ? 37 : 5); ++i) {
+        const float angle = (i - 5) * .78539816f, radius = 3 + ((i - 5) / 8) * 2;
+        const Vec3 local = i < 5 ? exits[i] : Vec3(std::cos(angle) * radius, 0, std::sin(angle) * radius);
         const Vec3 candidate = vehicle_position + rotation * local;
         Vec3 feet = candidate - Vec3(0, .25f, 0);
-        if (!bailout) {
+        if (water_exit) {
+            if (environment_.terrain_height(candidate.GetX(), candidate.GetZ()) > Environment::water_level - 1) continue;
+            feet.SetY(Environment::water_level - 1.25f);
+        } else if (!bailout) {
             GroundHit hit;
             if (!world_.cast_ground(candidate + Vec3(0, 3, 0), Vec3(0, -1, 0), 7, hit)
                 || hit.normal.GetY() < 0.65f || hit.point.GetY() < Environment::water_level + 0.1f) continue;
@@ -112,11 +123,11 @@ Interaction Player::interact() {
         }
         if (!character_.can_stand_at(feet)) continue;
         const Vec3 origin = vehicle_position + Vec3(0, 1, 0);
-        if (world_.camera_fraction(origin, feet + Vec3(0, 1, 0) - origin, body) < 0.98f) continue;
-        const Vec3 heading = forward();
-        character_.reset(feet, std::atan2(-heading.GetX(), -heading.GetZ()));
+        if (!water_exit && world_.camera_fraction(origin, feet + Vec3(0, 1, 0) - origin, body) < 0.98f) continue;
+        character_.reset(feet, yaw);
         character_.set_enabled(true);
-        if (bailout) character_.ragdoll(inherited_velocity + (rotation * local).Normalized() * 2 + Vec3(0, 1.2f, 0));
+        if (water_exit) character_.start_swimming(feet, yaw);
+        else if (bailout) character_.ragdoll(inherited_velocity + (rotation * local).Normalized() * 2 + Vec3(0, 1.2f, 0));
         coasting_ = !flying_ && bailout;
         driving_ = false;
         flying_ = false;
@@ -145,6 +156,9 @@ void Player::step(Input driving, FootInput walking, float dt, FlightInput flight
     }
     if (pedestrians_) pedestrians_->prepare(starter_car_, traffic_, position(), dt);
     world_.step(dt);
+    if (!on_foot() && position().GetY() < Environment::water_level + .1f
+        && environment_.terrain_height(position().GetX(), position().GetZ()) < Environment::water_level - 1)
+        interact();
     if (on_foot()) character_.step(walking, dt);
     if (pedestrians_) pedestrians_->step(starter_car_, traffic_, position(), dt);
 }

@@ -165,7 +165,7 @@ void draw_character(const forza::Character& character, const forza::Environment&
     const float ground = environment.surface_height(feet);
     const float radius = std::clamp(0.33f - (feet.GetY() - ground) * 0.08f, 0.18f, 0.33f);
     const auto shadow_point = [&](float x, float z) { return Vector3{x, environment.surface_height(forza::Vec3(x, feet.GetY(), z)) + 0.085f, z}; };
-    for (int i = 0; i < 24; ++i) {
+    for (int i = 0; !character.swimming() && i < 24; ++i) {
         const float a = i * 6.2831853f / 24, b = (i + 1) * 6.2831853f / 24;
         DrawTriangle3D(shadow_point(feet.GetX(), feet.GetZ()),
             shadow_point(feet.GetX() + std::cos(b) * radius, feet.GetZ() + std::sin(b) * radius),
@@ -387,7 +387,8 @@ int main(int argc, char** argv) {
         forza::ThirdPersonCamera saved_orbit = orbit;
         Camera3D camera{{0, 4, 9}, {0, 1, 0}, {0, 1, 0}, 60, CAMERA_PERSPECTIVE};
         const auto focus = [&]() {
-            if (!tuning_open) return scene->player.position() + forza::Vec3(0, scene->player.flying() ? .5f : scene->player.driving() ? .7f : 1.25f, 0);
+            if (!tuning_open) return scene->player.position() + forza::Vec3(0, scene->player.flying() ? .5f : scene->player.driving() ? .7f :
+                scene->player.character().swimming() ? 1.55f : 1.25f, 0);
             const auto center = scene->player.car().position() + forza::Vec3(0, .7f, 0);
             const float distance = (orbit.desired_position(center, true) - center).Length();
             // Shift the camera's aim to frame the car in the area beside the
@@ -627,7 +628,8 @@ int main(int argc, char** argv) {
                 driving.steer = controls.value(Action::Left) - controls.value(Action::Right);
                 driving.handbrake = controls.value(Action::Brake) > .5f;
                 walking.direction = orbit.move_direction(driving.throttle, -driving.steer);
-                walking.sprint = controls.value(Action::Sprint) > .5f;
+                walking.sprint = controls.value(Action::Sprint) > .5f
+                    || (scene->player.character().swimming() && controls.value(Action::Jump) > .5f);
                 flight.throttle = controls.value(Action::ThrottleUp) - controls.value(Action::ThrottleDown);
                 flight.pitch = -driving.throttle;
                 flight.roll = driving.steer;
@@ -642,11 +644,11 @@ int main(int argc, char** argv) {
                 jump_pending = false;
                 scene->record_skids();
                 const auto position = scene->player.position();
-                const bool recover = scene->player.flying() ? position.GetY() < -.6f || position.Length() > 24000
-                    : environment.submerged(position);
+                const bool recover = scene->player.flying() ? position.Length() > 24000
+                    : std::abs(position.GetX()) > forza::Environment::extent - 40 || std::abs(position.GetZ()) > forza::Environment::extent - 40;
                 if (recover) {
                     scene->reset(); snap_camera(); flaps = false;
-                    notice = scene->player.flying() ? "Recovered aircraft at the airport" : "Recovered from water"; notice_time = 3;
+                    notice = scene->player.flying() ? "Recovered aircraft at the airport" : "Recovered from world boundary"; notice_time = 3;
                 }
                 if (!scene->player.flying() && scene->plane.position().GetY() < -.6f) scene->player.recover_plane();
                 accumulator -= double(forza::fixed_step);
@@ -661,7 +663,7 @@ int main(int argc, char** argv) {
             const auto offset = smoothed - camera_target;
             const float fraction = scene->world.camera_fraction(camera_target, offset,
                 (tuning_open || scene->player.driving()) ? scene->player.car().body_id() : scene->player.flying() ? scene->plane.body_id() : JPH::BodyID());
-            camera.position = render_vector(camera_target + offset * fraction);
+            camera.position = render_vector(forza::ThirdPersonCamera::above_water(camera_target + offset * fraction));
             vehicle_audio.update(scene->traffic, scene->player.car(), scene->player.position(),
                 orbit.forward().Cross(forza::Vec3::sAxisY()), scene->player.driving(),
                 active && controls.value(Action::Horn) > .5f, simulate && screenshot.empty(), frame, driving.throttle);

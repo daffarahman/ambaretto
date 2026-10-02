@@ -9,6 +9,7 @@ public:
     Vec3 forward() const;
     Vec3 move_direction(float forward_input, float right_input) const;
     Vec3 desired_position(const Vec3& focus, bool driving, bool flying = false) const;
+    static Vec3 above_water(Vec3 position);
     float yaw() const { return yaw_; }
     float pitch() const { return pitch_; }
 private:

@@ -153,6 +153,14 @@ void braking_and_theft() {
         "plane boarding broke after stealing a car");
     tick(player, 120);
     require(player.interact() == Interaction::Exited, "plane exit broke with traffic enabled");
+    const Vec3 second_door = second.position() + second.rotate(Vec3(-2, 0, .35f));
+    player.character().reset(ground(map, second_door.GetX(), second_door.GetZ(), .08f));
+    require(player.interact() == Interaction::Entered && &player.car() == &second,
+        "could not board stolen car for water exit check");
+    second.reset(Vec3(2500, -.1f, 1800));
+    player.step({}, {});
+    require(player.on_foot() && player.character().swimming() && &player.car() == &second && !traffic.is_npc(&second),
+        "stolen vehicle entering water did not automatically eject player into swimming");
 }
 
 void isolate(Traffic& traffic, std::size_t keep = 0) {

@@ -1,4 +1,5 @@
 #include "third_person_camera.hpp"
+#include "environment.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -25,6 +26,10 @@ Vec3 ThirdPersonCamera::move_direction(float forward_input, float right_input) c
 }
 Vec3 ThirdPersonCamera::desired_position(const Vec3& focus, bool driving, bool flying) const {
     const float distance = flying ? plane_distance_ : driving ? car_distance_ : foot_distance_;
-    return focus - forward() * (distance * std::cos(pitch_)) + Vec3(0, distance * std::sin(pitch_), 0);
+    return above_water(focus - forward() * (distance * std::cos(pitch_)) + Vec3(0, distance * std::sin(pitch_), 0));
+}
+Vec3 ThirdPersonCamera::above_water(Vec3 position) {
+    position.SetY(std::max(position.GetY(), Environment::water_level + .3f));
+    return position;
 }
 } // namespace forza

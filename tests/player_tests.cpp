@@ -190,6 +190,90 @@ void mouse_camera() {
     require(camera.pitch() <= 1.12f, "mouse pitch flipped camera");
     camera.look(0, 0, 1000, false, forza::Vec3(0, 0, -1), 0, 1.0f / 60);
     require(camera.desired_position(forza::Vec3::sZero(), false).Length() >= 2.49f, "camera zoom entered the character");
+    camera.look(0, -10000, -1000, false, forza::Vec3(0, 0, -1), 0, forza::fixed_step);
+    require(camera.desired_position(forza::Vec3(0, .3f, 0), false).GetY() >= .3f,
+        "low swimming orbit put camera underwater");
+    require(forza::ThirdPersonCamera::above_water(forza::Vec3(0, -4, 0)).GetY() >= .3f,
+        "smoothed/collision-adjusted camera can sink below water");
+}
+
+void surface_swimming() {
+    using namespace forza;
+    const Environment map;
+    PhysicsWorld world(map);
+    Car car(world);
+    Plane plane(world);
+    Player player(world, car, map, &plane);
+    const Vec3 ocean(2500, 0, 1800);
+    require(map.terrain_height(ocean.GetX(), ocean.GetZ()) < -2, "swimming check is on land");
+    car.reset(ocean + Vec3(0, 2, 0));
+    for (int i = 0; i < 360 && player.driving(); ++i) player.step({}, {});
+    auto& character = player.character();
+    require(player.on_foot() && character.swimming() && !character.ragdolling(),
+        "car entering water did not automatically eject player into swimming");
+    require(character.can_stand_at(character.position()) && !player.can_enter(),
+        "water exit overlaps wreck or allows boarding a submerged car");
+    for (int i = 0; i < 240; ++i) player.step({}, {});
+    require(character.swimming() && std::abs(character.position().GetY() + 1.25f) < .08f,
+        "idle swimmer did not stay at the surface");
+    const auto idle = character.body_parts();
+    const float start = character.position().GetZ();
+    for (int i = 0; i < 240; ++i) player.step({}, {Vec3(0, 0, -1), false, true});
+    const float normal = start - character.position().GetZ();
+    const float fast_start = character.position().GetZ();
+    for (int i = 0; i < 240; ++i) player.step({}, {Vec3(0, 0, -1), true, false});
+    require(normal > 2 && fast_start - character.position().GetZ() > normal * 1.5f,
+        "swimming movement or fast swimming is broken");
+    require(std::abs(character.position().GetY() + 1.25f) < .08f && !character.grounded(),
+        "jump input or moving swimmer left the water surface");
+    const auto stroke = character.body_parts();
+    require(std::abs(stroke[3].rotation.Dot(idle[3].rotation)) < .95f
+        && stroke[2].position.GetY() > .15f, "swimming stroke missing or head is underwater");
+    const float released = character.position().GetZ();
+    for (int i = 0; i < 240; ++i) player.step({}, {});
+    require(character.velocity().Length() < .05f && released - character.position().GetZ() < 1,
+        "swimmer did not stop and tread water");
+    character.reset(ocean + Vec3(30, 25, 0));
+    bool tumbled = false;
+    for (int i = 0; i < 1200 && !character.swimming(); ++i) {
+        player.step({}, {}); tumbled |= character.ragdolling();
+    }
+    require(tumbled && character.swimming() && !character.ragdolling(),
+        "falling ragdoll did not automatically recover into surface swimming");
+    character.reset(ocean + Vec3(30, 3, 0));
+    for (int i = 0; i < 360 && !character.swimming(); ++i) player.step({}, {Vec3::sZero(), false, true});
+    require(character.swimming(), "short jump/fall into water did not switch to swimming");
+    const auto& bridge = map.bridges()[1];
+    const Vec3 mid = bridge.point(.5f);
+    character.reset(mid + Vec3(0, .08f, 0));
+    for (int i = 0; i < 120; ++i) player.step({}, {});
+    require(!character.swimming() && character.grounded(), "bridge over water triggered swimming");
+    character.reset(Vec3(mid.GetX(), -.95f, mid.GetZ()));
+    player.step({}, {});
+    require(character.swimming(), "water underneath bridge did not allow swimming");
+    float shore_x = 0;
+    for (float x = 1900; x > 1450; x -= .5f) {
+        const float ground = map.terrain_height(x, 0);
+        if (ground < -1.8f && ground > -2.0f) { shore_x = x; break; }
+    }
+    require(shore_x > 0, "no beach available for shore check");
+    character.start_swimming(Vec3(shore_x, 0, 0));
+    for (int i = 0; i < 2400 && (character.swimming() || character.position().GetY() < 1); ++i)
+        player.step({}, {Vec3(-1, 0, 0), false, false});
+    require(!character.swimming() && character.position().GetY() > .5f && character.grounded(),
+        "swimmer could not return to walking on beach");
+    player.reset();
+    require(!character.swimming() && player.driving(), "reset retained swimming state");
+    for (int i = 0; i < 120; ++i) player.step({}, {});
+    require(player.interact() == Interaction::Exited, "could not exit car before plane water check");
+    const Vec3 door = plane.position() + plane.rotate(Vec3(-1.9f, 0, -1.8f));
+    character.reset(Vec3(door.GetX(), map.height(door.GetX(), door.GetZ()) + .08f, door.GetZ()));
+    require(player.interact() == Interaction::Entered && player.flying(), "could not board plane for water check");
+    plane.reset(ocean + Vec3(0, 2, 0), 0, Vec3(0, -4, -8));
+    for (int i = 0; i < 360 && player.flying(); ++i) player.step({}, {});
+    require(player.on_foot() && character.swimming() && character.can_stand_at(character.position()),
+        "plane entering water did not eject player clear of aircraft into swimming");
+    std::cout << "Swimming: car/plane exits, falling, strokes, controls, surface buoyancy, bridge and shore passed\n";
 }
 void model_tree_collisions() {
     const forza::Environment map;
@@ -216,7 +300,7 @@ void model_tree_collisions() {
 }
 int main() {
     try {
-        character_movement(); articulated_ragdoll(); city_collisions_and_interaction(); car_coasting_and_direction_changes(); mouse_camera(); model_tree_collisions();
+        character_movement(); articulated_ragdoll(); city_collisions_and_interaction(); car_coasting_and_direction_changes(); mouse_camera(); surface_swimming(); model_tree_collisions();
         std::cout << "All player checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

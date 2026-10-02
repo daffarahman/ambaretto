@@ -413,11 +413,12 @@ bool hinge_part(std::size_t part) { return part == 4 || part == 7 || part == 10 
 
 struct Character::Impl {
     JPH::Ref<JPH::CharacterVirtual> character;
+    const Environment* environment = nullptr;
     // Jolt's ragdoll owns its bodies and joints; these never enter the world's static-body list.
     JPH::Ref<JPH::Ragdoll> rig;
     Vec3 desired_velocity{0, 0, 0}, impact_direction{0, 0, -1};
     float ragdoll_time = 0, settled_time = 0, hit_cooldown = 0;
-    bool enabled = true;
+    bool enabled = true, swimming = false;
     ~Impl() { clear_ragdoll(); }
     void clear_ragdoll() {
         if (rig) { rig->RemoveFromPhysicsSystem(); rig = nullptr; }
@@ -425,7 +426,8 @@ struct Character::Impl {
     }
 };
 
-Character::Character(PhysicsWorld& world) : world_(world), impl_(std::make_unique<Impl>()) {
+Character::Character(PhysicsWorld& world, const Environment* environment) : world_(world), impl_(std::make_unique<Impl>()) {
+    impl_->environment = environment;
     JPH::CharacterVirtualSettings settings;
     JPH::RefConst<JPH::Shape> capsule = new JPH::CapsuleShape(0.58f, 0.32f);
     settings.mShape = new JPH::RotatedTranslatedShape(Vec3(0, 0.9f, 0), Quat::sIdentity(), capsule);
@@ -437,6 +439,11 @@ Character::Character(PhysicsWorld& world) : world_(world), impl_(std::make_uniqu
 }
 Character::~Character() = default;
 bool Character::ragdolling() const { return impl_->rig != nullptr; }
+bool Character::swimming() const { return impl_->swimming; }
+void Character::start_swimming(const Vec3& surface, float yaw) {
+    reset(Vec3(surface.GetX(), Environment::water_level - 1.25f, surface.GetZ()), yaw);
+    impl_->swimming = true;
+}
 Vec3 Character::position() const {
     if (!impl_->rig) return impl_->character->GetPosition();
     const Vec3 pelvis = world_.impl_->system.GetBodyInterface().GetPosition(impl_->rig->GetBodyID(0));
@@ -447,6 +454,7 @@ Vec3 Character::velocity() const {
                       : impl_->character->GetLinearVelocity();
 }
 bool Character::grounded() const {
+    if (impl_->swimming) return false;
     if (!impl_->rig) return impl_->character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
     GroundHit hit;
     return world_.cast_ground(position() + Vec3(0, .15f, 0), -Vec3::sAxisY(), .3f, hit)
@@ -461,6 +469,7 @@ void Character::set_enabled(bool enabled) {
     }
     impl_->enabled = enabled;
     if (!enabled) {
+        impl_->swimming = false;
         impl_->desired_velocity = Vec3::sZero();
         impl_->character->SetLinearVelocity(Vec3::sZero());
     }
@@ -477,7 +486,7 @@ std::array<BodyPartPose, body_part_count> Character::body_parts() const {
         return pose;
     }
     const Vec3 speed = velocity();
-    const float moving = std::clamp(std::hypot(speed.GetX(), speed.GetZ()) / 6.5f, 0.0f, 1.0f);
+    const float moving = std::clamp(std::hypot(speed.GetX(), speed.GetZ()) / (swimming() ? 2.0f : 6.5f), 0.0f, 1.0f);
     const float swing = std::sin(gait_) * .65f * moving;
     std::array<float, body_part_count> pitch{};
     pitch[3] = -swing * .65f; pitch[6] = swing * .65f;
@@ -486,13 +495,29 @@ std::array<BodyPartPose, body_part_count> Character::body_parts() const {
     pitch[10] = -.05f - std::max(0.0f, -swing) * 1.1f;
     pitch[13] = -.05f - std::max(0.0f, swing) * 1.1f;
     pitch[11] = -pitch[9] - pitch[10]; pitch[14] = -pitch[12] - pitch[13];
-    const Vec3 feet = impl_->character->GetPosition();
-    const Quat root = Quat::sRotation(Vec3::sAxisY(), yaw_);
+    std::array<float, body_part_count> roll{};
+    if (swimming()) {
+        // Tread upright at rest; alternate crawl strokes and flutter kicks while moving.
+        for (const int arm : {3, 6}) {
+            const float phase = std::remainder(gait_ + (arm == 6 ? 3.14159265f : 0), 6.2831853f);
+            pitch[arm] = (1.2f + 1.8f * std::sin(phase)) * moving + (.3f + .2f * std::sin(phase)) * (1 - moving);
+            roll[arm] = (arm == 3 ? -1 : 1) * (.9f * (1 - moving) + .15f + .15f * std::cos(phase));
+            pitch[arm + 1] = .65f + .6f * std::max(0.0f, std::sin(phase));
+            pitch[arm + 2] = -.25f;
+        }
+        pitch[9] = std::sin(gait_ * 2) * (.2f + moving * .15f);
+        pitch[12] = -pitch[9];
+        pitch[10] = pitch[13] = -.2f;
+        pitch[11] = pitch[14] = -.2f;
+        pitch[2] = .8f * moving;
+    }
+    const Vec3 feet = impl_->character->GetPosition() + Vec3(0, swimming() ? .06f * moving + .025f * std::sin(gait_ * 2) : 0, 0);
+    const Quat root = Quat::sRotation(Vec3::sAxisY(), yaw_) * Quat::sRotation(Vec3::sAxisX(), swimming() ? -1.05f * moving : 0);
     for (std::size_t i = 0; i < pose.size(); ++i) {
         const auto& part = parts[i];
         const Quat rotation = part.parent < 0 ? root
-            : pose[part.parent].rotation * Quat::sRotation(Vec3::sAxisX(), pitch[i]);
-        const Vec3 pivot = part.parent < 0 ? feet + root * part.pivot
+            : pose[part.parent].rotation * Quat::sRotation(Vec3::sAxisZ(), roll[i]) * Quat::sRotation(Vec3::sAxisX(), pitch[i]);
+        const Vec3 pivot = part.parent < 0 ? feet + Quat::sRotation(Vec3::sAxisY(), yaw_) * part.pivot
             : pose[part.parent].position + pose[part.parent].rotation * (part.pivot - parts[part.parent].center);
         pose[i] = {pivot + rotation * (part.center - part.pivot), rotation, part.size};
     }
@@ -500,7 +525,7 @@ std::array<BodyPartPose, body_part_count> Character::body_parts() const {
 }
 
 void Character::ragdoll(const Vec3& inherited_velocity, const Vec3& impulse) {
-    if (!impl_->enabled) return;
+    if (!impl_->enabled || impl_->swimming) return;
     auto& physics = world_.impl_->system.GetBodyInterface();
     if (impl_->rig) {
         physics.AddImpulse(impl_->rig->GetBodyID(1), impulse);
@@ -588,7 +613,7 @@ void Character::ragdoll(const Vec3& inherited_velocity, const Vec3& impulse) {
 }
 
 void Character::hit_by(const Car& car, float dt) {
-    if (!impl_->enabled || impl_->rig || impl_->hit_cooldown > 0 || !car.simulated() || car.velocity().LengthSq() < 2.25f) return;
+    if (!impl_->enabled || impl_->swimming || impl_->rig || impl_->hit_cooldown > 0 || !car.simulated() || car.velocity().LengthSq() < 2.25f) return;
     const Quat inverse = car.rotation().Conjugated();
     const Vec3 origin = inverse * (position() + Vec3(0, .9f, 0) - car.position()) - Vec3(0, chassis_offset, 0);
     // The virtual controller may already be pushed along by a predictive car contact.
@@ -619,6 +644,7 @@ void Character::hit_by(const Car& car, float dt) {
 
 void Character::reset(const Vec3& feet, float yaw) {
     impl_->clear_ragdoll();
+    impl_->swimming = false;
     impl_->enabled = true;
     yaw_ = yaw; gait_ = 0;
     impl_->desired_velocity = Vec3::sZero();
@@ -643,6 +669,15 @@ bool Character::can_stand_at(const Vec3& feet) const {
 void Character::step(FootInput input, float dt) {
     if (!impl_->enabled) return;
     impl_->hit_cooldown = std::max(0.0f, impl_->hit_cooldown - dt);
+    if (impl_->environment) {
+        const Vec3 feet = position();
+        const float ground = impl_->environment->terrain_height(feet.GetX(), feet.GetZ());
+        const float chest = impl_->rig ? body_parts()[static_cast<std::size_t>(BodyPart::Torso)].position.GetY() : feet.GetY() + .95f;
+        if (!swimming() && chest <= Environment::water_level + .05f && ground < Environment::water_level - 1.0f)
+            start_swimming(feet, yaw_);
+        else if (swimming() && (ground > Environment::water_level - .9f || feet.GetY() > Environment::water_level - .85f))
+            impl_->swimming = false;
+    }
     if (impl_->rig) {
         auto& physics = world_.impl_->system.GetBodyInterface();
         impl_->ragdoll_time += dt;
@@ -688,26 +723,27 @@ void Character::step(FootInput input, float dt) {
     auto& character = *impl_->character;
     input.direction.SetY(0);
     if (input.direction.LengthSq() > 1) input.direction = input.direction.Normalized();
-    const Vec3 desired = input.direction * (input.sprint ? 6.5f : 3.2f);
-    const float acceleration = character.IsSupported() ? 18.0f : 4.0f;
+    const Vec3 desired = input.direction * (swimming() ? (input.sprint ? 3.4f : 1.8f) : (input.sprint ? 6.5f : 3.2f));
+    const float acceleration = swimming() ? 4.0f : character.IsSupported() ? 18.0f : 4.0f;
     impl_->desired_velocity += (desired - impl_->desired_velocity) * (1 - std::exp(-acceleration * dt));
     character.UpdateGroundVelocity();
     float vertical_speed = velocity().GetY();
-    if (grounded() && vertical_speed - character.GetGroundVelocity().GetY() < 0.15f) {
+    if (swimming()) vertical_speed = clamp((Environment::water_level - 1.25f - position().GetY()) * 10, -3, 3);
+    else if (grounded() && vertical_speed - character.GetGroundVelocity().GetY() < 0.15f) {
         vertical_speed = character.GetGroundVelocity().GetY();
         if (input.jump) vertical_speed += 5.8f;
     }
-    vertical_speed -= 18 * dt;
-    if (vertical_speed < -10) {
+    if (!swimming()) vertical_speed -= 18 * dt;
+    if (!swimming() && vertical_speed < -10) {
         ragdoll(impl_->desired_velocity + Vec3(0, vertical_speed, 0));
         return;
     }
     character.SetLinearVelocity(impl_->desired_velocity + Vec3(0, vertical_speed, 0));
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     settings.mWalkStairsStepUp = Vec3(0, 0.35f, 0);
-    settings.mStickToFloorStepDown = vertical_speed > 0.1f ? Vec3::sZero() : Vec3(0, -0.35f, 0);
-    character.ExtendedUpdate(dt, Vec3(0, -18, 0), settings, {}, {}, {}, {}, world_.impl_->allocator);
-    if (vertical_speed < -8 && grounded()) {
+    settings.mStickToFloorStepDown = swimming() || vertical_speed > 0.1f ? Vec3::sZero() : Vec3(0, -0.35f, 0);
+    character.ExtendedUpdate(dt, swimming() ? Vec3::sZero() : Vec3(0, -18, 0), settings, {}, {}, {}, {}, world_.impl_->allocator);
+    if (!swimming() && vertical_speed < -8 && grounded()) {
         ragdoll(impl_->desired_velocity + Vec3(0, vertical_speed, 0));
         return;
     }
@@ -717,7 +753,8 @@ void Character::step(FootInput input, float dt) {
         character.SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw_));
     }
     const auto speed = velocity();
-    if (grounded()) gait_ += std::hypot(speed.GetX(), speed.GetZ()) * dt * 2.3f;
+    if (swimming()) gait_ += dt * (2.0f + std::hypot(speed.GetX(), speed.GetZ()) * 1.7f);
+    else if (grounded()) gait_ += std::hypot(speed.GetX(), speed.GetZ()) * dt * 2.3f;
 }
 
 Vec3 Car::position() const { return world_.impl_->system.GetBodyInterface().GetCenterOfMassPosition(body_); }

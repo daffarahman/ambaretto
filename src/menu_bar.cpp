@@ -199,6 +199,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             "Car: W/S or left stick. Opposite direction brakes, then reverses. Space / B: handbrake.",
             "Car horn: H / right-stick click. E / Y: exit, or jump out while moving and tumble.",
             "On foot: WASD / left stick. Shift / L-stick: sprint. Space / A: jump. E / Y: enter/exit.",
+            "Swim: WASD / left stick. Shift, Space / L-stick, A: faster. Surface only; no diving.",
             "Plane: W/S or left stick Y: pitch. A/D or left stick X: bank.",
             "Plane throttle: Shift/Ctrl or RT/LT. Rudder: arrows or LB/RB. Flaps: F / X.",
             "Camera: mouse / right stick. Zoom: wheel / D-pad down or left.",
