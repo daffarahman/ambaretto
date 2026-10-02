@@ -4,10 +4,24 @@
 
 namespace forza {
 class Traffic;
+class Pedestrians;
 struct FootInput {
     Vec3 direction{0, 0, 0};
     bool sprint = false;
     bool jump = false;
+};
+
+enum class BodyPart {
+    Pelvis, Torso, Head,
+    LeftUpperArm, LeftForearm, LeftHand,
+    RightUpperArm, RightForearm, RightHand,
+    LeftThigh, LeftShin, LeftFoot,
+    RightThigh, RightShin, RightFoot, Count
+};
+struct BodyPartPose {
+    Vec3 position{0, 0, 0};
+    Quat rotation = Quat::sIdentity();
+    Vec3 size{0, 0, 0}; // Full dimensions, with limbs along local Y.
 };
 
 class Character {
@@ -18,6 +32,12 @@ public:
     Character& operator=(const Character&) = delete;
     void reset(const Vec3& feet, float yaw = 0);
     void step(FootInput input, float dt = fixed_step);
+    void set_enabled(bool enabled);
+    bool ragdolling() const;
+    // Velocity is inherited by every body; impulse is applied to the torso in N s.
+    void ragdoll(const Vec3& inherited_velocity, const Vec3& impulse = Vec3::sZero());
+    void hit_by(const Car& car, float dt = fixed_step);
+    std::array<BodyPartPose, static_cast<std::size_t>(BodyPart::Count)> body_parts() const;
     bool can_stand_at(const Vec3& feet) const;
     Vec3 position() const;
     Vec3 velocity() const;
@@ -36,7 +56,8 @@ enum class Interaction { Entered, Exited, TooFast, TooFar, Blocked };
 enum class EntryVehicle { None, Car, Plane };
 class Player {
 public:
-    Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane = nullptr, Traffic* traffic = nullptr);
+    Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane = nullptr, Traffic* traffic = nullptr,
+        Pedestrians* pedestrians = nullptr);
     void reset();
     void recover_plane();
     Interaction interact();
@@ -64,7 +85,9 @@ private:
     Character character_;
     Plane* plane_ = nullptr;
     Traffic* traffic_ = nullptr;
+    Pedestrians* pedestrians_ = nullptr;
     bool driving_ = true;
     bool flying_ = false;
+    bool coasting_ = false;
 };
 } // namespace forza

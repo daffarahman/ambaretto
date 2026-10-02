@@ -12,6 +12,7 @@
 #include "third_person_camera.hpp"
 #include "airport.hpp"
 #include "traffic.hpp"
+#include "pedestrians.hpp"
 #include <string>
 #include <raylib.h>
 #include <rlgl.h>
@@ -36,7 +37,8 @@ struct Scene {
     forza::Car car{world};
     forza::Plane plane{world};
     forza::Traffic traffic{world, environment};
-    forza::Player player{world, car, environment, &plane, &traffic};
+    forza::Pedestrians pedestrians{world, environment};
+    forza::Player player{world, car, environment, &plane, &traffic, &pedestrians};
     std::vector<SkidMark> marks;
     std::size_t next_mark = 0;
     std::array<forza::Vec3, 4> last_skid{};
@@ -158,12 +160,7 @@ void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const C
     }
 }
 
-void draw_character(const forza::Character& character, const forza::Environment& environment) {
-    const auto basis = forza::Quat::sRotation(forza::Vec3::sAxisY(), character.yaw());
-    const auto point = [&](float x, float y, float z) { return character.position() + basis * forza::Vec3(x, y, z); };
-    const auto avatar_box = [&](forza::Vec3 center, const forza::Quat& rotation, forza::Vec3 size, Color color) {
-        draw_box(center, rotation, size, color, false);
-    };
+void draw_character(const forza::Character& character, const forza::Environment& environment, std::size_t appearance = 0) {
     const auto feet = character.position();
     const float ground = environment.surface_height(feet);
     const float radius = std::clamp(0.33f - (feet.GetY() - ground) * 0.08f, 0.18f, 0.33f);
@@ -174,33 +171,34 @@ void draw_character(const forza::Character& character, const forza::Environment&
             shadow_point(feet.GetX() + std::cos(b) * radius, feet.GetZ() + std::sin(b) * radius),
             shadow_point(feet.GetX() + std::cos(a) * radius, feet.GetZ() + std::sin(a) * radius), {15, 23, 29, 100});
     }
-    const auto limb = [&](forza::Vec3 a, forza::Vec3 b, float radius, Color color) {
-        DrawCylinderEx(render_vector(a), render_vector(b), radius, radius, 8, color);
-        DrawSphereEx(render_vector(b), radius, 6, 8, color);
-    };
-    const float speed = std::hypot(character.velocity().GetX(), character.velocity().GetZ());
-    const float swing = character.grounded() ? std::sin(character.gait()) * std::min(1.0f, speed / 3.2f) : 0.15f;
-    const float bob = character.grounded() ? std::abs(std::sin(character.gait())) * std::min(speed * 0.006f, 0.035f) : 0;
-    constexpr Color skin{211, 155, 113, 255}, shirt{38, 97, 133, 255}, pants{39, 48, 66, 255};
-    avatar_box(point(0, 1.13f + bob, 0), basis, forza::Vec3(0.47f, 0.57f, 0.28f), shirt);
-    avatar_box(point(0, 0.80f + bob, 0), basis, forza::Vec3(0.38f, 0.16f, 0.27f), pants);
-    avatar_box(point(0, 1.33f + bob, -0.15f), basis, forza::Vec3(0.23f, 0.055f, 0.018f), {115, 198, 200, 255});
-    DrawSphereEx(render_vector(point(0, 1.61f + bob, 0)), 0.17f, 10, 12, skin);
-    avatar_box(point(0, 1.75f + bob, 0.02f), basis, forza::Vec3(0.28f, 0.08f, 0.26f), {44, 35, 31, 255});
-    DrawSphereEx(render_vector(point(0, 1.59f + bob, -0.16f)), 0.045f, 6, 8, skin);
-    for (float side : {-1.0f, 1.0f}) {
-        const float phase = swing * side;
-        const auto shoulder = point(side * 0.27f, 1.34f + bob, 0);
-        const auto elbow = point(side * 0.31f, 1.10f + bob, phase * 0.13f);
-        const auto hand = point(side * 0.30f, 0.92f + bob, phase * 0.27f - 0.07f);
-        limb(shoulder, elbow, 0.075f, shirt); limb(elbow, hand, 0.06f, skin);
-        const auto hip = point(side * 0.12f, 0.76f + bob, 0);
-        const auto knee = point(side * 0.13f, 0.42f, -phase * 0.13f);
-        const float lift = character.grounded() ? std::max(0.0f, phase) * 0.09f : 0.09f;
-        const auto ankle = point(side * 0.13f, 0.12f + lift, -phase * 0.25f);
-        limb(hip, knee, 0.09f, pants); limb(knee, ankle, 0.075f, pants);
-        avatar_box(ankle + basis * forza::Vec3(0, -0.055f, -0.065f), basis,
-            forza::Vec3(0.17f, 0.12f, 0.32f), {214, 221, 222, 255});
+    constexpr Color shirts[]{{38, 97, 133, 255}, {160, 58, 49, 255}, {219, 174, 62, 255}, {59, 121, 82, 255},
+        {168, 164, 156, 255}, {97, 70, 134, 255}, {42, 131, 145, 255}, {219, 115, 69, 255}};
+    constexpr Color skins[]{{211, 155, 113, 255}, {129, 83, 60, 255}, {235, 185, 148, 255}, {173, 118, 78, 255}};
+    const Color shirt = shirts[appearance % std::size(shirts)], skin = skins[appearance % std::size(skins)];
+    constexpr Color pants{39, 48, 66, 255}, shoes{214, 221, 222, 255};
+    const auto parts = character.body_parts();
+    using Part = forza::BodyPart;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const auto kind = Part(i);
+        const auto& part = parts[i];
+        Color color = pants;
+        if (kind == Part::Torso || kind == Part::LeftUpperArm || kind == Part::RightUpperArm) color = shirt;
+        if (kind == Part::Head || kind == Part::LeftForearm || kind == Part::RightForearm
+            || kind == Part::LeftHand || kind == Part::RightHand) color = skin;
+        if (kind == Part::LeftFoot || kind == Part::RightFoot) color = shoes;
+        if (kind == Part::Head) {
+            DrawSphereEx(render_vector(part.position), part.size.GetY() / 2, 10, 12, skin);
+            draw_box(part.position + part.rotation * forza::Vec3(0, .14f, .02f), part.rotation,
+                forza::Vec3(.28f, .08f, .26f), {44, 35, 31, 255}, false);
+            DrawSphereEx(render_vector(part.position + part.rotation * forza::Vec3(0, -.02f, -.16f)), .045f, 6, 8, skin);
+        } else if (kind == Part::Pelvis || kind == Part::Torso || kind == Part::LeftHand || kind == Part::RightHand
+            || kind == Part::LeftFoot || kind == Part::RightFoot) {
+            draw_box(part.position, part.rotation, part.size, color, false);
+        } else {
+            const float radius = part.size.GetX() / 2;
+            const auto axis = part.rotation * forza::Vec3(0, part.size.GetY() / 2 - radius, 0);
+            DrawCapsule(render_vector(part.position - axis), render_vector(part.position + axis), radius, 6, 8, color);
+        }
     }
 }
 
@@ -259,36 +257,7 @@ void draw_plane(const forza::Plane& plane, bool occupied) {
     }
 }
 
-void draw_hud(const Scene& scene, bool handbrake, bool captured, bool tuning, bool flaps) {
-    const auto& player = scene.player;
-    DrawRectangle(14, 46, 790, player.flying() ? 132 : 103, {19, 28, 35, 220});
-    forza::ui::draw_text(tuning ? "TUNING MODE  |  Drag sliders to adjust your car" :
-        player.flying() ? "FLIGHT MODE  |  Help > Controls for flight instructions" :
-        player.driving() ? "DRIVING MODE  |  Help > Controls for driving instructions" : "ON FOOT  |  Help > Controls for movement instructions", 26, 56, 19, RAYWHITE);
-    forza::ui::draw_text(tuning ? "Right drag outside panel: camera  |  Scroll: adjust / zoom" :
-        "Settings > Controller mapping  |  F10 menu / Esc map", 26, 81, 17, LIGHTGRAY);
-    if (tuning) forza::ui::draw_text("Physics live / parking brake / Driving input disabled", 26, 111, 19, GOLD);
-    else if (player.flying()) {
-        const auto& plane = scene.plane;
-        const auto p = plane.position();
-        const float ground = std::abs(p.GetX()) <= forza::Environment::extent && std::abs(p.GetZ()) <= forza::Environment::extent
-            ? std::max(scene.environment.height(p.GetX(), p.GetZ()), 0.0f) : 0;
-        forza::ui::draw_text(TextFormat("FLYING | %3.0f km/h | AGL %4.0f m | THROTTLE %3.0f%%", double(plane.airspeed() * 3.6f),
-            double(std::max(0.0f, p.GetY() - ground)), double(plane.throttle() * 100)), 26, 111, 20, GOLD);
-        forza::ui::draw_text(plane.damaged() ? "AIRCRAFT DAMAGED - use Recover vehicle" : plane.stalled() ? "STALL - lower nose and add throttle" :
-            plane.grounded() ? "RUNWAY | Full throttle, pitch up gently above 100 km/h" : "Mouse look / Wheel zoom / Land and stop before exiting", 26, 140, 17, plane.stalled() || plane.damaged() ? ORANGE : LIGHTGRAY);
-        if (flaps) forza::ui::draw_text("FLAPS", 712, 112, 17, SKYBLUE);
-    } else if (player.driving()) {
-        const float speed = player.car().velocity().Dot(player.car().forward()) * 3.6f;
-        forza::ui::draw_text(TextFormat("DRIVING  |  %5.1f km/h", double(speed)), 26, 111, 20, GOLD);
-        if (handbrake && std::abs(speed) > 15) forza::ui::draw_text("DRIFT", 340, 111, 20, ORANGE);
-    } else {
-        const auto nearby = player.entry_vehicle();
-        forza::ui::draw_text(nearby == forza::EntryVehicle::Plane ? "Use Enter / exit vehicle to board the plane" :
-            player.can_steal() ? "Use Enter / exit vehicle to steal this traffic car" :
-            nearby == forza::EntryVehicle::Car ? "Use Enter / exit vehicle to enter this car" :
-            "ON FOOT | Approach traffic to stop it, then enter to steal", 26, 111, 20, GOLD);
-    }
+void draw_resume_prompt(bool captured) {
     if (!captured) {
         const int panel_width = std::max(408, forza::ui::measure_text("Click to resume and capture mouse", 20) + 28);
         const int x = (GetScreenWidth() - panel_width) / 2 + 14, y = GetScreenHeight() / 2 - 36;
@@ -633,10 +602,9 @@ int main(int argc, char** argv) {
                         jump_pending = false;
                         snap_camera();
                         notice = result == forza::Interaction::Entered ? (scene->player.flying() ? "Entered plane - increase throttle to take off" :
-                            stealing ? "Stole traffic car" : "Entered car") : "On foot";
-                    } else if (result == forza::Interaction::TooFast) notice = scene->player.flying()
-                        ? "Land and stop before exiting the plane" : "Slow down before exiting the car";
-                    else if (result == forza::Interaction::Blocked) notice = "Exit blocked - move the vehicle to an open space";
+                            stealing ? "Stole traffic car" : "Entered car") : scene->player.character().ragdolling()
+                            ? "Jumped out - brace for impact" : "On foot";
+                    } else if (result == forza::Interaction::Blocked) notice = "Exit blocked - move the vehicle to an open space";
                     else notice = "Move closer to a car or plane to enter";
                     notice_time = 2.5f;
                 }
@@ -749,6 +717,9 @@ int main(int argc, char** argv) {
                     if ((scene->plane.position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
                         draw_plane(scene->plane, scene->player.flying());
                     if (scene->player.on_foot()) draw_character(scene->player.character(), environment);
+                    for (const auto& pedestrian : scene->pedestrians.people()) if (pedestrian.enabled
+                        && (pedestrian.character->position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
+                        draw_character(*pedestrian.character, environment, pedestrian.appearance + 1);
                     lighting.end_shadow();
                 }
             }
@@ -785,9 +756,12 @@ int main(int argc, char** argv) {
                 }
                 draw_plane(scene->plane, scene->player.flying());
                 if (scene->player.on_foot()) draw_character(scene->player.character(), environment);
+                for (const auto& pedestrian : scene->pedestrians.people()) if (pedestrian.enabled
+                    && (pedestrian.character->position() - scene->player.position()).LengthSq() < 160 * 160)
+                    draw_character(*pedestrian.character, environment, pedestrian.appearance + 1);
                 EndShaderMode();
                 EndMode3D();
-                draw_hud(*scene, driving.handbrake, captured || tuning_open || graphics_panel.visible() || !screenshot.empty(), tuning_open, flaps);
+                draw_resume_prompt(captured || tuning_open || graphics_panel.visible() || !screenshot.empty());
                 if (!tuning_open) scenery.minimap(scene->car, scene->plane, scene->player.position(), scene->player.forward(), view, &scene->traffic);
                 const auto region = scene->player.position();
                 if (!tuning_open) {

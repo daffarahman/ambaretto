@@ -2,11 +2,13 @@
 #include "environment.hpp"
 #include "airport.hpp"
 #include "traffic.hpp"
+#include "pedestrians.hpp"
 #include <cmath>
 
 namespace forza {
-Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane, Traffic* traffic)
-    : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world), plane_(plane), traffic_(traffic) { reset(); }
+Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane, Traffic* traffic, Pedestrians* pedestrians)
+    : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world), plane_(plane), traffic_(traffic),
+      pedestrians_(pedestrians) { reset(); }
 
 void Player::reset() {
     Vec3 spawn = environment_.spawn();
@@ -29,8 +31,10 @@ void Player::reset() {
     car_->set_simulated(true);
     car_->reset(spawn);
     character_.reset(spawn - Vec3(0, 0.5f, 0));
+    character_.set_enabled(false);
     driving_ = true;
     flying_ = false;
+    coasting_ = false;
     recover_plane();
 }
 
@@ -45,7 +49,7 @@ void Player::recover_plane() {
 }
 
 Player::EntryTarget Player::entry_target() const {
-    if (!on_foot()) return {};
+    if (!on_foot() || character_.ragdolling()) return {};
     const Vec3 feet = character_.position(), eye = feet + Vec3(0, 1, 0);
     float nearest = 100;
     EntryTarget result;
@@ -81,10 +85,12 @@ Interaction Player::interact() {
         }
         driving_ = vehicle.kind == EntryVehicle::Car;
         flying_ = vehicle.kind == EntryVehicle::Plane;
+        coasting_ = false;
+        character_.set_enabled(false);
         return Interaction::Entered;
     }
-    if ((flying_ ? plane_->velocity() : car_->velocity()).Length() > 2.5f
-        || (flying_ && !plane_->grounded())) return Interaction::TooFast;
+    const Vec3 inherited_velocity = flying_ ? plane_->velocity() : car_->velocity();
+    const bool bailout = inherited_velocity.Length() > 2.5f || (flying_ && !plane_->grounded());
     // Try both doors, then farther alongside and behind the car. Each exit
     // needs ground, free capsule space, and a clear path from the vehicle.
     const Vec3 car_exits[] = {Vec3(-2, 0, 0.35f), Vec3(2, 0, 0.35f),
@@ -97,15 +103,21 @@ Interaction Player::interact() {
     const JPH::BodyID body = flying_ ? plane_->body_id() : car_->body_id();
     for (const auto& local : exits) {
         const Vec3 candidate = vehicle_position + rotation * local;
-        GroundHit hit;
-        if (!world_.cast_ground(candidate + Vec3(0, 3, 0), Vec3(0, -1, 0), 7, hit)
-            || hit.normal.GetY() < 0.65f || hit.point.GetY() < Environment::water_level + 0.1f) continue;
-        const Vec3 feet = hit.point + Vec3(0, 0.08f, 0);
+        Vec3 feet = candidate - Vec3(0, .25f, 0);
+        if (!bailout) {
+            GroundHit hit;
+            if (!world_.cast_ground(candidate + Vec3(0, 3, 0), Vec3(0, -1, 0), 7, hit)
+                || hit.normal.GetY() < 0.65f || hit.point.GetY() < Environment::water_level + 0.1f) continue;
+            feet = hit.point + Vec3(0, 0.08f, 0);
+        }
         if (!character_.can_stand_at(feet)) continue;
         const Vec3 origin = vehicle_position + Vec3(0, 1, 0);
         if (world_.camera_fraction(origin, feet + Vec3(0, 1, 0) - origin, body) < 0.98f) continue;
         const Vec3 heading = forward();
         character_.reset(feet, std::atan2(-heading.GetX(), -heading.GetZ()));
+        character_.set_enabled(true);
+        if (bailout) character_.ragdoll(inherited_velocity + (rotation * local).Normalized() * 2 + Vec3(0, 1.2f, 0));
+        coasting_ = !flying_ && bailout;
         driving_ = false;
         flying_ = false;
         return Interaction::Exited;
@@ -114,19 +126,26 @@ Interaction Player::interact() {
 }
 
 void Player::step(Input driving, FootInput walking, float dt, FlightInput flight) {
-    if (!driving_) driving = {0, 0, false, true};
-    driving.player_controlled = driving_;
+    if (coasting_ && car_->velocity().Length() < .5f) coasting_ = false;
+    if (!driving_) driving = {0, 0, false, !coasting_};
+    driving.player_controlled = driving_ || coasting_;
     starter_car_.step(car_ == &starter_car_ ? driving : Input{0, 0, false, true}, dt);
-    if (car_ != &starter_car_ && driving_) car_->step(driving, dt);
+    if (car_ != &starter_car_ && (driving_ || coasting_)) car_->step(driving, dt);
     if (plane_) {
         if (!flying_) flight = {0, 0, 0, 0, false, false, true};
         plane_->step(flight, dt);
     }
     if (traffic_) {
         const Vec3 feet = character_.position();
-        traffic_->step(driving_ ? car_ : nullptr, starter_car_, plane_, on_foot() ? &feet : nullptr, position(), dt);
+        traffic_->step(driving_ || coasting_ ? car_ : nullptr, starter_car_, plane_, on_foot() ? &feet : nullptr, position(), dt);
     }
+    if (on_foot()) {
+        character_.hit_by(starter_car_, dt);
+        if (traffic_) for (const auto& vehicle : traffic_->cars()) character_.hit_by(*vehicle.car, dt);
+    }
+    if (pedestrians_) pedestrians_->prepare(starter_car_, traffic_, position(), dt);
     world_.step(dt);
     if (on_foot()) character_.step(walking, dt);
+    if (pedestrians_) pedestrians_->step(starter_car_, traffic_, position(), dt);
 }
 } // namespace forza

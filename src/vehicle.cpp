@@ -26,6 +26,9 @@
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/Ragdoll/Ragdoll.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -36,7 +39,12 @@ namespace {
 constexpr JPH::ObjectLayer ground_layer = 0;
 constexpr JPH::ObjectLayer vehicle_layer = 1;
 constexpr JPH::ObjectLayer obstacle_layer = 2;
+constexpr JPH::ObjectLayer character_layer = 3;
 constexpr float mass = 1100;
+
+class CameraLayers final : public JPH::ObjectLayerFilter {
+    bool ShouldCollide(JPH::ObjectLayer layer) const override { return layer != character_layer; }
+};
 
 float clamp(float value, float low, float high) {
     return std::clamp(value, low, high);
@@ -62,22 +70,26 @@ void initialize_jolt() {
 } // namespace
 
 struct PhysicsWorld::Impl {
-    JPH::BroadPhaseLayerInterfaceTable broad_phase{3, 2};
-    JPH::ObjectLayerPairFilterTable pairs{3};
+    JPH::BroadPhaseLayerInterfaceTable broad_phase{4, 2};
+    JPH::ObjectLayerPairFilterTable pairs{4};
     std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> broad_phase_filter;
     JPH::TempAllocatorImpl allocator{64 * 1024 * 1024};
     JPH::JobSystemThreadPool jobs{JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, 2};
     JPH::PhysicsSystem system;
     std::vector<JPH::BodyID> bodies;
+    JPH::CollisionGroup::GroupID next_character_group = 1;
 
     Impl() {
         broad_phase.MapObjectToBroadPhaseLayer(ground_layer, JPH::BroadPhaseLayer(0));
         broad_phase.MapObjectToBroadPhaseLayer(vehicle_layer, JPH::BroadPhaseLayer(1));
         broad_phase.MapObjectToBroadPhaseLayer(obstacle_layer, JPH::BroadPhaseLayer(0));
+        broad_phase.MapObjectToBroadPhaseLayer(character_layer, JPH::BroadPhaseLayer(1));
         pairs.EnableCollision(ground_layer, vehicle_layer);
         pairs.EnableCollision(vehicle_layer, vehicle_layer);
         pairs.EnableCollision(vehicle_layer, obstacle_layer);
-        broad_phase_filter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(broad_phase, 2, pairs, 3);
+        for (JPH::ObjectLayer layer : {ground_layer, vehicle_layer, obstacle_layer, character_layer})
+            pairs.EnableCollision(character_layer, layer);
+        broad_phase_filter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(broad_phase, 2, pairs, 4);
         system.Init(16384, 0, 16384, 16384, broad_phase, *broad_phase_filter, pairs);
         system.SetGravity(Vec3(0, -9.81f, 0));
         auto settings = system.GetPhysicsSettings();
@@ -233,7 +245,7 @@ float PhysicsWorld::camera_fraction(const Vec3& origin, const Vec3& offset, JPH:
     JPH::ShapeCastSettings settings;
     settings.mBackFaceModeTriangles = JPH::EBackFaceMode::CollideWithBackFaces;
     JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> hits;
-    impl_->system.GetNarrowPhaseQuery().CastShape(cast, settings, origin, hits, {}, {}, JPH::IgnoreSingleBodyFilter(ignore));
+    impl_->system.GetNarrowPhaseQuery().CastShape(cast, settings, origin, hits, {}, CameraLayers{}, JPH::IgnoreSingleBodyFilter(ignore));
     return hits.HadHit() ? std::clamp(hits.mHit.mFraction - 0.03f / offset.Length(), 0.0f, 1.0f) : 1;
 }
 
@@ -368,9 +380,49 @@ void Plane::step(FlightInput input, float dt) {
     }
 }
 
+namespace {
+constexpr std::size_t body_part_count = static_cast<std::size_t>(BodyPart::Count);
+struct HumanPart {
+    const char* name;
+    int parent;
+    Vec3 center, pivot, size;
+    float mass;
+};
+const std::array<HumanPart, body_part_count>& human_parts() {
+    static const std::array<HumanPart, body_part_count> parts{{
+        {"pelvis", -1, {0, .97f, 0}, {0, .97f, 0}, {.36f, .24f, .24f}, 12},
+        {"torso", 0, {0, 1.29f, 0}, {0, 1.08f, 0}, {.44f, .44f, .26f}, 25},
+        {"head", 1, {0, 1.68f, 0}, {0, 1.51f, 0}, {.26f, .30f, .26f}, 5},
+        {"left upper arm", 1, {-.30f, 1.28f, 0}, {-.28f, 1.45f, 0}, {.15f, .34f, .15f}, 3},
+        {"left forearm", 3, {-.32f, .95f, 0}, {-.32f, 1.11f, 0}, {.13f, .32f, .13f}, 2},
+        {"left hand", 4, {-.32f, .70f, 0}, {-.32f, .79f, 0}, {.12f, .18f, .10f}, .8f},
+        {"right upper arm", 1, {.30f, 1.28f, 0}, {.28f, 1.45f, 0}, {.15f, .34f, .15f}, 3},
+        {"right forearm", 6, {.32f, .95f, 0}, {.32f, 1.11f, 0}, {.13f, .32f, .13f}, 2},
+        {"right hand", 7, {.32f, .70f, 0}, {.32f, .79f, 0}, {.12f, .18f, .10f}, .8f},
+        {"left thigh", 0, {-.11f, .725f, 0}, {-.11f, .94f, 0}, {.18f, .43f, .18f}, 8},
+        {"left shin", 9, {-.11f, .31f, 0}, {-.11f, .51f, 0}, {.14f, .40f, .14f}, 4},
+        {"left foot", 10, {-.11f, .075f, -.08f}, {-.11f, .11f, 0}, {.16f, .13f, .31f}, 1.2f},
+        {"right thigh", 0, {.11f, .725f, 0}, {.11f, .94f, 0}, {.18f, .43f, .18f}, 8},
+        {"right shin", 12, {.11f, .31f, 0}, {.11f, .51f, 0}, {.14f, .40f, .14f}, 4},
+        {"right foot", 13, {.11f, .075f, -.08f}, {.11f, .11f, 0}, {.16f, .13f, .31f}, 1.2f}
+    }};
+    return parts;
+}
+bool hinge_part(std::size_t part) { return part == 4 || part == 7 || part == 10 || part == 13; }
+}
+
 struct Character::Impl {
     JPH::Ref<JPH::CharacterVirtual> character;
-    Vec3 desired_velocity{0, 0, 0};
+    // Jolt's ragdoll owns its bodies and joints; these never enter the world's static-body list.
+    JPH::Ref<JPH::Ragdoll> rig;
+    Vec3 desired_velocity{0, 0, 0}, impact_direction{0, 0, -1};
+    float ragdoll_time = 0, settled_time = 0, hit_cooldown = 0;
+    bool enabled = true;
+    ~Impl() { clear_ragdoll(); }
+    void clear_ragdoll() {
+        if (rig) { rig->RemoveFromPhysicsSystem(); rig = nullptr; }
+        ragdoll_time = settled_time = 0;
+    }
 };
 
 Character::Character(PhysicsWorld& world) : world_(world), impl_(std::make_unique<Impl>()) {
@@ -384,29 +436,255 @@ Character::Character(PhysicsWorld& world) : world_(world), impl_(std::make_uniqu
     impl_->character = new JPH::CharacterVirtual(&settings, Vec3(0, 2, 0), Quat::sIdentity(), &world_.impl_->system);
 }
 Character::~Character() = default;
-Vec3 Character::position() const { return impl_->character->GetPosition(); }
-Vec3 Character::velocity() const { return impl_->character->GetLinearVelocity(); }
-bool Character::grounded() const { return impl_->character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround; }
+bool Character::ragdolling() const { return impl_->rig != nullptr; }
+Vec3 Character::position() const {
+    if (!impl_->rig) return impl_->character->GetPosition();
+    const Vec3 pelvis = world_.impl_->system.GetBodyInterface().GetPosition(impl_->rig->GetBodyID(0));
+    return Vec3(pelvis.GetX(), impl_->rig->GetWorldSpaceBounds().mMin.GetY(), pelvis.GetZ());
+}
+Vec3 Character::velocity() const {
+    return impl_->rig ? world_.impl_->system.GetBodyInterface().GetLinearVelocity(impl_->rig->GetBodyID(0))
+                      : impl_->character->GetLinearVelocity();
+}
+bool Character::grounded() const {
+    if (!impl_->rig) return impl_->character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
+    GroundHit hit;
+    return world_.cast_ground(position() + Vec3(0, .15f, 0), -Vec3::sAxisY(), .3f, hit)
+        && hit.normal.GetY() > .55f;
+}
+
+void Character::set_enabled(bool enabled) {
+    if (!enabled && impl_->rig) {
+        const Vec3 feet = position();
+        impl_->clear_ragdoll();
+        impl_->character->SetPosition(feet);
+    }
+    impl_->enabled = enabled;
+    if (!enabled) {
+        impl_->desired_velocity = Vec3::sZero();
+        impl_->character->SetLinearVelocity(Vec3::sZero());
+    }
+}
+
+std::array<BodyPartPose, body_part_count> Character::body_parts() const {
+    const auto& parts = human_parts();
+    std::array<BodyPartPose, body_part_count> pose;
+    if (impl_->rig) {
+        auto& physics = world_.impl_->system.GetBodyInterface();
+        for (std::size_t i = 0; i < pose.size(); ++i)
+            pose[i] = {physics.GetPosition(impl_->rig->GetBodyID(static_cast<int>(i))),
+                       physics.GetRotation(impl_->rig->GetBodyID(static_cast<int>(i))), parts[i].size};
+        return pose;
+    }
+    const Vec3 speed = velocity();
+    const float moving = std::clamp(std::hypot(speed.GetX(), speed.GetZ()) / 6.5f, 0.0f, 1.0f);
+    const float swing = std::sin(gait_) * .65f * moving;
+    std::array<float, body_part_count> pitch{};
+    pitch[3] = -swing * .65f; pitch[6] = swing * .65f;
+    pitch[4] = pitch[7] = .12f + .25f * moving;
+    pitch[9] = swing; pitch[12] = -swing;
+    pitch[10] = -.05f - std::max(0.0f, -swing) * 1.1f;
+    pitch[13] = -.05f - std::max(0.0f, swing) * 1.1f;
+    pitch[11] = -pitch[9] - pitch[10]; pitch[14] = -pitch[12] - pitch[13];
+    const Vec3 feet = impl_->character->GetPosition();
+    const Quat root = Quat::sRotation(Vec3::sAxisY(), yaw_);
+    for (std::size_t i = 0; i < pose.size(); ++i) {
+        const auto& part = parts[i];
+        const Quat rotation = part.parent < 0 ? root
+            : pose[part.parent].rotation * Quat::sRotation(Vec3::sAxisX(), pitch[i]);
+        const Vec3 pivot = part.parent < 0 ? feet + root * part.pivot
+            : pose[part.parent].position + pose[part.parent].rotation * (part.pivot - parts[part.parent].center);
+        pose[i] = {pivot + rotation * (part.center - part.pivot), rotation, part.size};
+    }
+    return pose;
+}
+
+void Character::ragdoll(const Vec3& inherited_velocity, const Vec3& impulse) {
+    if (!impl_->enabled) return;
+    auto& physics = world_.impl_->system.GetBodyInterface();
+    if (impl_->rig) {
+        physics.AddImpulse(impl_->rig->GetBodyID(1), impulse);
+        impl_->settled_time = 0;
+        return;
+    }
+    const auto pose = body_parts();
+    const auto& parts = human_parts();
+    JPH::Ref<JPH::RagdollSettings> settings = new JPH::RagdollSettings;
+    settings->mSkeleton = new JPH::Skeleton;
+    settings->mParts.resize(parts.size());
+    std::array<JPH::Mat44, body_part_count> matrices;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const auto& part = parts[i];
+        settings->mSkeleton->AddJoint(part.name, part.parent);
+        JPH::RefConst<JPH::Shape> shape;
+        if (i == 2) shape = new JPH::SphereShape(.145f);
+        else if (i == 0 || i == 1 || i == 5 || i == 8 || i == 11 || i == 14)
+            shape = new JPH::BoxShape(part.size / 2, .015f);
+        else shape = new JPH::CapsuleShape((part.size.GetY() - part.size.GetX()) / 2, part.size.GetX() / 2);
+        auto& body = settings->mParts[i];
+        body.SetShape(shape);
+        body.mPosition = pose[i].position;
+        body.mRotation = pose[i].rotation;
+        body.mMotionType = JPH::EMotionType::Dynamic;
+        body.mObjectLayer = character_layer;
+        body.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+        body.mMassPropertiesOverride.mMass = part.mass;
+        body.mLinearDamping = .15f;
+        body.mAngularDamping = .45f;
+        body.mFriction = .65f;
+        body.mRestitution = .02f;
+        body.mMotionQuality = JPH::EMotionQuality::LinearCast;
+        body.mEnhancedInternalEdgeRemoval = true;
+        body.mMaxAngularVelocity = 18;
+        matrices[i] = JPH::Mat44::sRotationTranslation(pose[i].rotation, pose[i].position);
+        if (part.parent < 0) continue;
+        if (hinge_part(i)) {
+            JPH::Ref<JPH::HingeConstraintSettings> joint = new JPH::HingeConstraintSettings;
+            joint->mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+            joint->mPoint1 = part.pivot - parts[part.parent].center;
+            joint->mPoint2 = part.pivot - part.center;
+            joint->mHingeAxis1 = joint->mHingeAxis2 = Vec3::sAxisX();
+            joint->mNormalAxis1 = joint->mNormalAxis2 = Vec3::sAxisY();
+            const bool elbow = i == 4 || i == 7;
+            joint->mLimitsMin = elbow ? -.08f : -2.4f;
+            joint->mLimitsMax = elbow ? 2.4f : .08f;
+            joint->mMaxFrictionTorque = .5f;
+            joint->mMotorSettings = JPH::MotorSettings(3, 1, 0, elbow ? 7 : 12);
+            joint->mNumVelocityStepsOverride = 16;
+            joint->mNumPositionStepsOverride = 6;
+            body.mToParent = joint;
+        } else {
+            JPH::Ref<JPH::SwingTwistConstraintSettings> joint = new JPH::SwingTwistConstraintSettings;
+            joint->mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+            joint->mPosition1 = part.pivot - parts[part.parent].center;
+            joint->mPosition2 = part.pivot - part.center;
+            joint->mTwistAxis1 = joint->mTwistAxis2 = Vec3::sAxisY();
+            joint->mPlaneAxis1 = joint->mPlaneAxis2 = Vec3::sAxisX();
+            const bool shoulder = i == 3 || i == 6, hip = i == 9 || i == 12;
+            const float cone = shoulder ? 1.45f : hip ? 1.15f : i == 1 ? .48f : .55f;
+            joint->mNormalHalfConeAngle = joint->mPlaneHalfConeAngle = cone;
+            joint->mTwistMinAngle = -cone * .55f;
+            joint->mTwistMaxAngle = cone * .55f;
+            joint->mMaxFrictionTorque = .6f;
+            joint->mSwingMotorSettings = joint->mTwistMotorSettings = JPH::MotorSettings(3, 1, 0, shoulder ? 9 : hip ? 14 : 5);
+            joint->mNumVelocityStepsOverride = 16;
+            joint->mNumPositionStepsOverride = 6;
+            body.mToParent = joint;
+        }
+    }
+    if (!settings->Stabilize()) throw std::runtime_error("Could not stabilize humanoid ragdoll");
+    settings->DisableParentChildCollisions(matrices.data());
+    settings->CalculateBodyIndexToConstraintIndex();
+    settings->CalculateConstraintIndexToBodyIdxPair();
+    impl_->rig = settings->CreateRagdoll(world_.impl_->next_character_group++, 0, &world_.impl_->system);
+    if (!impl_->rig) throw std::runtime_error("Jolt could not allocate humanoid ragdoll");
+    impl_->rig->AddToPhysicsSystem(JPH::EActivation::Activate);
+    impl_->rig->SetLinearAndAngularVelocity(inherited_velocity, Vec3::sZero());
+    physics.AddImpulse(impl_->rig->GetBodyID(1), impulse);
+    Vec3 direction = inherited_velocity + impulse * .02f;
+    direction.SetY(0);
+    impl_->impact_direction = direction.NormalizedOr(forward());
+    impl_->ragdoll_time = impl_->settled_time = 0;
+}
+
+void Character::hit_by(const Car& car, float dt) {
+    if (!impl_->enabled || impl_->rig || impl_->hit_cooldown > 0 || !car.simulated() || car.velocity().LengthSq() < 2.25f) return;
+    const Quat inverse = car.rotation().Conjugated();
+    const Vec3 origin = inverse * (position() + Vec3(0, .9f, 0) - car.position()) - Vec3(0, chassis_offset, 0);
+    // The virtual controller may already be pushed along by a predictive car contact.
+    // Measure the impact against intended walking velocity, before that correction.
+    Vec3 walking_velocity = impl_->desired_velocity;
+    walking_velocity.SetY(velocity().GetY());
+    const Vec3 relative = car.velocity() - walking_velocity;
+    const Vec3 sweep = inverse * (-relative * dt);
+    const Vec3 half(1.35f, 1.15f, 2.28f); // Includes CharacterVirtual's 0.1 m predictive contact margin.
+    float first = 0, last = 1;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (std::abs(sweep[axis]) < .00001f) {
+            if (std::abs(origin[axis]) > half[axis]) return;
+        } else {
+            const float a = (-half[axis] - origin[axis]) / sweep[axis];
+            const float b = (half[axis] - origin[axis]) / sweep[axis];
+            first = std::max(first, std::min(a, b));
+            last = std::min(last, std::max(a, b));
+            if (first > last) return;
+        }
+    }
+    const float speed = relative.Length();
+    if (speed < 1.5f) return;
+    const Vec3 direction = relative.Normalized();
+    const Vec3 inherited = walking_velocity + relative * .65f + Vec3(0, std::clamp(speed * .09f, .5f, 3.5f), 0);
+    ragdoll(inherited, direction * std::min(speed * 2.0f, 65.0f));
+}
 
 void Character::reset(const Vec3& feet, float yaw) {
+    impl_->clear_ragdoll();
+    impl_->enabled = true;
     yaw_ = yaw; gait_ = 0;
     impl_->desired_velocity = Vec3::sZero();
     impl_->character->SetPosition(feet);
     impl_->character->SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw));
     impl_->character->SetLinearVelocity(Vec3::sZero());
+    impl_->hit_cooldown = 0;
     impl_->character->RefreshContacts({}, {}, {}, {}, world_.impl_->allocator);
 }
 
 bool Character::can_stand_at(const Vec3& feet) const {
     const auto* shape = impl_->character->GetShape();
     JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> hits;
+    JPH::IgnoreMultipleBodiesFilter own_parts;
+    if (impl_->rig) for (const auto& body : impl_->rig->GetBodyIDs()) own_parts.IgnoreBody(body);
     world_.impl_->system.GetNarrowPhaseQuery().CollideShape(shape, Vec3::sOne(),
-        JPH::RMat44::sTranslation(feet + shape->GetCenterOfMass()), {}, feet, hits);
+        JPH::RMat44::sTranslation(feet + shape->GetCenterOfMass()), {}, feet, hits, {}, {}, own_parts);
     for (const auto& hit : hits.mHits) if (hit.mPenetrationDepth > 0.005f) return false;
     return true;
 }
 
 void Character::step(FootInput input, float dt) {
+    if (!impl_->enabled) return;
+    impl_->hit_cooldown = std::max(0.0f, impl_->hit_cooldown - dt);
+    if (impl_->rig) {
+        auto& physics = world_.impl_->system.GetBodyInterface();
+        impl_->ragdoll_time += dt;
+        const bool brace = impl_->ragdoll_time < .9f;
+        bool settled = true;
+        for (std::size_t i = 1; i < body_part_count; ++i) {
+            auto* constraint = impl_->rig->GetConstraint(static_cast<int>(i - 1));
+            if (hinge_part(i)) {
+                auto& joint = static_cast<JPH::HingeConstraint&>(*constraint);
+                joint.SetMotorState(brace ? JPH::EMotorState::Position : JPH::EMotorState::Off);
+                joint.SetTargetAngle(i == 4 || i == 7 ? 1.0f : -.65f);
+            } else {
+                auto& joint = static_cast<JPH::SwingTwistConstraint&>(*constraint);
+                joint.SetSwingMotorState(brace ? JPH::EMotorState::Position : JPH::EMotorState::Off);
+                joint.SetTwistMotorState(brace ? JPH::EMotorState::Position : JPH::EMotorState::Off);
+                const float pitch = i == 3 || i == 6 ? 1.1f : i == 9 || i == 12 ? .45f : i == 1 ? -.25f : 0;
+                const float spread = i == 3 ? -.3f : i == 6 ? .3f : 0;
+                joint.SetTargetOrientationBS(Quat::sRotation(Vec3::sAxisX(), pitch) * Quat::sRotation(Vec3::sAxisZ(), spread));
+            }
+        }
+        if (impl_->ragdoll_time < .3f)
+            physics.AddTorque(impl_->rig->GetBodyID(1), impl_->impact_direction.Cross(Vec3::sAxisY()) * 7);
+        for (const auto& body : impl_->rig->GetBodyIDs())
+            settled &= physics.GetLinearVelocity(body).LengthSq() < .5f && physics.GetAngularVelocity(body).LengthSq() < 1.0f;
+        impl_->settled_time = settled && grounded() ? impl_->settled_time + dt : 0;
+        if (impl_->ragdoll_time > 2.8f && impl_->settled_time > .7f) {
+            const Vec3 pelvis = physics.GetPosition(impl_->rig->GetBodyID(0));
+            const Vec3 facing = physics.GetRotation(impl_->rig->GetBodyID(1)) * Vec3(0, 0, -1);
+            const float yaw = std::hypot(facing.GetX(), facing.GetZ()) > .1f ? std::atan2(-facing.GetX(), -facing.GetZ()) : yaw_;
+            for (const Vec3& offset : {Vec3::sZero(), Vec3(.65f, 0, 0), Vec3(-.65f, 0, 0), Vec3(0, 0, .65f), Vec3(0, 0, -.65f)}) {
+                GroundHit hit;
+                if (!world_.cast_ground(pelvis + offset + Vec3(0, 1, 0), -Vec3::sAxisY(), 2.4f, hit)
+                    || hit.normal.GetY() < .65f || hit.point.GetY() < -.05f) continue;
+                const Vec3 feet = hit.point + Vec3(0, .06f, 0);
+                if (!can_stand_at(feet)) continue;
+                reset(feet, yaw);
+                impl_->hit_cooldown = .75f;
+                break;
+            }
+        }
+        return;
+    }
     auto& character = *impl_->character;
     input.direction.SetY(0);
     if (input.direction.LengthSq() > 1) input.direction = input.direction.Normalized();
@@ -420,11 +698,19 @@ void Character::step(FootInput input, float dt) {
         if (input.jump) vertical_speed += 5.8f;
     }
     vertical_speed -= 18 * dt;
+    if (vertical_speed < -10) {
+        ragdoll(impl_->desired_velocity + Vec3(0, vertical_speed, 0));
+        return;
+    }
     character.SetLinearVelocity(impl_->desired_velocity + Vec3(0, vertical_speed, 0));
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     settings.mWalkStairsStepUp = Vec3(0, 0.35f, 0);
     settings.mStickToFloorStepDown = vertical_speed > 0.1f ? Vec3::sZero() : Vec3(0, -0.35f, 0);
     character.ExtendedUpdate(dt, Vec3(0, -18, 0), settings, {}, {}, {}, {}, world_.impl_->allocator);
+    if (vertical_speed < -8 && grounded()) {
+        ragdoll(impl_->desired_velocity + Vec3(0, vertical_speed, 0));
+        return;
+    }
     if (input.direction.LengthSq() > 0.01f) {
         const float target = std::atan2(-input.direction.GetX(), -input.direction.GetZ());
         yaw_ += std::clamp(std::remainder(target - yaw_, 6.28318530718f), -12 * dt, 12 * dt);

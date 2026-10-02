@@ -389,7 +389,8 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     asphalt_texture_ = load_terrain_texture("asphalt.png");
     const Color asphalt = asphalt_texture_.id ? WHITE : Color{57, 65, 70, 255};
     for (const auto& t : env.triangles()) {
-        if (t.surface == Surface::Seabed) continue;
+        const bool shoreline = t.surface == Surface::Seabed;
+        if (shoreline && std::max({env.vertices()[t.a].GetY(), env.vertices()[t.b].GetY(), env.vertices()[t.c].GetY()}) < 0) continue;
         MeshBuilder* surface = &ground;
         Color tint = surface_color(t.surface);
         Vec3 lift = Vec3::sZero();
@@ -401,8 +402,8 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         }
         else if (t.surface == Surface::Grass || t.surface == Surface::Road) {
             surface = &grass; if (grass_texture_.id) tint = WHITE;
-        } else if (t.surface == Surface::Sand) {
-            surface = &sand; if (sand_texture_.id) tint = WHITE;
+        } else if (t.surface == Surface::Sand || shoreline) {
+            surface = &sand; tint = sand_texture_.id ? WHITE : surface_color(Surface::Sand);
         }
         surface->triangle(env.vertices()[t.a] + lift, env.vertices()[t.b] + lift, env.vertices()[t.c] + lift, tint);
     }
@@ -701,8 +702,9 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     }
     for (int i = 0; i < 38; ++i) {
         const float z = -492 + i * 26.4f;
-        const float coast = (z + 60) / 990;
-        const float x = 1320 + 300 * std::sqrt(.94f * .94f - coast * coast);
+        float x = 1770;
+        while (x > 1490 && env.terrain_height(x, z) < .7f) x -= 5;
+        x -= 8;
         const Vec3 p(x, env.terrain_height(x, z), z);
         if (p.GetY() < .1f) continue;
         city.box(p + Vec3(0, 1.3f, 0), Vec3(.12f, 2.6f, .12f), RAYWHITE);

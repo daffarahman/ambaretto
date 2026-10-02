@@ -111,7 +111,11 @@ void braking_and_theft() {
     require((player.position() - target.position()).Length() < .001f && player.forward().Dot(target.forward()) > .999f,
         "player/camera target did not follow stolen car");
     require((starter.position() - parked).Length() < 1, "starter car was also controlled after theft");
-    require(player.interact() == Interaction::TooFast, "allowed exit from stolen car at speed");
+    const Vec3 bailout_velocity = target.velocity();
+    require(player.interact() == Interaction::Exited && player.on_foot() && player.character().ragdolling(),
+        "could not bail out of a moving stolen car");
+    require((player.character().velocity() - bailout_velocity).Length() < 3.3f && !player.can_enter(),
+        "stolen car bailout lost momentum or allowed immediate reentry");
     starter.reset(map.spawn());
     player.reset();
     tick(player, 120);

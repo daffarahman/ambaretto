@@ -23,6 +23,47 @@ Vec3 closest_point(Vec3 p, const Road& road) {
     return road.a + (road.b - road.a) * t;
 }
 float cross(Vec3 a, Vec3 b) { return a.GetX() * b.GetZ() - a.GetZ() * b.GetX(); }
+void coastlines(const Environment& map) {
+    constexpr float pi = 3.14159265359f;
+    for (int index : {1, 7, 8, 9}) {
+        const auto& island = map.islands()[index];
+        float shortest = 100, longest = 0;
+        for (int sample = 0; sample < 32; ++sample) {
+            const float angle = index == 1 ? -pi / 2 + pi * sample / 31 : 2 * pi * sample / 32;
+            float inside = 0, outside = 1.6f;
+            for (int step = 0; step < 16; ++step) {
+                const float radius = (inside + outside) / 2;
+                const float x = island.center.GetX() + std::cos(angle) * island.radius_x * radius;
+                const float z = island.center.GetZ() + std::sin(angle) * island.radius_z * radius;
+                if (map.coast_radius(x, z) < 1) inside = radius; else outside = radius;
+            }
+            shortest = std::min(shortest, inside); longest = std::max(longest, inside);
+        }
+        require(longest - shortest > .20f, "island shoreline is still a plain ellipse");
+        require(map.terrain_height(island.center.GetX(), island.center.GetZ()) >= 2.9f, "island town center is submerged");
+    }
+    require(map.terrain_height(-600, -1020) < 0 && map.terrain_height(340, 80) < 0 && map.terrain_height(1090, -650) < 0,
+        "unused mainland or Beach waterfront is still a flat field");
+    for (int index : {0, 3, 7}) {
+        const auto& bridge = map.bridges()[index];
+        const Vec3 side = flat(bridge.b - bridge.a).Normalized().Cross(Vec3::sAxisY());
+        for (float t : {.45f, .5f, .55f}) for (float offset : {-150.0f, -60.0f, 0.0f, 60.0f, 150.0f}) {
+            const Vec3 p = bridge.a + (bridge.b - bridge.a) * t + side * offset;
+            require(map.terrain_height(p.GetX(), p.GetZ()) < -1,
+                "PortMiami or Keys shores touch beneath their bridge");
+        }
+    }
+    const Vec3 river[]{{-1313, 0, -400}, {-1290, 0, 0}, {-1284, 0, 200}, {-1288, 0, 400},
+        {-1326, 0, 600}, {-1464, 0, 850}, {-1495, 0, 1050}};
+    for (std::size_t i = 1; i < std::size(river); ++i)
+        for (int step = 0; step <= 20; ++step) {
+            const Vec3 p = river[i - 1] + (river[i] - river[i - 1]) * (float(step) / 20);
+            require(map.terrain_height(p.GetX(), p.GetZ()) < -1, "western river is blocked before reaching the sea");
+        }
+    require(map.terrain_height(-1332, 654) < -1 && map.height(-1332, 654) >= 7.9f,
+        "city-loop highway has no raised bridge over the river");
+    std::cout << "Irregular island outlines and waterfront inlets checked.\n";
+}
 bool connected(const Environment& map, const Road& a, const Road& b) {
     const auto same_level = [&](Vec3 p, Vec3 q) {
         return std::abs(map.road_height(a, p.GetX(), p.GetZ())
@@ -237,8 +278,9 @@ void highway_layers(const Environment& map, PhysicsWorld& world) {
             require(std::abs(map.surface_height(p) - p.GetY()) < .02f,
                 "highway path endpoint and physical ramp joint disagree");
         }
-        ring = ring || (highway.closed && highway.width >= 18 && lowest >= 2.9f && highest <= 4
-            && std::all_of(highway.corners.begin(), highway.corners.end(), [](Vec3 p) { return p.GetY() == 0; }));
+        ring = ring || (highway.closed && highway.width >= 18 && lowest >= 2.9f && highest >= 7.9f && highest <= 8.1f
+            && std::count_if(highway.corners.begin(), highway.corners.end(), [](Vec3 p) { return p.GetY() == 0; })
+                > int(highway.corners.size() / 2));
         arterial = arterial || (highway.width == 24 && lowest <= 3.3f && highest >= Environment::highway_level);
         flyover = flyover || (!highway.closed && highway.width == 24 && highest >= 31.9f
             && std::max(highway.corners.front().GetX(), highway.corners.back().GetX()) > 1300
@@ -249,7 +291,7 @@ void highway_layers(const Environment& map, PhysicsWorld& world) {
             require(length < 2500, "beach skyway still takes a long detour");
         }
     }
-    require(ring && arterial && flyover, "ground-level city ring, six-lane arterial or beach flyover missing");
+    require(ring && arterial && flyover, "city ring with river bridge, six-lane arterial or beach flyover missing");
     for (const auto& before : map.bridges()) if (before.a.GetY() > 0)
         for (const auto& after : map.bridges()) if (&before != &after && std::string_view(before.name) == after.name
             && (before.b - after.a).Length() < .01f)
@@ -451,7 +493,7 @@ int main() {
     std::cout << std::unitbuf;
     try {
         Environment map; PhysicsWorld world(map); Car car(world);
-        map_layout(map, world); highway_layers(map, world); bridge_walls(map, world); highway_dividers(map); drive_bridges(map, world, car); drive_highways(map, world, car); traffic_streaming(map, world, car);
+        coastlines(map); map_layout(map, world); highway_layers(map, world); bridge_walls(map, world); highway_dividers(map); drive_bridges(map, world, car); drive_highways(map, world, car); traffic_streaming(map, world, car);
         std::cout << "All Miami map checks passed.\n"; return 0;
     } catch (const std::exception& error) {
         std::cerr << "Map check failed: " << error.what() << '\n'; return 1;

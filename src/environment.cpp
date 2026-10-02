@@ -12,6 +12,10 @@ float smooth(float a, float b, float x) {
     const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
     return t * t * (3 - 2 * t);
 }
+float river_radius(float x, float z) {
+    const float center = -1300 + 16 * std::sin((z + 160) / 240) - 180 * smooth(480, 980, z);
+    return std::hypot(x - center, std::max({-420 - z, 0.0f, z - 1100})) / 55;
+}
 float segment_fraction(Vec3 a, Vec3 b, float x, float z) {
     const float dx = b.GetX() - a.GetX(), dz = b.GetZ() - a.GetZ();
     return ((x - a.GetX()) * dx + (z - a.GetZ()) * dz) / (dx * dx + dz * dz);
@@ -108,7 +112,7 @@ const std::vector<Bridge>& Environment::bridges() {
         };
         for (const auto& path : highways()) {
             if (std::string_view(path.name) == "KEYS EXIT RAMP" || std::string_view(path.name) == "AIRPORT INTERNAL ACCESS"
-                || std::string_view(path.name) == "US 1 SLOW LANES" || std::string_view(path.name) == "INTERSTATE CITY LOOP"
+                || std::string_view(path.name) == "US 1 SLOW LANES"
                 || std::string_view(path.name) == "AIRPORT INTERCHANGE" || std::string_view(path.name) == "AIRPORT CROSS STREET") continue;
             auto points = path.corners;
             if (path.closed) points.push_back(points.front());
@@ -123,7 +127,8 @@ const std::vector<Bridge>& Environment::bridges() {
                 sides.push_back((incoming + outgoing).Cross(Vec3::sAxisY()) / (1 + incoming.Dot(outgoing)));
             }
             for (std::size_t i = 0; i + 1 < points.size(); ++i) {
-                if (std::string_view(path.name) == "US 1 GRAND BOULEVARD"
+                if ((std::string_view(path.name) == "US 1 GRAND BOULEVARD"
+                    || std::string_view(path.name) == "INTERSTATE CITY LOOP")
                     && points[i].GetY() <= road_level + .001f && points[i + 1].GetY() <= road_level + .001f) continue;
                 result.push_back({points[i], points[i + 1], path.width, 32, path.name,
                     sides[i], sides[i + 1], !path.closed && i == 0, !path.closed && i + 2 == points.size()});
@@ -153,7 +158,13 @@ const std::vector<StreetLoop>& Environment::highways() {
         arc(-100, 470, pi / 2, 0); arc(-100, -410, 0, -pi / 2);
         line(ring, Vec3(-360, road_level, -690));
         arc(-1120, -410, -pi / 2, -pi); arc(-1120, 470, pi, pi / 2);
-        for (auto& p : ring) p.SetY(0); // Ground routes follow the shared terrain, like local streets.
+        line(ring, ring.front());
+        ring.pop_back(); // The closed route adds the shared first point itself.
+        // Lift the western curve over the river, with gentle approaches at both ends.
+        for (auto& p : ring) {
+            const float distance = std::hypot(p.GetX() + 1332, p.GetZ() - 654);
+            p.SetY(distance < 265 ? road_level + (8 - road_level) * (1 - smooth(70, 240, distance)) : 0);
+        }
         result.push_back({ring, 18, "INTERSTATE CITY LOOP", true, 20, 48, 4});
         std::vector<Vec3> main{{-360, road_level, -840}};
         line(main, Vec3(-360, road_level, 360));
@@ -379,7 +390,8 @@ const std::vector<Road>& Environment::roads() {
             || std::string_view(path.name) == "AIRPORT INTERCHANGE" || std::string_view(path.name) == "AIRPORT CROSS STREET"
             || std::string_view(path.name) == "US 1 SLOW LANES") {
             for (std::size_t i = 0; i + 1 < path.corners.size(); ++i)
-                result.push_back({path.corners[i], path.corners[i + 1], path.width, path.name});
+                if (path.corners[i].GetY() <= road_level + .001f && path.corners[i + 1].GetY() <= road_level + .001f)
+                    result.push_back({path.corners[i], path.corners[i + 1], path.width, path.name});
             if (path.closed) result.push_back({path.corners.back(), path.corners.front(), path.width, path.name});
         }
         // The southern fork rounds the turn onto the new cross street.
@@ -410,11 +422,55 @@ const std::vector<Road>& Environment::roads() {
 }
 float Environment::coast_radius(float x, float z) {
     float radius = 100;
-    for (const auto& island : islands()) {
-        const float dx = std::abs((x - island.center.GetX()) / island.radius_x);
-        const float dz = std::abs((z - island.center.GetZ()) / island.radius_z);
-        const float shape = &island == &islands().front() ? std::sqrt(std::sqrt(dx * dx * dx * dx + dz * dz * dz * dz)) : std::hypot(dx, dz);
+    for (std::size_t i = 0; i < islands().size(); ++i) {
+        const auto& island = islands()[i];
+        float dx = (x - island.center.GetX()) / island.radius_x;
+        float dz = (z - island.center.GetZ()) / island.radius_z;
+        if (dx * dx + dz * dz > 9) continue;
+        const float phase = float(i) * 1.73f;
+        // Bent island spines and asymmetric lobes make coves, points and narrow waists.
+        if (i == 0) { dx += .10f * std::sin(dz * 3); dz *= .88f; }
+        else if (i == 1) dx += .20f * std::sin(dz * 3 + .4f);
+        else if (i >= 6) { dx += .28f * std::sin(dz * 3 + phase); dz = dz * .90f + dx * .12f; }
+        const float angle = std::atan2(dz, dx);
+        const float outline = 1 + .15f * std::sin(3 * angle + phase)
+            + .09f * std::sin(5 * angle - phase) + .035f * std::cos(8 * angle + phase);
+        float shape = std::hypot(dx, dz) / outline;
+        const auto inlet = [&](float cx, float cz, float rx, float rz) {
+            const float u = (x - cx) / rx, v = (z - cz) / rz;
+            const float edge = 1 + .13f * std::sin(3 * std::atan2(v, u) + phase);
+            shape = std::max(shape, 1.24f - .34f * std::hypot(u + .18f * std::sin(v * 3 + phase), v) / edge);
+        };
+        if (i == 0) {
+            inlet(-600, -1020, 260, 260);
+            inlet(340, 80, 150, 210);
+            inlet(260, -540, 140, 210);
+            inlet(280, 650, 160, 180);
+        } else if (i == 1) {
+            inlet(1090, -650, 120, 170);
+            inlet(1070, 100, 95, 170);
+            inlet(1210, 760, 130, 160);
+        } else if (i >= 6) {
+            inlet(island.center.GetX() - island.radius_x * .78f, island.center.GetZ() + island.radius_z * .20f,
+                island.radius_x * .28f, island.radius_z * .42f);
+            inlet(island.center.GetX() + island.radius_x * .45f, island.center.GetZ() + island.radius_z * .68f,
+                island.radius_x * .25f, island.radius_z * .24f);
+        }
         radius = std::min(radius, shape);
+    }
+    // Extend the western inlet into a winding river that opens onto the south coast.
+    radius = std::max(radius, 1.30f - .40f * river_radius(x, z));
+    // Keep PortMiami and the Keys separated where their shorelines overlap.
+    for (int index : {0, 3, 7}) {
+        const auto& bridge = bridges()[index];
+        const Vec3 direction = Vec3(bridge.b.GetX() - bridge.a.GetX(), 0,
+            bridge.b.GetZ() - bridge.a.GetZ()).Normalized();
+        const Vec3 offset = Vec3(x, 0, z) - (bridge.a + bridge.b) / 2;
+        const float across = offset.Dot(direction.Cross(Vec3::sAxisY()));
+        const float bend = 12 * std::sin(across / 85) + 8 * std::sin(across / 180);
+        const float channel = (1 - smooth(30, 65, std::abs(offset.Dot(direction) - bend)))
+            * (1 - smooth(450, 650, std::abs(across)));
+        if (channel > 0) radius = std::max(radius, .90f + .40f * channel);
     }
     return radius;
 }
@@ -440,6 +496,20 @@ const char* Environment::district(float x, float z) {
 float Environment::elevation(float x, float z) {
     const float radius = coast_radius(x, z);
     float ground = road_level - (road_level + 9) * smooth(.90f, 1.12f, radius);
+    if (radius < 1.6f) {
+        float verge = 10000;
+        for (const auto& street : roads()) if (street.bridge < 0)
+            verge = std::min(verge, distance_to(street.a, street.b, x, z) - street.width / 2);
+        // Raised ground follows streets, without extending the island under overpasses.
+        ground += (std::max(ground, road_level) - ground) * (1 - smooth(45, 85, verge));
+        float relief = (1 + std::sin(x * .013f) * std::cos(z * .011f)) * .8f
+            * (1 - smooth(.65f, .92f, radius)) * smooth(45, 120, verge);
+        for (const auto& key : keys()) {
+            const Vec3 dock(key.center.GetX() + key.rx * .84f, 0, key.center.GetZ());
+            if (distance_to(dock, dock + Vec3(220, 0, 0), x, z) < spacing * 2) relief = 0;
+        }
+        ground += relief;
+    }
     for (const auto& airport : airports) {
         const float padding = airport.international ? 25 : 5;
         const float airport_blend = (1 - smooth(airport.grounds_half_width + padding, airport.grounds_half_width + 90,
@@ -447,12 +517,15 @@ float Environment::elevation(float x, float z) {
             airport.grounds_half_length() + 65, std::abs(z - airport.runway_z)));
         ground += (Airport::elevation - ground) * airport_blend;
     }
+    // Nearby road verges must stop at the riverbank instead of damming the channel.
+    const float river = 1.30f - .40f * river_radius(x, z);
+    if (river > .90f) ground = std::min(ground, road_level - (road_level + 9) * smooth(.90f, 1.12f, river));
     return ground;
 }
 Surface Environment::surface(float x, float z, float y) {
     if (y < -.1f) return Surface::Seabed;
     if (road(x, z)) return Surface::Road;
-    return coast_radius(x, z) > .80f ? Surface::Sand : Surface::Grass;
+    return coast_radius(x, z) > .86f ? Surface::Sand : Surface::Grass;
 }
 
 Environment::Environment() {
@@ -707,11 +780,16 @@ Environment::Environment() {
                 add_tree(p.GetX(), p.GetZ());
             }
     }
-    for (int i = 0; i < 5000; ++i) {
-        const auto& island = islands()[random() % islands().size()];
+    for (int cluster = 0; cluster < 160; ++cluster) {
+        const auto& island = islands()[cluster % 4 < 2 ? cluster % 4 : 6 + cluster % 5];
         const float x = island.center.GetX() + (int(random() % 2001) - 1000) / 1000.0f * island.radius_x;
         const float z = island.center.GetZ() + (int(random() % 2001) - 1000) / 1000.0f * island.radius_z;
-        add_tree(x, z);
+        const float radius = 55 + random() % 40;
+        for (int i = 0; i < 80; ++i) {
+            const float angle = random() % 6283 * .001f;
+            const float distance = radius * std::sqrt(random() % 1000 / 1000.0f);
+            add_tree(x + std::cos(angle) * distance, z + std::sin(angle) * distance);
+        }
     }
 }
 float Environment::terrain_height(float x, float z) const {

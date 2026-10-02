@@ -197,7 +197,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         text("Keyboard and gamepad defaults. Edit bindings in Settings > Controller mapping.", r.x + 20, r.y + 58, 16, RAYWHITE);
         constexpr const char* lines[] = {
             "Car: W/S or left stick. Opposite direction brakes, then reverses. Space / B: handbrake.",
-            "Car horn: hold H / right-stick click. Remap keys and USB/gamepad buttons in Settings.",
+            "Car horn: H / right-stick click. E / Y: exit, or jump out while moving and tumble.",
             "On foot: WASD / left stick. Shift / L-stick: sprint. Space / A: jump. E / Y: enter/exit.",
             "Plane: W/S or left stick Y: pitch. A/D or left stick X: bank.",
             "Plane throttle: Shift/Ctrl or RT/LT. Rudder: arrows or LB/RB. Flaps: F / X.",

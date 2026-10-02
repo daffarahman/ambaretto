@@ -37,6 +37,57 @@ void character_movement() {
     std::cout << "Character jump: " << peak << " m; walking and sprint passed\n";
 }
 
+void articulated_ragdoll() {
+    using namespace forza;
+    PhysicsWorld world(false);
+    Character character(world), observer(world);
+    const Vec3 feet(0, .08f, 0), inherited(6, 2, -4);
+    character.reset(feet);
+    tick(world, character, {}, 120);
+    character.ragdoll(inherited, Vec3(0, 35, -90));
+    require(character.ragdolling() && (character.velocity() - inherited).Length() < .01f,
+        "ragdoll did not inherit velocity");
+    const auto initial = character.body_parts();
+    require(initial.size() == 15 && !observer.can_stand_at(feet), "ragdoll parts have no physical collision");
+    require(character.can_stand_at(feet), "character recovery collides with its own ragdoll");
+    require(world.camera_fraction(initial[static_cast<std::size_t>(BodyPart::Torso)].position, Vec3(0, 0, 5)) > .99f,
+        "ragdoll bodies obstruct their own camera");
+    const int parents[] = {-1, 0, 1, 1, 3, 4, 1, 6, 7, 0, 9, 10, 0, 12, 13};
+    bool articulated = false;
+    for (int step = 0; step < 360 && character.ragdolling(); ++step) {
+        tick(world, character, {}, 1);
+        const auto parts = character.body_parts();
+        for (std::size_t i = 0; i < parts.size(); ++i) {
+            const auto& part = parts[i];
+            require(std::isfinite(part.position.LengthSq()) && std::isfinite(part.rotation.LengthSq())
+                && std::abs(part.rotation.LengthSq() - 1) < .01f && part.position.GetY() > -.3f,
+                "ragdoll body is invalid or fell through the ground");
+            if (parents[i] < 0) continue;
+            const auto& parent = parts[parents[i]];
+            require((part.position - parent.position).Length() < (part.size.Length() + parent.size.Length()) * .5f + .2f,
+                "ragdoll limb detached from its parent");
+            const Quat relative = parent.rotation.Conjugated() * part.rotation;
+            const Quat neutral = initial[parents[i]].rotation.Conjugated() * initial[i].rotation;
+            articulated |= std::abs(relative.Dot(neutral)) < .985f;
+        }
+    }
+    require(articulated, "ragdoll moved as one rigid body instead of separate limbs");
+    for (int step = 0; step < 1440 && character.ragdolling(); ++step) tick(world, character, {}, 1);
+    tick(world, character, {}, 120);
+    require(!character.ragdolling() && character.grounded(), "settled ragdoll did not recover to standing");
+    character.reset(feet);
+    character.ragdoll(Vec3::sZero());
+    require(!observer.can_stand_at(feet), "second ragdoll did not create colliders");
+    character.set_enabled(false);
+    require(!character.ragdolling() && observer.can_stand_at(feet), "seated character retained ragdoll colliders");
+    character.set_enabled(true);
+    character.ragdoll(Vec3::sZero());
+    character.reset(feet);
+    require(!character.ragdolling() && character.velocity().Length() < .001f && observer.can_stand_at(feet),
+        "reset retained ragdoll bodies or momentum");
+    std::cout << "Ragdoll: articulated limbs, collision, camera, recovery and cleanup passed\n";
+}
+
 void city_collisions_and_interaction() {
     const forza::Environment map;
     forza::PhysicsWorld world(map);
@@ -54,7 +105,15 @@ void city_collisions_and_interaction() {
     require(!player.can_enter() && player.interact() == forza::Interaction::TooFar, "entered a car from too far away");
     player.reset();
     for (int i = 0; i < 150; ++i) player.step({1, 0, false}, {});
-    require(player.interact() == forza::Interaction::TooFast && player.driving(), "exited a car at speed");
+    const auto bailout_velocity = car.velocity(), bailout_position = car.position();
+    require(bailout_velocity.Length() > 2.5f && player.interact() == forza::Interaction::Exited
+        && player.on_foot() && player.character().ragdolling(), "moving car exit did not trigger a ragdoll");
+    require((player.character().velocity() - bailout_velocity).Length() < 3.3f && !player.can_enter(),
+        "bailout lost vehicle momentum or allowed immediate reentry");
+    for (int i = 0; i < 30; ++i) player.step({}, {});
+    require(car.velocity().Length() > bailout_velocity.Length() * .8f && (car.position() - bailout_position).Length() > .5f,
+        "abandoned moving car stopped immediately after bailout");
+    player.reset();
 
     const auto& building = map.buildings().front();
     const float x = building.center.GetX(), z = building.center.GetZ();
@@ -157,7 +216,7 @@ void model_tree_collisions() {
 }
 int main() {
     try {
-        character_movement(); city_collisions_and_interaction(); car_coasting_and_direction_changes(); mouse_camera(); model_tree_collisions();
+        character_movement(); articulated_ragdoll(); city_collisions_and_interaction(); car_coasting_and_direction_changes(); mouse_camera(); model_tree_collisions();
         std::cout << "All player checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

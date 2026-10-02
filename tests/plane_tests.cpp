@@ -180,11 +180,16 @@ void entry_exit_and_recovery() {
     require(player.character().can_stand_at(player.position()), "plane exit overlaps collider");
     require(player.interact() == Interaction::Entered && player.flying(), "could not reenter plane after exit");
     plane.reset(Vec3(900, 80, 0), 0, Vec3(0, 0, -40), .7f);
-    require(player.interact() == Interaction::TooFast && player.flying(), "allowed exit during flight");
     player.step({}, {}, fixed_step, {});
     require(player.position().GetX() > 800 && player.position().GetY() > 70, "flight beyond island was blocked");
+    const Vec3 bailout_velocity = plane.velocity();
+    require(player.interact() == Interaction::Exited && player.on_foot() && player.character().ragdolling(),
+        "could not bail out of an airborne plane");
+    require(player.position().GetY() > 70 && (player.character().velocity() - bailout_velocity).Length() < 3.3f
+        && !player.can_enter(), "airborne bailout lost altitude or vehicle momentum");
     player.recover_plane();
-    require(player.flying() && plane.velocity().Length() < .001f && !plane.damaged() && plane.throttle() == 0,
+    require(player.on_foot() && player.character().ragdolling() && plane.velocity().Length() < .001f
+        && !plane.damaged() && plane.throttle() == 0,
         "aircraft recovery retained velocity, damage or throttle");
     require(std::abs(plane.position().GetX() - airports[0].plane_x()) < .001f
         && std::abs(plane.position().GetZ() - airports[0].plane_z()) < .001f, "recovery did not return to runway threshold");
