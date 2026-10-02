@@ -32,10 +32,17 @@ const std::vector<KeyLayout>& keys() {
 }
 
 Vec3 Bridge::point(float t) const {
+    // Explicit endpoint elevations keep curved deck sections on one continuous grade.
+    if (a.GetY() > 0) return a + (b - a) * t;
     const float ramp = std::min(.34f, 160.0f / (b - a).Length());
     const float blend = smooth(0, ramp, std::min(t, 1 - t));
     const Vec3 p = a + (b - a) * t;
     return Vec3(p.GetX(), Environment::road_level + (clearance - Environment::road_level) * blend, p.GetZ());
+}
+Vec3 Bridge::side(float t) const {
+    if (start_side.LengthSq() > 0) return start_side + (end_side - start_side) * t;
+    const Vec3 delta = b - a;
+    return Vec3(delta.GetX(), 0, delta.GetZ()).Normalized().Cross(Vec3::sAxisY());
 }
 const std::vector<Island>& Environment::islands() {
     static const std::vector<Island> data = [] {
@@ -53,7 +60,8 @@ const std::vector<Island>& Environment::islands() {
     return data;
 }
 const std::vector<Bridge>& Environment::bridges() {
-    static const std::vector<Bridge> data{
+    static const std::vector<Bridge> data = [] {
+        std::vector<Bridge> result{
         {{240, 0, 240}, {570, 0, 240}, 12, 8, "MACARTHUR CAUSEWAY"},
         {{750, 0, 240}, {1140, 0, 240}, 12, 8, "MACARTHUR CAUSEWAY"},
         {{240, 0, -240}, {1140, 0, -240}, 12, 7, "VENETIAN CAUSEWAY"},
@@ -62,7 +70,32 @@ const std::vector<Bridge>& Environment::bridges() {
         {{-840, 0, 2340}, {-1080, 0, 2790}, 10, 10, "LONG KEY BRIDGE"},
         {{-1440, 0, 3090}, {-1590, 0, 3540}, 10, 12, "SEVEN MILE BRIDGE"},
         {{-1890, 0, 3870}, {-1980, 0, 4170}, 10, 9, "KEY WEST CAUSEWAY"}
-    };
+        };
+        // One continuous causeway, tessellated once into the existing deck geometry.
+        constexpr int segments = 72;
+        std::vector<Vec3> points;
+        std::vector<float> distance{0};
+        for (int i = 0; i <= segments; ++i) {
+            const float t = float(i) / segments, u = 1 - t;
+            points.push_back(Vec3(1380, 0, 480) * (u * u * u) + Vec3(1380, 0, 1200) * (3 * u * u * t)
+                + Vec3(450, 0, 1300) * (3 * u * t * t) + Vec3(-260, 0, 1450) * (t * t * t));
+            if (i) distance.push_back(distance.back() + (points[i] - points[i - 1]).Length());
+        }
+        std::vector<Vec3> sides;
+        for (int i = 0; i <= segments; ++i) {
+            const Vec3 incoming = (points[i] - points[std::max(0, i - 1)]).NormalizedOr((points[1] - points[0]).Normalized());
+            const Vec3 outgoing = (points[std::min(segments, i + 1)] - points[i]).NormalizedOr(incoming);
+            sides.push_back((incoming + outgoing).Cross(Vec3::sAxisY()) / (1 + incoming.Dot(outgoing)));
+        }
+        for (int i = 0; i <= segments; ++i) {
+            const float rise = smooth(80, 480, distance[i]) * smooth(120, 520, distance.back() - distance[i]);
+            points[i].SetY(road_level + (32 - road_level) * rise);
+        }
+        for (int i = 0; i < segments; ++i)
+            result.push_back({points[i], points[i + 1], 24, 32, "BEACH TO KEYS SKYWAY",
+                sides[i], sides[i + 1], i == 0, i + 1 == segments});
+        return result;
+    }();
     return data;
 }
 const std::vector<StreetLoop>& Environment::street_loops() {
@@ -259,11 +292,12 @@ Environment::Environment() {
         triangle(a, c, b); triangle(b, c, d);
     }
     for (const auto& bridge : bridges()) {
-        const Vec3 direction = (bridge.b - bridge.a).Normalized(), side = direction.Cross(Vec3::sAxisY());
+        const Vec3 direction = (bridge.b - bridge.a).Normalized();
         const int rows = int((bridge.b - bridge.a).Length() / 8) + 1;
         const std::uint32_t first = std::uint32_t(vertices_.size());
         for (int row = 0; row <= rows; ++row) {
             const Vec3 center = bridge.point(float(row) / rows);
+            const Vec3 side = bridge.side(float(row) / rows);
             vertices_.push_back(center - side * (bridge.width / 2));
             vertices_.push_back(center + side * (bridge.width / 2));
         }
@@ -273,7 +307,8 @@ Environment::Environment() {
             const Vec3 center = bridge.point((row + .5f) / rows);
             // Leave adjoining intersections open for cars turning onto the deck.
             const float along = (row + .5f) / rows * (bridge.b - bridge.a).Length();
-            if (along < 20 || along > (bridge.b - bridge.a).Length() - 20) continue;
+            if ((bridge.open_a && along < 20) || (bridge.open_b && along > (bridge.b - bridge.a).Length() - 20)) continue;
+            const Vec3 side = bridge.side((row + .5f) / rows);
             for (float sign : {-1.0f, 1.0f}) barriers_.push_back({center + side * (sign * (bridge.width / 2 - .3f))
                 + Vec3(0, .65f, 0), Vec3(.45f, 1.3f, (bridge.b - bridge.a).Length() / rows + .1f),
                 std::atan2(-direction.GetX(), -direction.GetZ())});
@@ -437,6 +472,26 @@ float Environment::height(float x, float z) const {
     float ground = terrain_height(x, z);
     for (const auto& bridge : bridges()) {
         const float t = segment_fraction(bridge.a, bridge.b, x, z);
+        if (bridge.a.GetY() > 0) {
+            if (t < -.05f || t > 1.05f || distance_to(bridge.a, bridge.b, x, z) > bridge.width / 2 + 1) continue;
+            const int rows = int((bridge.b - bridge.a).Length() / 8) + 1;
+            const auto sample = [&](Vec3 a, Vec3 b, Vec3 c) {
+                const auto cross = [](Vec3 u, Vec3 v) { return u.GetX() * v.GetZ() - u.GetZ() * v.GetX(); };
+                const Vec3 p(x - a.GetX(), 0, z - a.GetZ()), u = b - a, v = c - a;
+                const float determinant = cross(u, v), s = cross(p, v) / determinant, r = cross(u, p) / determinant;
+                if (s >= -.00001f && r >= -.00001f && s + r <= 1.00001f)
+                    ground = std::max(ground, a.GetY() + s * u.GetY() + r * v.GetY());
+            };
+            for (int row = 0; row < rows; ++row) {
+                const float start = float(row) / rows, end = float(row + 1) / rows;
+                const Vec3 a = bridge.point(start) - bridge.side(start) * (bridge.width / 2);
+                const Vec3 b = bridge.point(start) + bridge.side(start) * (bridge.width / 2);
+                const Vec3 c = bridge.point(end) - bridge.side(end) * (bridge.width / 2);
+                const Vec3 d = bridge.point(end) + bridge.side(end) * (bridge.width / 2);
+                sample(a, b, c); sample(b, d, c);
+            }
+            continue;
+        }
         if (t < 0 || t > 1 || distance_to(bridge.a, bridge.b, x, z) > bridge.width / 2 + .05f) continue;
         const int rows = int((bridge.b - bridge.a).Length() / 8) + 1;
         const float row = t * rows;

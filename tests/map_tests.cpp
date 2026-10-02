@@ -41,10 +41,10 @@ void map_layout(const Environment& map, PhysicsWorld& world) {
             }
     }
     require(std::all_of(reached.begin(), reached.end(), [](bool b) { return b; }), "road network contains disconnected streets");
-    require(map.bridges().size() == 8 && map.ports().size() == 6, "regional bridges or ports missing");
+    require(map.bridges().size() > 8 && map.ports().size() == 6, "regional bridges or new beach connection missing");
     const float regional_length = map.islands().back().center.GetZ() - map.islands().front().center.GetZ();
     require(regional_length > 3000 && regional_length < 5000, "region did not retain all Keys at the compact scale");
-    for (const auto& road : roads) require(road.width >= 6 && road.width <= 12, "street width is outside the compact two-lane range");
+    for (const auto& road : roads) require(road.width >= 6 && road.width <= (road.bridge >= 8 ? 24 : 12), "street width is outside its intended range");
     int kinds[int(BuildingKind::Office) + 1]{};
     float tallest = 0, frontage_gap = 0;
     for (const auto& building : map.buildings()) {
@@ -124,6 +124,8 @@ void map_layout(const Environment& map, PhysicsWorld& world) {
             const float height = map.height(p.GetX(), p.GetZ());
             require(height >= 2.9f, "road or bridge approach enters water");
             require(world.cast_ground(p + Vec3(0, 60, 0), Vec3(0, -1, 0), 80, hit), "road surface has a physics hole");
+            if (std::abs(hit.point.GetY() - height) >= .01f) std::cout << road.name << " at " << p.GetX() << ',' << p.GetZ()
+                << ": visible " << height << ", collision " << hit.point.GetY() << '\n';
             require(std::abs(hit.point.GetY() - height) < .01f, "bridge/road physics differs from visible surface");
             if (hit.normal.GetY() <= .98f) std::cout << road.name << ": steep surface at "
                 << p.GetX() << ", " << p.GetZ() << "; height " << height << "; normal " << hit.normal.GetY() << '\n';
@@ -142,6 +144,7 @@ void map_layout(const Environment& map, PhysicsWorld& world) {
 }
 void drive_bridges(const Environment& map, PhysicsWorld& world, Car& car) {
     for (const auto& bridge : map.bridges()) {
+        if (bridge.a.GetY() > 0) continue; // The curved skyway is driven continuously below.
         const Vec3 dir = (bridge.b - bridge.a).Normalized(), side = dir.Cross(Vec3::sAxisY());
         const float lane_center = bridge.width * .22f;
         Vec3 start = bridge.a - dir * 20 + side * lane_center;
@@ -173,6 +176,64 @@ void drive_bridges(const Environment& map, PhysicsWorld& world, Car& car) {
     require(world.camera_fraction(rail.center + across * 3, across * -6) < .5f, "bridge rail has no collision");
     std::cout << "Drove across all eight bridges and both approaches.\n";
 }
+void drive_skyway(const Environment& map, PhysicsWorld& world, Car& car) {
+    std::vector<Vec3> path;
+    float length = 0, highest = 0;
+    const Bridge* previous = nullptr;
+    for (const auto& bridge : map.bridges()) if (bridge.a.GetY() > 0) {
+        require(bridge.width == 24, "skyway lost its wide deck");
+        if (previous) {
+            require((previous->b - bridge.a).Length() < .001f
+                && (previous->side(1) - bridge.side(0)).Length() < .001f, "curved deck has an open joint");
+            const Vec3 before = flat(previous->b - previous->a).Normalized();
+            const Vec3 after = flat(bridge.b - bridge.a).Normalized();
+            const float angle = std::acos(std::clamp(before.Dot(after), -1.0f, 1.0f));
+            require(angle < .08f && (angle < .001f || (bridge.b - bridge.a).Length() / angle > 250),
+                "skyway turn radius is too tight");
+        } else path.push_back(bridge.a);
+        path.push_back(bridge.b);
+        length += (bridge.b - bridge.a).Length(); highest = std::max(highest, bridge.b.GetY());
+        previous = &bridge;
+    }
+    require(length > 1800 && highest >= 31.9f && path.front().GetX() > 1300
+        && path.back().GetX() < 0 && path.back().GetZ() > 1300, "skyway does not connect the beach to the Keys at the intended scale");
+    for (bool reverse : {false, true}) {
+        if (reverse) std::reverse(path.begin(), path.end());
+        const Vec3 start_direction = flat(path[1] - path[0]).Normalized();
+        car.reset(path.front() + start_direction.Cross(Vec3::sAxisY()) * 6 + Vec3(0, .56f, 0),
+            std::atan2(-start_direction.GetX(), -start_direction.GetZ()));
+        float progress = 0;
+        for (int step = 0; step < 120 * 180 && progress < length - 1; ++step) {
+            float closest = 10000, covered = 0, fraction = 0; std::size_t segment = 0;
+            for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+                const Vec3 d = flat(path[i + 1] - path[i]);
+                const float t = std::clamp(flat(car.position() - path[i]).Dot(d) / d.LengthSq(), 0.0f, 1.0f);
+                const float distance = flat(car.position() - path[i] - d * t).LengthSq();
+                if (distance < closest) { closest = distance; segment = i; fraction = t; progress = covered + (path[i + 1] - path[i]).Length() * t; }
+                covered += (path[i + 1] - path[i]).Length();
+            }
+            const Vec3 direction = flat(path[segment + 1] - path[segment]).Normalized();
+            const float lane = flat(car.position() - path[segment]).Dot(direction.Cross(Vec3::sAxisY()));
+            require(std::abs(lane - 6) < 2, "car drifted out of the skyway lane");
+            require(std::abs(car.position().GetY() - map.height(car.position().GetX(), car.position().GetZ()) - .56f) < .8f,
+                "car lost contact with a skyway ramp or joint");
+            Vec3 aim = path[segment] + (path[segment + 1] - path[segment]) * fraction;
+            float lookahead = 22;
+            while (segment + 1 < path.size()) {
+                const float remaining = (path[segment + 1] - aim).Length();
+                if (remaining >= lookahead) { aim += (path[segment + 1] - aim).Normalized() * lookahead; break; }
+                lookahead -= remaining; aim = path[++segment];
+            }
+            const Vec3 target = flat(aim - car.position()) + direction.Cross(Vec3::sAxisY()) * 6;
+            const float curvature = 2 * target.Dot(-flat(car.forward()).Normalized().Cross(Vec3::sAxisY())) / std::max(target.LengthSq(), 1.0f);
+            const float speed = car.velocity().Length();
+            car.step({speed < 19 ? .6f : .28f, std::clamp(std::atan(car.tuning().wheelbase * curvature) / car.tuning().max_steer, -1.0f, 1.0f), false, speed > 21});
+            world.step();
+        }
+        require(progress >= length - 1, "car could not drive the complete beach-to-Keys skyway");
+    }
+    std::cout << "Drove the " << length << " m skyway in both directions; peak " << highest << " m.\n";
+}
 void traffic_streaming(const Environment& map, PhysicsWorld& world, Car& starter) {
     starter.reset(map.spawn());
     Traffic traffic(world, map);
@@ -201,7 +262,7 @@ void traffic_streaming(const Environment& map, PhysicsWorld& world, Car& starter
 int main() {
     try {
         Environment map; PhysicsWorld world(map); Car car(world);
-        map_layout(map, world); drive_bridges(map, world, car); traffic_streaming(map, world, car);
+        map_layout(map, world); drive_bridges(map, world, car); drive_skyway(map, world, car); traffic_streaming(map, world, car);
         std::cout << "All Miami map checks passed.\n"; return 0;
     } catch (const std::exception& error) {
         std::cerr << "Map check failed: " << error.what() << '\n'; return 1;

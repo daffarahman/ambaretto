@@ -66,7 +66,7 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment) : world_(w
     // The Overseas Highway goes through every Key and every connecting deck.
     // Both ends turn around on connected village/city blocks.
     std::vector<Vec3> spine{{-360, 0, 600}};
-    for (std::size_t i = 3; i < environment.bridges().size(); ++i) {
+    for (std::size_t i = 3; i < std::min(environment.bridges().size(), environment.islands().size() - 3); ++i) {
         const auto& bridge = environment.bridges()[i];
         spine.push_back(bridge.a); spine.push_back(bridge.b); spine.push_back(environment.islands()[i + 3].center);
     }

@@ -437,6 +437,15 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             const Vec3 a = road.a + direction * along, b = road.a + direction * std::min(along + 6, length);
             marking(a, b, .24f, {244, 207, 99, 255});
         }
+        if (road.width >= 20) for (float sign : {-1.0f, 1.0f}) {
+            for (float along = 0; along < length; along += 16) {
+                const Vec3 offset = side * (sign * road.width / 6);
+                marking(road.a + direction * along + offset,
+                    road.a + direction * std::min(along + 6, length) + offset, .18f, RAYWHITE);
+            }
+            const Vec3 shoulder = side * (sign * road.width / 3);
+            marking(road.a + shoulder, road.b + shoulder, .18f, RAYWHITE);
+        }
         for (float sign : {-1.0f, 1.0f}) {
             const Vec3 offset = side * (sign * (road.width / 2 - 1));
             marking(road.a + offset, road.b + offset, .18f, RAYWHITE);
@@ -602,22 +611,26 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         city.box(rail.center, rail.size, {200, 209, 206, 255}, rail.yaw);
         city.box(rail.center + Vec3(0, .55f, 0), Vec3(.55f, .12f, rail.size.GetZ()), RAYWHITE, rail.yaw);
     }
-    for (const auto& bridge : env.bridges()) {
+    for (std::size_t bridge_index = 0; bridge_index < env.bridges().size(); ++bridge_index) {
+        const auto& bridge = env.bridges()[bridge_index];
+        const bool curved = bridge.a.GetY() > 0;
         const Vec3 direction = (bridge.b - bridge.a).Normalized(), side = direction.Cross(Vec3::sAxisY());
         const float length = (bridge.b - bridge.a).Length(), heading = std::atan2(-direction.GetX(), -direction.GetZ());
         for (float d = 0; d < length; d += 8) {
             const Vec3 a = bridge.point(d / length), b = bridge.point(std::min(d + 8, length) / length);
             for (float sign : {-1.0f, 1.0f}) {
-                const Vec3 offset = side * (sign * bridge.width / 2);
-                city.quad(a + offset, b + offset, b + offset - Vec3(0, 1.2f, 0), a + offset - Vec3(0, 1.2f, 0), concrete);
-                city.quad(a + offset - Vec3(0, 1.2f, 0), b + offset - Vec3(0, 1.2f, 0), b + offset, a + offset, concrete);
+                const Vec3 start = a + bridge.side(d / length) * (sign * bridge.width / 2);
+                const Vec3 end = b + bridge.side(std::min(d + 8, length) / length) * (sign * bridge.width / 2);
+                city.quad(start, end, end - Vec3(0, 1.2f, 0), start - Vec3(0, 1.2f, 0), concrete);
+                city.quad(start - Vec3(0, 1.2f, 0), end - Vec3(0, 1.2f, 0), end, start, concrete);
             }
         }
-        for (float d = 40; d < length - 20; d += 64) {
+        const float fixtures = bridge_index % 3 == 0 ? length / 2 : length;
+        for (float d = curved ? fixtures : 40; d < length - (curved ? 0 : 20); d += 64) {
             const Vec3 p = bridge.point(d / length);
             city.box(Vec3(p.GetX(), (p.GetY() - 8) / 2, p.GetZ()), Vec3(bridge.width - 5, p.GetY() + 6, 2.2f), concrete, heading);
         }
-        for (float d = 35; d < length - 10; d += 96) for (float sign : {-1.0f, 1.0f}) {
+        for (float d = curved ? fixtures : 35; d < length - (curved ? 0 : 10); d += 96) for (float sign : {-1.0f, 1.0f}) {
             const Vec3 p = bridge.point(d / length) + side * (sign * (bridge.width / 2 - .8f));
             city.box(p + Vec3(0, 4, 0), Vec3(.18f, 8, .18f), {86, 111, 121, 255});
             city.box(p + Vec3(0, 8, 0) - side * sign, Vec3(2.5f, .2f, .6f), {252, 236, 170, 255}, heading);
@@ -695,6 +708,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     }
     for (std::size_t i = 3; i < env.bridges().size(); ++i) {
         const auto& bridge = env.bridges()[i];
+        if (!bridge.open_a) continue;
         const Vec3 dir = (bridge.b - bridge.a).Normalized(), side = dir.Cross(Vec3::sAxisY());
         const Vec3 p = bridge.point(.08f) + side * (bridge.width / 2 - 1);
         signs.sign(p + Vec3(0, 6, 0), side, 7, 2.3f, 7);
@@ -748,7 +762,9 @@ void EnvironmentRenderer::load_minimap(const Environment& env) {
     const auto pixel = [](float value) { return int((value + Environment::extent) * size / (2 * Environment::extent)); };
     for (const auto& road : env.roads()) {
         const Color color = road.bridge >= 0 ? Color{221, 195, 134, 255} : Color{66, 78, 85, 255};
-        ImageDrawLine(&map, pixel(road.a.GetX()), pixel(road.a.GetZ()), pixel(road.b.GetX()), pixel(road.b.GetZ()), color);
+        ImageDrawLineEx(&map, {float(pixel(road.a.GetX())), float(pixel(road.a.GetZ()))},
+            {float(pixel(road.b.GetX())), float(pixel(road.b.GetZ()))},
+            std::max(1, int(road.width * size / (2 * Environment::extent))), color);
     }
     for (const auto& airport : airports) {
         const Color pavement{66, 78, 85, 255};

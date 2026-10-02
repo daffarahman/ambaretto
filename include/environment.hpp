@@ -25,7 +25,10 @@ struct Bridge {
     Vec3 a, b;
     float width, clearance;
     const char* name;
+    Vec3 start_side = Vec3::sZero(), end_side = Vec3::sZero();
+    bool open_a = true, open_b = true;
     Vec3 point(float t) const;
+    Vec3 side(float t) const;
 };
 struct Barrier { Vec3 center, size; float yaw; };
 struct Port { Vec3 center; bool east; const char* name; };
