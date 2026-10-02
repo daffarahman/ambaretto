@@ -2,6 +2,7 @@
 #include "environment.hpp"
 #include "player.hpp"
 #include "airport.hpp"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -33,23 +34,35 @@ void roads_and_driving() {
     std::vector<float> traveled(traffic.cars().size(), 0);
     for (const auto& vehicle : traffic.cars()) {
         previous.push_back(vehicle.car->position());
+        if (!Environment::road(previous.back().GetX(), previous.back().GetZ()))
+            std::cout << "Off-road spawn on " << vehicle.route_name << ": " << previous.back().GetX()
+                << ',' << previous.back().GetY() << ',' << previous.back().GetZ() << '\n';
         require(Environment::road(previous.back().GetX(), previous.back().GetZ()), "traffic spawned off the road");
     }
     int road_samples = 0, total_samples = 0;
     for (int step = 0; step < 120 * 90; ++step) {
         player.step({}, {});
         if (step % 30 != 0) continue;
+        int physical = 0;
         for (std::size_t i = 0; i < traffic.cars().size(); ++i) {
             const auto& car = *traffic.cars()[i].car;
             const Vec3 p = car.position();
-            require(std::isfinite(p.Length()) && car.velocity().Length() < 16, "traffic physics became unstable");
+            require(!airports[0].contains(p.GetX(), p.GetZ()), "NPC traffic entered the airfield");
+            require(std::isfinite(p.Length()) && car.velocity().Length() < std::max(16.0f, traffic.cars()[i].cruise_speed + 4),
+                "traffic physics became unstable");
             const float distance = (p - previous[i]).Length();
-            if (distance < 8) traveled[i] += distance; // Do not count recovery teleports.
+            // Distant bodies synchronize every half second, including faster highway traffic.
+            if (distance < std::max(8.0f, traffic.cars()[i].cruise_speed * .5f + 1)) traveled[i] += distance;
             previous[i] = p;
             ++total_samples;
             if (Environment::road(p.GetX(), p.GetZ())) ++road_samples;
+            if (car.rotate(Vec3::sAxisY()).GetY() <= .5f)
+                std::cout << "Overturned " << i << ' ' << traffic.cars()[i].route_name << " at "
+                    << p.GetX() << ',' << p.GetY() << ',' << p.GetZ() << '\n';
             require(car.rotate(Vec3::sAxisY()).GetY() > .5f, "traffic overturned on its route");
+            if (traffic.cars()[i].npc && car.simulated()) ++physical;
         }
+        require(physical <= 48, "new highway traffic exceeded its physical simulation budget");
     }
     std::cout << "Road samples: " << road_samples << '/' << total_samples << "; travel:";
     for (std::size_t i = 0; i < 8; ++i) std::cout << ' ' << traveled[i];
@@ -145,6 +158,24 @@ void isolate(Traffic& traffic, std::size_t keep = 0) {
         traffic.cars()[i].car->set_simulated(false);
     }
     traffic.cars()[keep].car->set_simulated(true);
+}
+std::size_t route_car(const Traffic& traffic, const char* name) {
+    for (std::size_t i = 0; i < traffic.cars().size(); ++i)
+        if (std::string(traffic.cars()[i].route_name) == name) return i;
+    throw std::runtime_error(std::string("No traffic on route: ") + name);
+}
+Vec3 road_point(const Environment& map, const StreetLoop& road, Vec3 p) {
+    Vec3 nearest = road.corners.front(); float closest = 1e9f;
+    for (std::size_t i = 0; i + 1 < road.corners.size() + std::size_t(road.closed); ++i) {
+        const Vec3 a = road.corners[i], b = road.corners[(i + 1) % road.corners.size()];
+        Vec3 delta = b - a, flat_delta = delta; flat_delta.SetY(0);
+        Vec3 offset = p - a; offset.SetY(0);
+        const Vec3 point = a + delta * std::clamp(offset.Dot(flat_delta) / flat_delta.LengthSq(), 0.0f, 1.0f);
+        Vec3 gap = p - point; gap.SetY(0);
+        if (gap.LengthSq() < closest) { closest = gap.LengthSq(); nearest = point; }
+    }
+    if (nearest.GetY() <= 0) nearest.SetY(map.ground_height(nearest.GetX(), nearest.GetZ()));
+    return nearest;
 }
 
 void traffic_obstructions() {
@@ -272,10 +303,10 @@ void traffic_horns_and_safety() {
     // Narrow residential streets and bridge decks stay single-file even with a clear opposite lane.
     for (bool bridge : {false, true}) {
         PhysicsWorld world(map); Car starter(world); Traffic traffic(world, map);
-        const std::size_t index = bridge ? traffic.cars().size() - 1 : 16 * 3;
+        const std::size_t index = route_car(traffic, bridge ? "OVERSEAS HIGHWAY" : "AIRPORT RESIDENTIAL");
         isolate(traffic, index);
         Car& follower = *traffic.cars()[index].car;
-        const float x = bridge ? -362.2f : -1042.2f, z = bridge ? 1000 : 0;
+        const float x = bridge ? -362.2f : airports[0].center_x - airports[0].grounds_half_width - 22.2f, z = bridge ? 1000 : 0;
         constexpr float direction = 1, yaw = 3.14159265f;
         follower.reset(ground(map, x, z), yaw);
         starter.reset(ground(map, x, z + direction * 24), yaw);
@@ -292,15 +323,68 @@ void traffic_horns_and_safety() {
             "NPC did not safely queue on a narrow street or bridge");
     }
 }
+
+void highway_traffic() {
+    Environment map;
+    for (const auto& road : Environment::highways()) {
+        PhysicsWorld world(map); Car starter(world); Traffic traffic(world, map);
+        int count = 0;
+        for (const auto& vehicle : traffic.cars()) if (std::string(vehicle.route_name) == road.name) {
+            ++count;
+            require(vehicle.cruise_speed == road.cruise_speed, "traffic lost the road's speed class");
+            const Vec3 p = vehicle.car->position();
+            require(std::abs(p.GetY() - .56f - map.surface_height(p - Vec3(0, .56f, 0))) < .5f,
+                "NPC spawned on the wrong level of a stacked road");
+        }
+        require(count == road.traffic_count, "new highway did not receive its intended traffic population");
+        const std::size_t index = route_car(traffic, road.name);
+        isolate(traffic, index);
+        Car& car = *traffic.cars()[index].car;
+        starter.reset(ground(map, -180, -700));
+        const Vec3 end = road.closed ? road.corners.front() : road.corners.back();
+        Vec3 direction = road.closed ? end - road.corners.back() : end - road.corners[road.corners.size() - 2];
+        direction.SetY(0); direction = direction.Normalized();
+        const float approach = road.closed ? 30 : std::min(30.0f, (end - road.corners[road.corners.size() - 2]).Length() * .75f);
+        Vec3 start = end - direction * approach + direction.Cross(Vec3::sAxisY()) * road.lane_offset;
+        start.SetY(road_point(map, road, start).GetY());
+        start.SetY(map.surface_height(start) + .56f);
+        car.reset(start, std::atan2(-direction.GetX(), -direction.GetZ()));
+        float distance = 0; Vec3 previous = start;
+        bool returned = road.closed;
+        const float returning = road.closed ? 0 : std::min(50.0f, (end - road.corners[road.corners.size() - 2]).Length() / 2);
+        for (int step = 0; step < 120 * 40; ++step) {
+            starter.step({0, 0, false, true});
+            traffic.step(&starter, starter, nullptr, nullptr, car.position()); world.step();
+            const Vec3 p = car.position();
+            distance += (p - previous).Length(); previous = p;
+            returned = returned || (p - start).Dot(direction) < -returning;
+            if (!Environment::road(p.GetX(), p.GetZ()))
+                std::cout << road.name << " off pavement: " << p.GetX() << ',' << p.GetY() << ',' << p.GetZ()
+                    << " at " << step * fixed_step << "s\n";
+            require(Environment::road(p.GetX(), p.GetZ()), "highway NPC left its pavement");
+            require(car.rotate(Vec3::sAxisY()).GetY() > .8f && car.velocity().Length() < road.cruise_speed + 4,
+                "highway traffic overturned or accelerated uncontrollably");
+            // Match the road's nearest XZ segment, not the topmost deck over an underpass.
+            const Vec3 nearest = road_point(map, road, p);
+            require(std::abs(p.GetY() - .56f - nearest.GetY()) < 1.5f,
+                "NPC switched road levels or fell through an elevated deck");
+        }
+        std::cout << road.name << ": drove " << distance << "m, speed " << car.velocity().Length() << '\n';
+        require(distance > 100 && returned,
+            "NPC did not progress or safely turn back at an open highway endpoint");
+    }
+}
 } // namespace
 int main(int argc, char** argv) {
     try {
         const std::string check = argc > 1 ? argv[1] : "all";
-        require(check == "all" || check == "roads" || check == "theft" || check == "obstructions" || check == "safety", "unknown traffic check");
+        require(check == "all" || check == "roads" || check == "theft" || check == "obstructions" || check == "safety"
+            || check == "highways", "unknown traffic check");
         if (check == "all" || check == "roads") roads_and_driving();
         if (check == "all" || check == "theft") braking_and_theft();
         if (check == "all" || check == "obstructions") traffic_obstructions();
         if (check == "all" || check == "safety") traffic_horns_and_safety();
+        if (check == "all" || check == "highways") highway_traffic();
         std::cout << "All traffic and theft checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

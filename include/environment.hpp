@@ -20,7 +20,13 @@ struct Building {
 struct Island { Vec3 center; float radius_x, radius_z; const char* name; };
 struct Road { Vec3 a, b; float width; const char* name; int bridge = -1; };
 // Street corners are shared by pavement generation and NPC routes.
-struct StreetLoop { std::vector<Vec3> corners; float width; const char* name; };
+struct StreetLoop {
+    std::vector<Vec3> corners; float width; const char* name;
+    bool closed = true;
+    float cruise_speed = 8;
+    int traffic_count = 3;
+    float lane_offset = 2.2f;
+};
 struct Bridge {
     Vec3 a, b;
     float width, clearance;
@@ -30,7 +36,11 @@ struct Bridge {
     Vec3 point(float t) const;
     Vec3 side(float t) const;
 };
-struct Barrier { Vec3 center, size; float yaw; };
+struct Barrier {
+    Vec3 center, size;
+    float yaw, pitch = 0;
+    Quat rotation() const { return Quat::sRotation(Vec3::sAxisY(), yaw) * Quat::sRotation(Vec3::sAxisX(), pitch); }
+};
 struct Port { Vec3 center; bool east; const char* name; };
 struct Tree {
     Vec3 base;
@@ -48,16 +58,21 @@ class Environment {
 public:
     static constexpr float extent = 5120;
     static constexpr float spacing = 20;
+    static constexpr float highway_level = 10;
     static constexpr int samples = 513;
     static constexpr float road_level = 3.2f;
     static constexpr float water_level = 0;
     Environment();
     float height(float x, float z) const;
+    float ground_height(float x, float z) const;
+    float road_height(const Road& road, float x, float z) const;
+    float surface_height(Vec3 reference) const;
     static float coast_radius(float x, float z);
     static bool road(float x, float z);
     static const std::vector<Island>& islands();
     static const std::vector<Road>& roads();
     static const std::vector<StreetLoop>& street_loops();
+    static const std::vector<StreetLoop>& highways();
     static const std::vector<Bridge>& bridges();
     static const char* district(float x, float z);
     Vec3 spawn() const { return Vec3(0, height(0, 105) + 0.56f, 105); }

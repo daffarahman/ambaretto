@@ -1,10 +1,12 @@
 #include "traffic.hpp"
 #include "environment.hpp"
 #include "plane.hpp"
+#include "airport.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
+#include <string_view>
 
 namespace forza {
 namespace {
@@ -32,24 +34,60 @@ void clear_driver(TrafficCar& vehicle) {
     vehicle.blocked = false; vehicle.pass_blocker = nullptr; vehicle.pass_road = nullptr;
 }
 
-std::vector<Vec3> lane_route(std::vector<Vec3> corners, bool reverse = false) {
+std::vector<Vec3> lane_route(std::vector<Vec3> corners, bool reverse = false, float offset = lane_offset, bool closed = true) {
+    corners.erase(std::unique(corners.begin(), corners.end(), [](Vec3 a, Vec3 b) { return (a - b).LengthSq() < .0001f; }), corners.end());
+    if (closed && (corners.front() - corners.back()).LengthSq() < .0001f) corners.pop_back();
     if (reverse) std::reverse(corners.begin(), corners.end());
+    if (!closed) {
+        std::vector<Vec3> loop;
+        const auto side_point = [&](std::size_t i, bool back) {
+            const Vec3 incoming = flat(corners[i] - corners[i ? i - 1 : 0]).NormalizedOr(
+                flat(corners[1] - corners[0]).Normalized());
+            const Vec3 outgoing = flat(corners[std::min(i + 1, corners.size() - 1)] - corners[i]).NormalizedOr(incoming);
+            return corners[i] + (right(incoming) + right(outgoing)) *
+                ((back ? -offset : offset) / std::max(.5f, 1 + incoming.Dot(outgoing)));
+        };
+        const auto cap = [&](Vec3 end, Vec3 towards_end) {
+            const Vec3 direction = flat(towards_end).Normalized(), side = right(direction);
+            const Vec3 center = end - towards_end.Normalized() * offset;
+            const float slope = towards_end.GetY() / flat(towards_end).Length();
+            for (int step = 0; step <= 16; ++step) {
+                const float angle = step * 3.14159265f / 16;
+                const float ahead = offset * std::sin(angle);
+                loop.push_back(center + side * (offset * std::cos(angle)) + direction * ahead + Vec3(0, slope * ahead, 0));
+            }
+        };
+        const Vec3 first = (corners[1] - corners[0]).Normalized(), last = (corners.back() - corners[corners.size() - 2]).Normalized();
+        loop.push_back(corners.front() + first * offset + right(flat(first).Normalized()) * offset);
+        const auto near_cap = [&](std::size_t i) {
+            return (corners[i] - corners.front()).LengthSq() <= offset * offset
+                || (corners[i] - corners.back()).LengthSq() <= offset * offset;
+        };
+        for (std::size_t i = 1; i + 1 < corners.size(); ++i) if (!near_cap(i)) loop.push_back(side_point(i, false));
+        cap(corners.back(), last);
+        for (std::size_t i = corners.size() - 1; --i > 0;) if (!near_cap(i)) loop.push_back(side_point(i, true));
+        cap(corners.front(), -first);
+        loop.pop_back(); // The closing cap already reaches the loop's first point.
+        return lane_route(std::move(loop), false, 0);
+    }
     std::vector<Vec3> lane, result;
     for (std::size_t i = 0; i < corners.size(); ++i) {
-        const Vec3 incoming = (corners[i] - corners[(i + corners.size() - 1) % corners.size()]).Normalized();
-        const Vec3 outgoing = (corners[(i + 1) % corners.size()] - corners[i]).Normalized();
+        const Vec3 incoming = flat(corners[i] - corners[(i + corners.size() - 1) % corners.size()]).Normalized();
+        const Vec3 outgoing = flat(corners[(i + 1) % corners.size()] - corners[i]).Normalized();
         lane.push_back(corners[i] + (right(incoming) + right(outgoing)) *
-            (lane_offset / std::max(.5f, 1 + incoming.Dot(outgoing))));
+            (offset / std::max(.5f, 1 + incoming.Dot(outgoing))));
     }
     for (std::size_t i = 0; i < lane.size(); ++i) {
         const Vec3 incoming = (lane[i] - lane[(i + lane.size() - 1) % lane.size()]).Normalized();
         const Vec3 outgoing = (lane[(i + 1) % lane.size()] - lane[i]).Normalized();
-        const Vec3 start = lane[i] - incoming * 4, end = lane[i] + outgoing * 4;
+        const float before = std::min(4.0f, (lane[i] - lane[(i + lane.size() - 1) % lane.size()]).Length() * .45f);
+        const float after = std::min(4.0f, (lane[(i + 1) % lane.size()] - lane[i]).Length() * .45f);
+        const Vec3 start = lane[i] - incoming * before, end = lane[i] + outgoing * after;
         for (int j = 0; j < 8; ++j) {
             const float t = j / 8.0f;
             result.push_back(start * ((1 - t) * (1 - t)) + lane[i] * (2 * t * (1 - t)) + end * (t * t));
         }
-        const Vec3 next = lane[(i + 1) % lane.size()] - outgoing * 4;
+        const Vec3 next = lane[(i + 1) % lane.size()] - outgoing * after;
         const int steps = std::max(1, int((next - end).Length() / 8));
         for (int j = 0; j < steps; ++j) result.push_back(end + (next - end) * (float(j) / steps));
     }
@@ -58,38 +96,72 @@ std::vector<Vec3> lane_route(std::vector<Vec3> corners, bool reverse = false) {
 } // namespace
 
 Traffic::Traffic(PhysicsWorld& world, const Environment& environment) : world_(world), environment_(environment) {
+    const auto add_route = [&](std::vector<Vec3> corners, const char* name, int count, float speed,
+                               bool reverse = false, float offset = lane_offset, bool closed = true) {
+        const std::size_t r = routes_.size();
+        for (auto& p : corners) if (p.GetY() <= 0) p.SetY(environment.ground_height(p.GetX(), p.GetZ()));
+        auto points = lane_route(std::move(corners), reverse, offset, closed);
+        for (auto& p : points) p.SetY(environment.surface_height(p));
+        routes_.push_back(std::move(points));
+        const auto& route = routes_.back();
+        for (int i = 0; i < count; ++i) {
+            std::size_t start = (route.size() * (i * 2 + 1) / (count * 2) + r * 17) % route.size();
+            if (r == 0 && i == 0) start = locate(route, Vec3(lane_offset, environment.ground_height(lane_offset, 88) + .56f, 88)).segment;
+            auto car = std::make_unique<Car>(world);
+            car->set_simulated(false);
+            const Vec3 p = route[start];
+            car->reset(p + Vec3(0, .56f, 0), yaw(route[(start + 1) % route.size()] - p));
+            TrafficCar vehicle;
+            vehicle.car = std::move(car); vehicle.route = r; vehicle.route_name = name;
+            vehicle.cruise_speed = speed; vehicle.segment = start; vehicle.point = p;
+            cars_.push_back(std::move(vehicle));
+        }
+    };
     for (bool reverse : {false, true}) {
-        for (const auto& loop : environment.street_loops()) routes_.push_back(lane_route(loop.corners, reverse));
+        for (const auto& loop : environment.street_loops()) {
+            if (reverse && !loop.closed) continue;
+            add_route(loop.corners, loop.name, loop.traffic_count, loop.cruise_speed, reverse, loop.lane_offset, loop.closed);
+        }
     }
-    routes_.push_back(lane_route({{0, 0, 240}, {660, 0, 240}, {1260, 0, 240}, {1260, 0, -240}, {0, 0, -240}}));
-    routes_.push_back(lane_route({{0, 0, 240}, {660, 0, 240}, {1260, 0, 240}, {1260, 0, -240}, {0, 0, -240}}, true));
+    for (bool reverse : {false, true})
+        add_route({{0, 0, 240}, {660, 0, 240}, {1260, 0, 240}, {1260, 0, -240}, {0, 0, -240}},
+            "CITY CAUSEWAYS", 12, 11, reverse);
     // The Overseas Highway goes through every Key and every connecting deck.
     // Both ends turn around on connected village/city blocks.
-    std::vector<Vec3> spine{{-360, 0, 600}};
-    for (std::size_t i = 3; i < std::min(environment.bridges().size(), environment.islands().size() - 3); ++i) {
-        const auto& bridge = environment.bridges()[i];
-        spine.push_back(bridge.a); spine.push_back(bridge.b); spine.push_back(environment.islands()[i + 3].center);
+    std::vector<Vec3> spine{{-360, Environment::road_level, -240}};
+    for (const auto& road : environment.highways()) if (std::string_view(road.name) == "US 1 GRAND BOULEVARD")
+        for (const auto& p : road.corners) if (p.GetZ() >= -240) spine.push_back(p);
+    for (const auto& road : environment.highways()) if (std::string_view(road.name) == "KEYS EXIT RAMP")
+        for (const auto& p : road.corners) if ((spine.back() - p).LengthSq() > .001f) spine.push_back(p);
+    const auto first_key = std::min_element(environment.islands().begin(), environment.islands().end(),
+        [&](const Island& a, const Island& b) { return flat(a.center - spine.back()).LengthSq() < flat(b.center - spine.back()).LengthSq(); });
+    spine.push_back(first_key->center);
+    for (const auto& bridge : environment.bridges()) {
+        if (bridge.a.GetZ() < 900 || bridge.b.GetZ() <= bridge.a.GetZ()) continue;
+        if (bridge.a.GetY() > 0) continue;
+        const auto nearest = std::min_element(environment.islands().begin(), environment.islands().end(),
+            [&](const Island& a, const Island& b) { return flat(a.center - bridge.b).LengthSq() < flat(b.center - bridge.b).LengthSq(); });
+        const int samples = std::max(1, int((bridge.b - bridge.a).Length() / 8));
+        for (int i = 0; i <= samples; ++i) {
+            const Vec3 p = bridge.point(float(i) / samples);
+            if ((spine.back() - p).LengthSq() > .001f) spine.push_back(p);
+        }
+        spine.push_back(nearest->center);
     }
     auto highway = spine;
     highway.insert(highway.end(), {{-2100, 0, 4470}, {-2010, 0, 4470}, {-2010, 0, 4380}, {-2100, 0, 4380}});
     for (std::size_t i = spine.size() - 1; i-- > 0;) highway.push_back(spine[i]);
-    highway.insert(highway.end(), {{-600, 0, 600}, {-580, 0, 340}, {-360, 0, 360}});
-    routes_.push_back(lane_route(highway));
-    for (std::size_t r = 0; r < routes_.size(); ++r) {
-        const auto& route = routes_[r];
-        const int count = r == routes_.size() - 1 ? 72 : r >= routes_.size() - 3 ? 12 : 3;
-        for (int i = 0; i < count; ++i) {
-            std::size_t start = (route.size() * (i * 2 + 1) / (count * 2) + r * 17) % route.size();
-            if (r == 0 && i == 0) start = locate(route, Vec3(lane_offset, 0, 88)).segment;
-            auto car = std::make_unique<Car>(world);
-            car->set_simulated(false);
-            const Vec3 p = route[start];
-            car->reset(Vec3(p.GetX(), environment.height(p.GetX(), p.GetZ()) + .56f, p.GetZ()),
-                yaw(route[(start + 1) % route.size()] - p));
-            TrafficCar vehicle;
-            vehicle.car = std::move(car); vehicle.route = r; vehicle.segment = start; vehicle.point = p;
-            cars_.push_back(std::move(vehicle));
-        }
+    for (const auto& loop : environment.street_loops()) if (std::string_view(loop.name) == "DESIGN DISTRICT") {
+        highway.insert(highway.end(), loop.corners.begin(), loop.corners.end());
+        highway.push_back(loop.corners.front());
+        break;
+    }
+    add_route(std::move(highway), "OVERSEAS HIGHWAY", 72, 11);
+    for (const auto& road : environment.highways()) {
+        if (road.closed) for (bool reverse : {false, true})
+            add_route(road.corners, road.name, (road.traffic_count + (reverse ? 0 : 1)) / 2,
+                road.cruise_speed, reverse, road.lane_offset);
+        else add_route(road.corners, road.name, road.traffic_count, road.cruise_speed, false, road.lane_offset, false);
     }
     // Make nearby cars physical before the first interaction / preview.
     stream(environment.spawn(), nullptr, nullptr);
@@ -104,7 +176,7 @@ void Traffic::steal(Car& car) {
 }
 Traffic::RouteLocation Traffic::locate(const std::vector<Vec3>& route, Vec3 position) const {
     RouteLocation nearest{0, route.front(), std::numeric_limits<float>::max()};
-    position = flat(position);
+    position -= Vec3(0, .56f, 0);
     for (std::size_t i = 0; i < route.size(); ++i) {
         const Vec3 segment = route[(i + 1) % route.size()] - route[i];
         const float t = std::clamp((position - route[i]).Dot(segment) / std::max(segment.LengthSq(), .001f), 0.0f, 1.0f);
@@ -145,12 +217,12 @@ void Traffic::stream(Vec3 player_position, const Car* starter, const Plane* plan
         if (selected[i]) {
             const Vec3 position = car.position();
             // Never create a chassis inside an occupied lane or pedestrian.
-            if (flat(position - player_position).LengthSq() < 3 * 3) continue;
-            if (starter && flat(position - starter->position()).LengthSq() < 6 * 6) continue;
+            if ((position - player_position).LengthSq() < 3 * 3) continue;
+            if (starter && (position - starter->position()).LengthSq() < 6 * 6) continue;
             if (plane && (position - plane->position()).LengthSq() < 12 * 12) continue;
             bool occupied = false;
             for (const auto& other : cars_) if (other.car.get() != &car && other.car->simulated()
-                && flat(position - other.car->position()).LengthSq() < 6 * 6) { occupied = true; break; }
+                && (position - other.car->position()).LengthSq() < 6 * 6) { occupied = true; break; }
             if (occupied) continue;
             car.set_simulated(true); vehicle.plan_time = 0; vehicle.stuck_time = 0;
         } else {
@@ -163,10 +235,10 @@ void Traffic::stream(Vec3 player_position, const Car* starter, const Plane* plan
 }
 bool Traffic::space_available(Vec3 position, const Car& ignore, const Car& starter_car,
                               const Plane* plane, Vec3 player_position) const {
-    if (flat(position - player_position).LengthSq() < 35 * 35 || flat(position - starter_car.position()).LengthSq() < 10 * 10) return false;
+    if ((position - player_position).LengthSq() < 35 * 35 || (position - starter_car.position()).LengthSq() < 10 * 10) return false;
     if (plane && (position - plane->position()).LengthSq() < 12 * 12) return false;
     for (const auto& vehicle : cars_)
-        if (vehicle.car.get() != &ignore && vehicle.car->simulated() && flat(position - vehicle.car->position()).LengthSq() < 10 * 10) return false;
+        if (vehicle.car.get() != &ignore && vehicle.car->simulated() && (position - vehicle.car->position()).LengthSq() < 10 * 10) return false;
     return true;
 }
 void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
@@ -183,10 +255,9 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         if (!vehicle.npc) { if (car.simulated()) car.step({0, 0, false, true}, dt); continue; }
         const auto& route = routes_[vehicle.route];
         if (!car.simulated()) {
-            const auto location = advance(route, {vehicle.segment, vehicle.point, 0}, dt * 9);
+            const auto location = advance(route, {vehicle.segment, vehicle.point, 0}, dt * vehicle.cruise_speed);
             vehicle.segment = location.segment; vehicle.point = location.point;
-            if (sync) car.reset(Vec3(location.point.GetX(), environment_.height(location.point.GetX(), location.point.GetZ()) + .56f,
-                location.point.GetZ()), yaw(ahead(route, location, 2) - location.point));
+            if (sync) car.reset(location.point + Vec3(0, .56f, 0), yaw(ahead(route, location, 2) - location.point));
             continue;
         }
         vehicle.plan_time -= dt;
@@ -208,8 +279,18 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         };
         float curvature = turn(target);
         const float steer_limit = std::min(car.tuning().max_steer, std::atan(car.tuning().wheelbase * 16 / std::max(speed * speed, 1.0f)));
-        float desired_speed = std::min(vehicle.route >= routes_.size() - 3 ? 11.0f : 8.0f,
+        float desired_speed = std::min(vehicle.cruise_speed,
             std::sqrt(2.8f / std::max(std::abs(curvature), .001f)));
+        // Ground highways slow before crossing local streets; flyovers keep their cruise speed.
+        if (vehicle.cruise_speed > 12 && location.point.GetY() <= Airport::elevation + .1f) {
+            const Vec3 approach = ahead(route, location, 45);
+            for (const auto& road : environment_.roads()) {
+                if (road.bridge >= 0 || std::abs(flat(road.b - road.a).Normalized().Dot(direction)) > .8f
+                    || !crossing(location.point, approach, road.a, road.b, road.width / 2 + 3)) continue;
+                if (std::abs(environment_.road_height(road, location.point.GetX(), location.point.GetZ()) - location.point.GetY()) < 1)
+                    desired_speed = std::min(desired_speed, 8.0f);
+            }
+        }
         const float cruise_speed = desired_speed;
         const Car* blocker = nullptr;
         float nearest = 25;
@@ -246,7 +327,8 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
             && std::abs(flat(*pedestrian - position).Dot(right(direction))) < 3;
         const float obstacle_distance = 4 + speed * .8f;
         if (!vehicle.pass_blocker) {
-            const float clear = world_.camera_fraction(position + Vec3(0, 1, 0), direction * obstacle_distance, car.body_id());
+            const Vec3 approach = ahead(route, location, obstacle_distance) - location.point;
+            const float clear = world_.camera_fraction(position + Vec3(0, 1, 0), approach, car.body_id());
             if (clear < .98f) desired_speed = std::min(desired_speed, std::max(0.0f, (clear * obstacle_distance - 3) * .6f));
         }
         const auto pass_clear = [&](const Road& road, Vec3 finish, Vec3 basis, bool static_check) {
@@ -279,8 +361,8 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
                     if (t < 0 || t > 1 || segment_distance(p, road.a, road.b) > std::pow(road.width / 2 - 1.3f, 2)) return false;
                 }
                 Vec3 a = path[i - 1], b = path[i];
-                a.SetY(environment_.height(a.GetX(), a.GetZ()) + 1.1f);
-                b.SetY(environment_.height(b.GetX(), b.GetZ()) + 1.1f);
+                a.SetY(environment_.surface_height(a) + 1.1f);
+                b.SetY(environment_.surface_height(b) + 1.1f);
                 for (float edge : {-1.0f, 0.0f, 1.0f}) {
                     const Vec3 margin = side * edge + basis * 1.8f;
                     if (world_.camera_fraction(a + margin, b - a, car.body_id()) < .98f) return false;
@@ -298,9 +380,11 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
             if (flat(route_end - finish).Length() < 1.5f) for (const auto& road : environment_.roads()) {
                 const Vec3 along = flat(road.b - road.a).Normalized();
                 if (road.bridge >= 0 || road.width < 9 || std::abs(along.Dot(direction)) < .99f
+                    || std::abs(environment_.road_height(road, position.GetX(), position.GetZ()) - location.point.GetY()) > 2
                     || segment_distance(location.point, road.a, road.b) > std::pow(road.width / 2 - 1.3f, 2)) continue;
                 bool junction = false;
                 for (const auto& other : environment_.roads()) {
+                    if (std::abs(environment_.road_height(other, position.GetX(), position.GetZ()) - location.point.GetY()) > 3) continue;
                     if (std::abs(flat(other.b - other.a).Normalized().Dot(direction)) > .98f) continue;
                     if (crossing(location.point, finish, other.a, other.b, other.width / 2 + 3)) { junction = true; break; }
                 }
@@ -336,8 +420,8 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         if (vehicle.stuck_time > 8 && flat(position - player_position).LengthSq() > 35 * 35) {
             const Vec3 recovery = ahead(route, location, 18);
             if (space_available(recovery, car, starter_car, plane, player_position)) {
-                car.reset(Vec3(recovery.GetX(), environment_.height(recovery.GetX(), recovery.GetZ()) + .56f, recovery.GetZ()),
-                    yaw(ahead(route, locate(route, recovery), 2) - recovery));
+                car.reset(recovery + Vec3(0, .56f, 0),
+                    yaw(ahead(route, locate(route, recovery + Vec3(0, .56f, 0)), 2) - recovery));
                 vehicle.stuck_time = 0;
                 clear_driver(vehicle);
             }

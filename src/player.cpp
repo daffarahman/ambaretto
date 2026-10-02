@@ -40,7 +40,7 @@ void Player::recover_plane() {
     for (const auto& airport : airports)
         if (std::hypot(plane_->position().GetX() - airport.center_x, plane_->position().GetZ() - airport.runway_z)
             < std::hypot(plane_->position().GetX() - nearest->center_x, plane_->position().GetZ() - nearest->runway_z)) nearest = &airport;
-    plane_->reset(Vec3(nearest->center_x, environment_.height(nearest->center_x, nearest->plane_z())
+    plane_->reset(Vec3(nearest->plane_x(), environment_.height(nearest->plane_x(), nearest->plane_z())
         + Plane::parked_height, nearest->plane_z()), nearest->yaw());
 }
 

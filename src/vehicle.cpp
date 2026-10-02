@@ -155,7 +155,7 @@ PhysicsWorld::PhysicsWorld(const Environment& environment) {
     }
     for (const auto& barrier : environment.barriers()) {
         JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(barrier.size / 2, .02f);
-        JPH::BodyCreationSettings settings(shape, barrier.center, Quat::sRotation(Vec3::sAxisY(), barrier.yaw),
+        JPH::BodyCreationSettings settings(shape, barrier.center, barrier.rotation(),
             JPH::EMotionType::Static, obstacle_layer);
         impl_->add_body(settings);
     }
@@ -203,9 +203,16 @@ bool PhysicsWorld::cast_ground(const Vec3& origin, const Vec3& direction,
                                float distance, GroundHit& hit) const {
     JPH::RRayCast ray(origin, direction * distance);
     JPH::RayCastResult result;
-    if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, result,
+    const auto cast = [&]() {
+        return impl_->system.GetNarrowPhaseQuery().CastRay(ray, result,
             JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0)),
-            JPH::SpecifiedObjectLayerFilter(ground_layer))) return false;
+            JPH::SpecifiedObjectLayerFilter(ground_layer));
+    };
+    if (!cast()) {
+        // Compressed mesh edges can miss an exactly aligned ray; sample five millimeters beside it.
+        ray = JPH::RRayCast(origin + Vec3(.005f, 0, .005f), direction * distance);
+        if (!cast()) return false;
+    }
     JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), result.mBodyID);
     if (!lock.Succeeded()) return false;
     hit.point = ray.GetPointOnRay(result.mFraction);

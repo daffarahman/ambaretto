@@ -165,9 +165,9 @@ void draw_character(const forza::Character& character, const forza::Environment&
         draw_box(center, rotation, size, color, false);
     };
     const auto feet = character.position();
-    const float ground = environment.height(feet.GetX(), feet.GetZ());
+    const float ground = environment.surface_height(feet);
     const float radius = std::clamp(0.33f - (feet.GetY() - ground) * 0.08f, 0.18f, 0.33f);
-    const auto shadow_point = [&](float x, float z) { return Vector3{x, environment.height(x, z) + 0.085f, z}; };
+    const auto shadow_point = [&](float x, float z) { return Vector3{x, environment.surface_height(forza::Vec3(x, feet.GetY(), z)) + 0.085f, z}; };
     for (int i = 0; i < 24; ++i) {
         const float a = i * 6.2831853f / 24, b = (i + 1) * 6.2831853f / 24;
         DrawTriangle3D(shadow_point(feet.GetX(), feet.GetZ()),
@@ -396,22 +396,23 @@ int main(int argc, char** argv) {
         }
         if (start_at_airport) {
             const auto& airport = forza::airports[start_district == "--key-west" ? 1 : 0];
-            scene->plane.reset(forza::Vec3(airport.center_x, forza::Airport::elevation + forza::Plane::parked_height,
+            scene->plane.reset(forza::Vec3(airport.plane_x(), forza::Airport::elevation + forza::Plane::parked_height,
                 airport.plane_z()), airport.yaw());
-            scene->car.reset(forza::Vec3(airport.center_x + 8,
-                environment.height(airport.center_x + 8, airport.plane_z()) + .56f, airport.plane_z()), airport.yaw());
+            const auto parking = airport.point(airport.plane_along(), 8);
+            scene->car.reset(forza::Vec3(parking.x,
+                environment.height(parking.x, parking.z) + .56f, parking.z), airport.yaw());
         }
         if (start_in_plane) {
             scene->player.interact();
             const auto door = scene->plane.position() + scene->plane.rotate(forza::Vec3(-1.9f, 0, -1.8f));
-            scene->player.character().reset(forza::Vec3(door.GetX(), environment.height(door.GetX(), door.GetZ()) + .08f, door.GetZ()));
+            scene->player.character().reset(forza::Vec3(door.GetX(), environment.surface_height(door) + .08f, door.GetZ()));
             scene->player.interact();
         }
         if (start_on_foot && !scene->player.on_foot()) scene->player.interact();
         if (start_at_traffic) {
             const auto& car = *scene->traffic.cars().front().car;
             const auto door = car.position() + car.rotate(forza::Vec3(-2, 0, .35f));
-            scene->player.character().reset(forza::Vec3(door.GetX(), environment.height(door.GetX(), door.GetZ()) + .08f, door.GetZ()));
+            scene->player.character().reset(forza::Vec3(door.GetX(), environment.surface_height(door) + .08f, door.GetZ()));
         }
         forza::ThirdPersonCamera orbit;
         forza::ThirdPersonCamera saved_orbit = orbit;

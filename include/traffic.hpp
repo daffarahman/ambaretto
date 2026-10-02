@@ -10,6 +10,8 @@ struct TrafficCar {
     std::unique_ptr<Car> car;
     bool npc = true;
     std::size_t route = 0;
+    const char* route_name = "";
+    float cruise_speed = 8;
     float stuck_time = 0;
     std::size_t segment = 0;
     Vec3 point = Vec3::sZero();
