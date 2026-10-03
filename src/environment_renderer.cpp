@@ -1,6 +1,7 @@
 #include "ui_font.hpp"
 #include "environment_renderer.hpp"
 #include "traffic.hpp"
+#include "police.hpp"
 #include "airport.hpp"
 #include "minimap.hpp"
 #include <rlgl.h>
@@ -1013,7 +1014,7 @@ void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
 }
-void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Traffic* traffic, const std::vector<std::unique_ptr<Plane>>* aircraft) const {
+void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Traffic* traffic, const std::vector<std::unique_ptr<Plane>>* aircraft, const Police* police) const {
     const MinimapView map(GetScreenHeight(), player_position, player_forward, camera);
     const auto bounds = map.bounds;
     DrawRectangle(int(bounds.x - 4), int(bounds.y - 4), int(bounds.width + 8), int(bounds.height + 8), {19, 28, 45, 235});
@@ -1025,6 +1026,20 @@ void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 playe
         {map.anchor.x, map.anchor.y, size, size},
         {(player_position.GetX() + Environment::extent) * map.scale,
             (player_position.GetZ() + Environment::extent) * map.scale}, map.rotation(), WHITE);
+    if (police && police->wanted().stars()) {
+        const auto p = map.project(police->wanted().last_seen());
+        const float radius = police->wanted().radius() * map.scale;
+        DrawCircleV(p, radius, police->wanted().searching() ? Color{225, 174, 65, 45} : Color{211, 63, 83, 40});
+        DrawCircleLines(int(p.x), int(p.y), radius, police->wanted().searching() ? GOLD : RED);
+    }
+    if (police) for (const auto& unit : police->units()) if (unit.active) {
+        const auto p = map.project(unit.car->position());
+        if (map.contains(p)) DrawRectangle(int(p.x - 3), int(p.y - 3), 6, 6, unit.claimed ? SKYBLUE : Color{79, 142, 255, 255});
+        for (const auto& officer : unit.officers) if (!officer.seated && officer.character->alive()) {
+            const auto dot = map.project(officer.character->position());
+            if (map.contains(dot)) DrawCircleV(dot, 3.3f, {79, 142, 255, 255});
+        }
+    }
     if (traffic) for (const auto& vehicle : traffic->cars()) {
         const auto p = map.project(vehicle.car->position());
         if (map.contains(p)) DrawCircleV(p, 2.3f, vehicle.npc ? GREEN : SKYBLUE);
@@ -1051,7 +1066,7 @@ void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 playe
     EndScissorMode();
     DrawRectangleLinesEx(bounds, 2, {115, 157, 174, 255});
 }
-void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Traffic* traffic, const std::vector<std::unique_ptr<Plane>>* aircraft) const {
+void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Traffic* traffic, const std::vector<std::unique_ptr<Plane>>* aircraft, const Police* police) const {
     BeginScissorMode(int(viewport.x), int(viewport.y), int(viewport.width), int(viewport.height));
     DrawRectangleRec(viewport, {43, 116, 148, 255});
     const auto corner = view.project(Vec3(-Environment::extent, 0, -Environment::extent), viewport);
@@ -1060,6 +1075,20 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
         {corner.x, corner.y, size, size}, {0, 0}, 0, WHITE);
     const auto inside = [&](Vector2 p) { return p.x >= viewport.x + 8 && p.x <= viewport.x + viewport.width - 8
         && p.y >= viewport.y + 8 && p.y <= viewport.y + viewport.height - 8; };
+    if (police && police->wanted().stars()) {
+        const auto p = view.project(police->wanted().last_seen(), viewport);
+        const float radius = police->wanted().radius() * view.scale;
+        DrawCircleV(p, radius, police->wanted().searching() ? Color{225, 174, 65, 45} : Color{211, 63, 83, 40});
+        DrawCircleLines(int(p.x), int(p.y), radius, police->wanted().searching() ? GOLD : RED);
+    }
+    if (police) for (const auto& unit : police->units()) if (unit.active) {
+        const auto p = view.project(unit.car->position(), viewport);
+        if (inside(p)) DrawRectangle(int(p.x - 3), int(p.y - 3), 6, 6, unit.claimed ? SKYBLUE : Color{79, 142, 255, 255});
+        for (const auto& officer : unit.officers) if (!officer.seated && officer.character->alive()) {
+            const auto dot = view.project(officer.character->position(), viewport);
+            if (inside(dot)) DrawCircleV(dot, 3.3f, {79, 142, 255, 255});
+        }
+    }
     for (std::size_t i : {std::size_t(0), std::size_t(1), std::size_t(2), std::size_t(6), std::size_t(7), std::size_t(8), std::size_t(9), std::size_t(10)}) {
         if (i == 2 && view.scale < .15f) continue;
         const auto& island = Environment::islands()[i];

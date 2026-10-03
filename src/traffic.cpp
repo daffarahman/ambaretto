@@ -2,6 +2,7 @@
 #include "environment.hpp"
 #include "plane.hpp"
 #include "airport.hpp"
+#include "police.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -223,6 +224,7 @@ void Traffic::stream(Vec3 player_position, const Car* starter, const Plane* plan
             bool occupied = false;
             for (const auto& other : cars_) if (other.car.get() != &car && other.car->simulated()
                 && (position - other.car->position()).LengthSq() < 6 * 6) { occupied = true; break; }
+            if (police_) for (const auto& unit : police_->units()) if (unit.active && (position - unit.car->position()).LengthSq() < 6 * 6) occupied = true;
             if (occupied) continue;
             car.set_simulated(true); vehicle.plan_time = 0; vehicle.stuck_time = 0;
         } else {
@@ -237,12 +239,14 @@ bool Traffic::space_available(Vec3 position, const Car& ignore, const Car& start
                               const Plane* plane, Vec3 player_position) const {
     if ((position - player_position).LengthSq() < 35 * 35 || (position - starter_car.position()).LengthSq() < 10 * 10) return false;
     if (plane && (position - plane->position()).LengthSq() < 12 * 12) return false;
+    if (police_) for (const auto& unit : police_->units()) if (unit.active && (position - unit.car->position()).LengthSq() < 10 * 10) return false;
     for (const auto& vehicle : cars_)
         if (vehicle.car.get() != &ignore && vehicle.car->simulated() && (position - vehicle.car->position()).LengthSq() < 10 * 10) return false;
     return true;
 }
 void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
-                   const Vec3* pedestrian, Vec3 player_position, float dt) {
+                   const Vec3* pedestrian, Vec3 player_position, float dt, const Police* police) {
+    police_ = police;
     stream_time_ -= dt;
     const bool sync = stream_time_ <= 0;
     if (sync) { stream(player_position, &starter_car, plane); stream_time_ = .5f; }
@@ -319,6 +323,13 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
             avoid_car(*other.car);
         }
         if (plane) avoid(plane->position(), 7);
+        if (police_) for (const auto& unit : police_->units()) if (unit.active && !unit.claimed) {
+            avoid(unit.car->position(), 2.6f);
+            if (police_->wanted().stars() && (unit.car->position() - position).LengthSq() < 35 * 35) {
+                desired_speed = std::min(desired_speed, 6.f);
+                target += right(direction) * .8f; curvature = turn(target);
+            }
+        }
         const bool yielding = pedestrian && std::abs(pedestrian->GetY() - position.GetY()) < 2
             && flat(*pedestrian - position).LengthSq() < 9 * 9;
         if (yielding) desired_speed = 0;

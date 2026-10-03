@@ -41,6 +41,14 @@ cmake --build --preset ucrt64
 .\build\ucrt64\forzaambazon.exe
 ```
 
+## Police and wanted levels
+
+Police recognize reckless driving, vehicle theft, gunfire, assault, homicide, attacks on officers, and police-car theft. Nearby officers respond immediately; civilian witnesses pause to report a crime, then flee along sidewalks. Isolated crimes without a witness or an officer within hearing range do not automatically alert police.
+
+There are six wanted levels. Each level dispatches one additional car with two officers and increases pursuit speed, firing frequency, and PIT frequency. One-star officers attempt a nonlethal arrest; PIT maneuvers start at two stars. All police cars use the existing vehicle model with a distinct police type, black-and-white markings, flashing lights, and a siren. Cars arrive on connected roads outside the camera, stop near an on-foot or stationary suspect, and officers return to their cars when the suspect drives away. Nearby casualties remain visible while reserve units reinforce the pursuit.
+
+The stars appear below the clock, with blue police markers and a search area on both maps. Break police line of sight, leave the last-known search area (165–390 m depending on stars), and remain unseen outside it for 10–30 seconds to clear the wanted level. Returning inside the area or being spotted resets the escape timer. A completed arrest displays **BUSTED** and respawns the player on foot.
+
 ## Controls
 
 The DOS-style menubar groups commands under **File** (resume, pause, quit), **Edit** (recover vehicle, restore car tuning), **Settings** (world map, car tuning, graphics, controller mapping), and **Help** (controls, about). Press **F10** to release the mouse and open it; navigate with arrows and Enter, or click menus while paused. Escape closes menus. Opening a dropdown or dialog pauses gameplay, including flight and live tuning. Resume through File, a gameplay click, or the mapped Pause/resume button (Start by default).

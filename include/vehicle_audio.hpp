@@ -6,6 +6,7 @@
 
 namespace forza {
 class Traffic;
+class Police;
 struct TrafficCar;
 struct VehicleAudioLoop {
     std::vector<unsigned char> wav;
@@ -24,6 +25,7 @@ public:
     VehicleAudio& operator=(const VehicleAudio&) = delete;
     void update(const Traffic& traffic, const Car& player_car, Vec3 listener, Vec3 listener_right,
                 bool player_driving, bool horn_held, bool running, float dt, float player_throttle = 0);
+    void update_police(const Police& police, Vec3 listener, Vec3 listener_right, bool running);
 private:
     struct Voice {
         const TrafficCar* vehicle = nullptr;
@@ -34,6 +36,8 @@ private:
     void update_voice(Voice& voice, float engine_volume, float horn_volume, float pitch, float pan, float dt);
     void clear_voice(Voice& voice);
     std::vector<unsigned char> engine_data_, horn_data_;
+    std::vector<unsigned char> siren_data_;
+    Music siren_{};
     Voice player_;
     std::array<Voice, npc_voices> npcs_{};
     std::array<const TrafficCar*, npc_voices> selected_{};

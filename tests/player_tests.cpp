@@ -143,6 +143,62 @@ void city_collisions_and_interaction() {
     require(player.driving() && player.character().velocity().Length() < 0.001f, "reset retained on-foot state or motion");
 }
 
+void ragdoll_impact_damage() {
+    using namespace forza;
+    PhysicsWorld flat(false);
+    Character character(flat);
+    character.reset(Vec3(0, 30, 0));
+    character.ragdoll(Vec3(18, 0, 0));
+    tick(flat, character, {}, 60);
+    require(character.health() == 100, "airborne bailout motion caused damage without a collision");
+    character.reset(Vec3(0, .08f, 0));
+    character.ragdoll(Vec3::sZero());
+    tick(flat, character, {}, 240);
+    require(character.health() == 100, "resting ragdoll contacts caused injury");
+    character.reset(Vec3(0, .65f, 0));
+    character.ragdoll(Vec3(18, 0, 0));
+    tick(flat, character, {}, 120);
+    require(character.health() < 100, "fast sideways road landing caused no injury");
+    character.reset(Vec3(50, .08f, 0));
+    character.revive();
+    Car car(flat);
+    car.reset(Vec3(0, .56f, 0));
+    for (int i = 0; i < 240; ++i) { car.step({0, 0, false, true}); flat.step(); }
+    character.reset(Vec3(0, .65f, 6));
+    character.ragdoll(Vec3(0, 0, -18));
+    for (int i = 0; i < 30; ++i) { car.step({0, 0, false, true}); tick(flat, character, {}, 1); }
+    require(character.health() < 100, "ragdoll collision with parked car caused no injury");
+    character.reset(Vec3(50, .08f, 0));
+    character.revive();
+    car.reset(Vec3(0, .56f, 20));
+    for (int i = 0; i < 360; ++i) { car.step({1}); flat.step(); }
+    Vec3 target = car.position() + car.forward() * 6;
+    target.SetY(.08f);
+    character.reset(target);
+    character.ragdoll(Vec3::sZero());
+    for (int i = 0; i < 120; ++i) { car.step({1}); tick(flat, character, {}, 1); }
+    require(character.health() < 100, "moving car hit ignored an already ragdolling character");
+    character.reset(Vec3(50, .08f, 0));
+    const Environment map;
+    Player player(flat, car, map);
+    car.reset(Vec3(0, .56f, 0));
+    for (int i = 0; i < 600; ++i) player.step({1}, {});
+    require(car.velocity().Length() > 12 && player.interact() == Interaction::Exited, "fast bailout setup failed");
+    require(player.character().health() == 100, "bailout injured player before contact");
+    for (int i = 0; i < 240; ++i) player.step({}, {});
+    require(player.character().health() < 100, "fast car bailout caused no landing injury");
+    PhysicsWorld city(map);
+    Character victim(city);
+    const auto& building = map.buildings().front();
+    const float z = building.solid_center().GetZ() + building.solid_size().GetZ() / 2 + 3;
+    const float x = building.solid_center().GetX();
+    victim.reset(Vec3(x, map.height(x, z) + .9f, z));
+    victim.ragdoll(Vec3(0, 0, -18));
+    tick(city, victim, {}, 30);
+    require(victim.health() < 100, "horizontal ragdoll impact against building caused no injury");
+    std::cout << "Ragdoll damage: road, parked/moving cars, building, bailout and harmless motion passed\n";
+}
+
 void car_coasting_and_direction_changes() {
     const forza::Environment map;
     forza::PhysicsWorld world(false);
@@ -318,7 +374,7 @@ void model_tree_collisions() {
 }
 int main() {
     try {
-        character_movement(); articulated_ragdoll(); city_collisions_and_interaction(); car_coasting_and_direction_changes(); mouse_camera(); surface_swimming(); model_tree_collisions();
+        character_movement(); articulated_ragdoll(); city_collisions_and_interaction(); ragdoll_impact_damage(); car_coasting_and_direction_changes(); mouse_camera(); surface_swimming(); model_tree_collisions();
         std::cout << "All player checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

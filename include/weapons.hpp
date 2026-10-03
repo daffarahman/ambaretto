@@ -5,6 +5,7 @@
 namespace forza {
 class Character;
 class Pedestrians;
+class Police;
 enum class WeaponType { Unarmed, Pistol, SMG, AK47, Count };
 struct WeaponData {
     const char* name;
@@ -25,11 +26,13 @@ struct ShotHit {
     float distance = 0;
 };
 ShotHit trace_shot(const PhysicsWorld& world, const Pedestrians* pedestrians,
-    Vec3 origin, Vec3 direction, float range);
+    Vec3 origin, Vec3 direction, float range, const Police* police = nullptr, const Character* ignore = nullptr);
 struct Shot {
     bool fired = false, hit = false;
     Vec3 from{0, 0, 0}, to{0, 0, 0};
     float recoil = 0;
+    Character* victim = nullptr;
+    bool killed = false, injured = false;
 };
 class Weapons {
 public:
@@ -44,7 +47,7 @@ public:
     void reload();
     void step(float dt);
     Shot fire(const PhysicsWorld& world, const Pedestrians* pedestrians, Vec3 origin, Vec3 direction,
-        bool held, bool pressed, bool aiming);
+        bool held, bool pressed, bool aiming, const Police* police = nullptr);
 private:
     WeaponType selected_ = WeaponType::Unarmed;
     std::array<int, int(WeaponType::Count)> ammo_{}, reserve_{};

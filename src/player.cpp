@@ -3,13 +3,15 @@
 #include "airport.hpp"
 #include "traffic.hpp"
 #include "pedestrians.hpp"
+#include "police.hpp"
+#include <algorithm>
 #include <cmath>
 
 namespace forza {
 Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane, Traffic* traffic, Pedestrians* pedestrians,
-    const std::vector<std::unique_ptr<Plane>>* aircraft)
+    const std::vector<std::unique_ptr<Plane>>* aircraft, Police* police)
     : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world, &environment), plane_(plane), traffic_(traffic),
-      pedestrians_(pedestrians) { starter_plane_ = plane; aircraft_ = aircraft; reset(); }
+      pedestrians_(pedestrians), police_(police) { starter_plane_ = plane; aircraft_ = aircraft; reset(); }
 
 void Player::reset() {
     Vec3 spawn = environment_.spawn();
@@ -90,6 +92,10 @@ Player::EntryTarget Player::entry_target() const {
         auto* car = vehicle.car.get();
         consider(EntryVehicle::Car, car->position(), car->velocity(), car->body_id(), 3.3f, car->simulated(), car);
     }
+    if (police_) for (const auto& unit : police_->units()) if (unit.active) {
+        const bool empty = unit.claimed || std::none_of(unit.officers.begin(), unit.officers.end(), [](const PoliceOfficer& officer) { return officer.seated && officer.character->alive(); });
+        consider(EntryVehicle::Car, unit.car->position(), unit.car->velocity(), unit.car->body_id(), 3.3f, empty, unit.car.get());
+    }
     const auto consider_plane = [&](Plane* plane) {
         if (plane) consider(EntryVehicle::Plane, plane->boarding_position(), plane->velocity(), plane->body_id(), 2.5f,
             plane->grounded() && plane->position().GetY() > Environment::water_level + .1f, nullptr, plane);
@@ -104,13 +110,19 @@ bool Player::can_steal() const { return traffic_ && traffic_->is_npc(entry_car()
 bool Player::can_enter() const { return entry_vehicle() != EntryVehicle::None; }
 
 Interaction Player::interact() {
+    if (police_ && police_->arrested()) return Interaction::Blocked;
     if (!character_.alive() || (on_foot() && character_.ragdolling())) return Interaction::Blocked;
     if (on_foot()) {
         const auto vehicle = entry_target();
         if (vehicle.kind == EntryVehicle::None) return Interaction::TooFar;
         if (vehicle.car) {
             car_ = vehicle.car;
+            const bool stolen = traffic_ && traffic_->is_npc(car_);
             if (traffic_) traffic_->steal(*car_);
+            if (police_) {
+                if (car_->type() == CarType::Police) police_->steal(*car_);
+                else if (stolen) police_->crime(Crime::VehicleTheft, character_.position());
+            }
         }
         if (vehicle.plane) plane_ = vehicle.plane;
         driving_ = vehicle.kind == EntryVehicle::Car;
@@ -163,12 +175,13 @@ Interaction Player::interact() {
 }
 
 void Player::step(Input driving, FootInput walking, float dt, FlightInput flight) {
+    if (police_ && police_->arrested()) { walking = {}; driving = {0, 0, false, true}; }
     weapons_.step(dt);
     if (coasting_ && car_->velocity().Length() < .5f) coasting_ = false;
     if (!driving_) driving = {0, 0, false, !coasting_};
     driving.player_controlled = driving_ || coasting_;
     starter_car_.step(car_ == &starter_car_ ? driving : Input{0, 0, false, true}, dt);
-    if (car_ != &starter_car_ && (driving_ || coasting_)) car_->step(driving, dt);
+    if (car_ != &starter_car_) car_->step(driving, dt);
     if (plane_) {
         if (!flying_) flight = {0, 0, 0, 0, false, false, true};
         plane_->step(flight, dt);
@@ -178,13 +191,17 @@ void Player::step(Input driving, FootInput walking, float dt, FlightInput flight
         plane->step({0, 0, 0, 0, false, false, true}, dt);
     if (traffic_) {
         const Vec3 feet = character_.position();
-        traffic_->step(driving_ || coasting_ ? car_ : nullptr, starter_car_, plane_, on_foot() ? &feet : nullptr, position(), dt);
+        traffic_->step(car_, starter_car_, plane_, on_foot() ? &feet : nullptr, position(), dt, police_);
     }
     if (on_foot()) {
         character_.hit_by(starter_car_, dt);
         if (traffic_) for (const auto& vehicle : traffic_->cars()) character_.hit_by(*vehicle.car, dt);
     }
     if (pedestrians_) pedestrians_->prepare(starter_car_, traffic_, position(), dt);
+    if (police_) {
+        police_->prepare(*this, dt);
+        if (on_foot()) for (const auto& unit : police_->units()) if (unit.active) character_.hit_by(*unit.car, dt);
+    }
     world_.step(dt);
     if (!on_foot() && position().GetY() < Environment::water_level + .1f
         && environment_.terrain_height(position().GetX(), position().GetZ()) < Environment::water_level - 1)
@@ -194,10 +211,21 @@ void Player::step(Input driving, FootInput walking, float dt, FlightInput flight
         character_.step(walking, dt);
     }
     if (pedestrians_) pedestrians_->step(starter_car_, traffic_, position(), dt);
+    if (police_) police_->finish(*this, dt);
 }
 
+bool Player::can_shoot() const {
+    return on_foot() && character_.alive() && !character_.ragdolling() && !character_.swimming() && (!police_ || !police_->arrested());
+}
 Shot Player::shoot(Vec3 origin, Vec3 direction, bool held, bool pressed, bool aiming) {
     if (!can_shoot()) return {};
-    return weapons_.fire(world_, pedestrians_, origin, direction, held, pressed, aiming);
+    const auto shot = weapons_.fire(world_, pedestrians_, origin, direction, held, pressed, aiming, police_);
+    if (police_ && shot.fired) {
+        police_->crime(Crime::Gunfire, position());
+        if (shot.injured) police_->crime(police_->is_officer(shot.victim)
+            ? (shot.killed ? Crime::OfficerHomicide : Crime::OfficerAssault)
+            : (shot.killed ? Crime::Homicide : Crime::Assault), position(), shot.victim);
+    }
+    return shot;
 }
 } // namespace forza

@@ -10,6 +10,7 @@ struct Pedestrian {
     std::size_t route = 0, target = 0;
     unsigned appearance = 0;
     float walking_speed = 1.5f, stuck_time = 0;
+    float fear_time = 0, call_time = 0;
     bool enabled = false, reverse = false, was_ragdoll = false;
 };
 
@@ -20,9 +21,11 @@ public:
     void prepare(const Car& starter, const Traffic* traffic, Vec3 player_position, float dt = fixed_step);
     void step(const Car& starter, const Traffic* traffic, Vec3 player_position, float dt = fixed_step);
     const std::vector<Pedestrian>& people() const { return people_; }
+    unsigned alarm(Vec3 origin, float radius);
 private:
     bool walkable(Vec3 position) const;
     void stream(const Car* starter, const Traffic* traffic, Vec3 player_position, bool initial = false);
+    PhysicsWorld& world_;
     const Environment& environment_;
     std::vector<std::vector<Vec3>> routes_;
     std::vector<Pedestrian> people_;

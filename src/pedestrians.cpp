@@ -36,7 +36,7 @@ bool Pedestrians::walkable(Vec3 p) const {
     return true;
 }
 
-Pedestrians::Pedestrians(PhysicsWorld& world, const Environment& environment) : environment_(environment) {
+Pedestrians::Pedestrians(PhysicsWorld& world, const Environment& environment) : world_(world), environment_(environment) {
     for (const auto& loop : environment.street_loops()) {
         if (!loop.closed || loop.corners.size() < 3) continue;
         const std::size_t count = loop.corners.size();
@@ -130,6 +130,7 @@ void Pedestrians::stream(const Car* starter, const Traffic* traffic, Vec3 player
             person.character->revive();
             person.character->set_enabled(true);
             person.enabled = true; person.was_ragdoll = false; person.stuck_time = 0;
+            person.fear_time = person.call_time = 0;
             break;
         }
     }
@@ -151,7 +152,10 @@ void Pedestrians::prepare(const Car& starter, const Traffic* traffic, Vec3 playe
 void Pedestrians::step(const Car&, const Traffic*, Vec3 player_position, float dt) {
     for (auto& person : people_) if (person.enabled) {
         auto& character = *person.character;
+        person.fear_time = std::max(0.f, person.fear_time - dt);
+        person.call_time = std::max(0.f, person.call_time - dt);
         if (character.ragdolling()) { character.step({}, dt); person.was_ragdoll = true; continue; }
+        if (person.call_time > 0) { character.step({}, dt); continue; }
         const auto& route = routes_[person.route];
         if (person.was_ragdoll) {
             const auto nearest = std::min_element(route.begin(), route.end(), [&](Vec3 a, Vec3 b) {
@@ -170,7 +174,7 @@ void Pedestrians::step(const Car&, const Traffic*, Vec3 player_position, float d
             if (offset.LengthSq() < 1.2f * 1.2f && offset.Dot(direction) > .2f) { blocked = true; break; }
         }
         if (flat(player_position - before).LengthSq() < 1.2f * 1.2f) blocked = true;
-        character.step({blocked ? Vec3::sZero() : direction * (person.walking_speed / 3.2f)}, dt);
+        character.step({blocked ? Vec3::sZero() : direction * (person.fear_time > 0 ? .75f : person.walking_speed / 3.2f), person.fear_time > 0}, dt);
         person.stuck_time = flat(character.position() - before).LengthSq() < .05f * .05f * dt * dt
             ? person.stuck_time + dt : 0;
         if (person.stuck_time > 3 && person.stuck_time < 3 + dt * 1.5f) {
@@ -178,5 +182,22 @@ void Pedestrians::step(const Car&, const Traffic*, Vec3 player_position, float d
             person.target = next_point(person, person.target, route.size());
         }
     }
+}
+unsigned Pedestrians::alarm(Vec3 origin, float radius) {
+    unsigned witnesses = 0;
+    for (auto& person : people_) if (person.enabled && person.character->alive()) {
+        const Vec3 position = person.character->position();
+        if ((position - origin).LengthSq() > radius * radius) continue;
+        const bool sees = world_.camera_fraction(position + Vec3(0, 1.5f, 0), origin + Vec3(0, 1.1f, 0) - position - Vec3(0, 1.5f, 0)) > .96f;
+        if (sees && !person.character->ragdolling()) ++witnesses;
+        if (person.fear_time <= 0) {
+            const auto& route = routes_[person.route];
+            const Vec3 direction = flat(route[person.target] - position);
+            if (direction.Dot(flat(origin - position)) > 0) { person.reverse = !person.reverse; person.target = next_point(person, person.target, route.size()); }
+            person.call_time = sees ? 1.6f : 0;
+        }
+        person.fear_time = 14;
+    }
+    return witnesses;
 }
 } // namespace forza

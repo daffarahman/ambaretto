@@ -145,7 +145,7 @@ MenuCommand MenuBar::update(ControllerMapping& mapping, const std::filesystem::p
     if (click && !hit(dropdown_rect(dropdown_))) dropdown_ = -1;
     return MenuCommand::None;
 }
-void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path& path, bool captured) const {
+void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path& path) const {
     DrawRectangle(0, 0, GetScreenWidth(), menu_height, gray);
     DrawLine(0, menu_height - 1, GetScreenWidth(), menu_height - 1, WHITE);
     for (int i = 0; i < 4; ++i) {
@@ -153,7 +153,6 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         if (dropdown_ == i) DrawRectangleRec(r, blue);
         text(titles[i], r.x + 12, 6, 19, dropdown_ == i ? RAYWHITE : ink);
     }
-    text(captured ? "F10: menu   Esc: map" : "F10 / arrows / Enter: menu", float(GetScreenWidth() - 365), 8, 15);
     if (dropdown_ >= 0) {
         box(dropdown_rect(dropdown_));
         for (int i = 0; i < counts[dropdown_]; ++i) {

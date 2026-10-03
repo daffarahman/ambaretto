@@ -1,5 +1,6 @@
 #include "vehicle_audio.hpp"
 #include "traffic.hpp"
+#include "police.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -103,6 +104,15 @@ VehicleAudio::VehicleAudio() {
     auto engine = load_loop("car-engine.wav"), horn = load_loop("car-horn.wav");
     engine_data_ = std::move(engine.wav); horn_data_ = std::move(horn.wav);
     SetAudioStreamBufferSizeDefault(8192);
+    std::vector<float> samples(44100); float phase = 0;
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        const float time = float(i) / 22050;
+        phase += 6.2831853f * (700 + 220 * std::sin(time * 6.2831853f)) / 22050;
+        samples[i] = std::sin(phase) * .3f * std::min({1.f, time * 40, (2 - time) * 40});
+    }
+    siren_data_ = make_vehicle_audio_loop({44100, 22050, 32, 1, samples.data()}).wav;
+    if (!siren_data_.empty()) siren_ = LoadMusicStreamFromMemory(".wav", siren_data_.data(), int(siren_data_.size()));
+    if (IsMusicValid(siren_)) { siren_.looping = true; SetMusicVolume(siren_, 0); }
     const auto load = [&](Voice& voice) {
         if (!engine_data_.empty()) voice.engine = LoadMusicStreamFromMemory(".wav", engine_data_.data(), int(engine_data_.size()));
         if (!horn_data_.empty()) voice.horn = LoadMusicStreamFromMemory(".wav", horn_data_.data(), int(horn_data_.size()));
@@ -118,6 +128,7 @@ VehicleAudio::VehicleAudio() {
 }
 
 VehicleAudio::~VehicleAudio() {
+    if (IsMusicValid(siren_)) UnloadMusicStream(siren_);
     const auto unload = [](Voice& voice) {
         if (IsMusicValid(voice.engine)) UnloadMusicStream(voice.engine);
         if (IsMusicValid(voice.horn)) UnloadMusicStream(voice.horn);
@@ -126,6 +137,19 @@ VehicleAudio::~VehicleAudio() {
     for (auto& voice : npcs_) unload(voice);
 }
 
+void VehicleAudio::update_police(const Police& police, Vec3 listener, Vec3 listener_right, bool running) {
+    if (!IsMusicValid(siren_)) return;
+    const Car* nearest = nullptr; float distance = 200 * 200;
+    if (running && police.wanted().stars()) for (const auto& unit : police.units()) if (unit.active && !unit.claimed) {
+        const float candidate = (unit.car->position() - listener).LengthSq();
+        if (candidate < distance) { distance = candidate; nearest = unit.car.get(); }
+    }
+    if (!nearest) { StopMusicStream(siren_); return; }
+    const auto placement = vehicle_audio_placement(nearest->position(), listener, listener_right, 200);
+    SetMusicVolume(siren_, placement.volume * .65f); SetMusicPan(siren_, .5f + placement.pan * .5f);
+    if (!IsMusicStreamPlaying(siren_)) PlayMusicStream(siren_);
+    UpdateMusicStream(siren_);
+}
 void VehicleAudio::clear_voice(Voice& voice) {
     if (IsMusicValid(voice.engine)) StopMusicStream(voice.engine);
     if (IsMusicValid(voice.horn)) StopMusicStream(voice.horn);

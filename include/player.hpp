@@ -6,6 +6,7 @@
 namespace forza {
 class Traffic;
 class Pedestrians;
+class Police;
 struct FootInput {
     Vec3 direction{0, 0, 0};
     bool sprint = false;
@@ -42,6 +43,8 @@ public:
     // Velocity is inherited by every body; impulse is applied to the torso in N s.
     void ragdoll(const Vec3& inherited_velocity, const Vec3& impulse = Vec3::sZero());
     void hit_by(const Car& car, float dt = fixed_step);
+    const Car* last_vehicle_hit() const;
+    bool touching(const Car& car) const;
     std::array<BodyPartPose, static_cast<std::size_t>(BodyPart::Count)> body_parts() const;
     BodyPartPose held_weapon() const;
     bool can_stand_at(const Vec3& feet) const;
@@ -69,7 +72,7 @@ enum class EntryVehicle { None, Car, Plane };
 class Player {
 public:
     Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane = nullptr, Traffic* traffic = nullptr,
-        Pedestrians* pedestrians = nullptr, const std::vector<std::unique_ptr<Plane>>* aircraft = nullptr);
+        Pedestrians* pedestrians = nullptr, const std::vector<std::unique_ptr<Plane>>* aircraft = nullptr, Police* police = nullptr);
     void reset();
     void respawn_on_foot(Vec3 feet, float yaw = 0);
     void recover_plane();
@@ -92,7 +95,7 @@ public:
     const Character& character() const { return character_; }
     Weapons& weapons() { return weapons_; }
     const Weapons& weapons() const { return weapons_; }
-    bool can_shoot() const { return on_foot() && character_.alive() && !character_.ragdolling() && !character_.swimming(); }
+    bool can_shoot() const;
     Shot shoot(Vec3 origin, Vec3 direction, bool held, bool pressed, bool aiming);
 private:
     PhysicsWorld& world_;
@@ -108,6 +111,7 @@ private:
     const std::vector<std::unique_ptr<Plane>>* aircraft_ = nullptr;
     Traffic* traffic_ = nullptr;
     Pedestrians* pedestrians_ = nullptr;
+    Police* police_ = nullptr;
     bool driving_ = true;
     bool flying_ = false;
     bool coasting_ = false;

@@ -47,7 +47,9 @@ void roads_and_driving() {
         for (std::size_t i = 0; i < traffic.cars().size(); ++i) {
             const auto& car = *traffic.cars()[i].car;
             const Vec3 p = car.position();
-            require(!airports[0].contains(p.GetX(), p.GetZ()), "NPC traffic entered the airfield");
+            if (airports[0].contains(p.GetX(), p.GetZ()))
+                throw std::runtime_error("NPC traffic entered the airfield: " + std::string(traffic.cars()[i].route_name)
+                    + " at " + std::to_string(p.GetX()) + ", " + std::to_string(p.GetZ()));
             require(std::isfinite(p.Length()) && car.velocity().Length() < std::max(16.0f, traffic.cars()[i].cruise_speed + 4),
                 "traffic physics became unstable");
             const float distance = (p - previous[i]).Length();
@@ -318,7 +320,9 @@ void traffic_horns_and_safety() {
         const std::size_t index = route_car(traffic, bridge ? "OVERSEAS HIGHWAY" : "AIRPORT RESIDENTIAL");
         isolate(traffic, index);
         Car& follower = *traffic.cars()[index].car;
-        const float x = bridge ? -362.2f : airports[0].center_x - airports[0].grounds_half_width - 22.2f, z = bridge ? 1000 : 0;
+        const auto& loops = map.street_loops();
+        const auto residential = std::find_if(loops.begin(), loops.end(), [](const StreetLoop& loop) { return std::string(loop.name) == "AIRPORT RESIDENTIAL"; });
+        const float x = bridge ? -362.2f : residential->corners[1].GetX() - 2.2f, z = bridge ? 1000 : 0;
         constexpr float direction = 1, yaw = 3.14159265f;
         follower.reset(ground(map, x, z), yaw);
         starter.reset(ground(map, x, z + direction * 24), yaw);

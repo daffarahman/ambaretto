@@ -4,6 +4,7 @@
 
 namespace forza {
 class Plane;
+class Police;
 struct Road;
 
 struct TrafficCar {
@@ -34,7 +35,7 @@ public:
     bool is_npc(const Car* car) const;
     void steal(Car& car);
     void step(Car* controlled, const Car& starter_car, const Plane* plane,
-              const Vec3* pedestrian, Vec3 player_position, float dt = fixed_step);
+              const Vec3* pedestrian, Vec3 player_position, float dt = fixed_step, const Police* police = nullptr);
 private:
     struct RouteLocation {
         std::size_t segment;
@@ -52,5 +53,6 @@ private:
     std::vector<std::vector<Vec3>> routes_;
     std::vector<TrafficCar> cars_;
     float stream_time_ = 0;
+    const Police* police_ = nullptr;
 };
 } // namespace forza

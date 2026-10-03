@@ -64,9 +64,11 @@ private:
     JPH::BodyID create_chassis();
 };
 
+enum class CarType { Civilian, Police };
 class Car {
 public:
-    explicit Car(PhysicsWorld& world);
+    explicit Car(PhysicsWorld& world, CarType type = CarType::Civilian);
+    CarType type() const { return type_; }
     void step(Input input, float dt = fixed_step);
     void reset(const Vec3& center_of_mass, float yaw = 0);
     Vec3 position() const;
@@ -95,6 +97,7 @@ private:
     int drive_direction_ = 0;
     float direction_change_time_ = 0;
     CarTuning tuning_{};
+    CarType type_;
     bool simulated_ = true;
 };
 } // namespace forza

@@ -13,7 +13,7 @@ public:
     bool blocking() const { return dropdown_ >= 0 || popup_ != MenuCommand::None; }
     bool interacted() const { return interacted_; }
     MenuCommand update(ControllerMapping& mapping, const std::filesystem::path& path, bool mouse_enabled, const ControllerState& input);
-    void draw(const ControllerMapping& mapping, const std::filesystem::path& path, bool captured) const;
+    void draw(const ControllerMapping& mapping, const std::filesystem::path& path) const;
 private:
     bool close_mapping(const ControllerMapping& mapping, const std::filesystem::path& path, bool save = false);
     int dropdown_ = -1, item_ = 0, selected_ = 0, binding_ = 0;

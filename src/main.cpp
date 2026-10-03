@@ -13,6 +13,7 @@
 #include "airport.hpp"
 #include "traffic.hpp"
 #include "pedestrians.hpp"
+#include "police.hpp"
 #include "minimap.hpp"
 #include <string>
 #include <raylib.h>
@@ -40,7 +41,8 @@ struct Scene {
     std::vector<std::unique_ptr<forza::Plane>> aircraft = forza::parked_aircraft(world, environment);
     forza::Traffic traffic{world, environment};
     forza::Pedestrians pedestrians{world, environment};
-    forza::Player player{world, car, environment, &plane, &traffic, &pedestrians, &aircraft};
+    forza::Police police{world, environment, &traffic, &pedestrians};
+    forza::Player player{world, car, environment, &plane, &traffic, &pedestrians, &aircraft, &police};
     std::vector<SkidMark> marks;
     std::size_t next_mark = 0;
     std::array<forza::Vec3, 4> last_skid{};
@@ -53,6 +55,7 @@ struct Scene {
         reset();
     }
     void reset() {
+        police.clear();
         if (player.flying()) player.recover_plane();
         else if (player.on_foot()) respawn_on_foot();
         else player.reset();
@@ -61,6 +64,7 @@ struct Scene {
         last_valid.fill(false);
     }
     void respawn_on_foot() {
+        police.clear();
         player.respawn_on_foot(forza::Vec3(-350, environment.height(-350, 330) + .08f, 330), 3.14159265f);
     }
 
@@ -143,13 +147,27 @@ Color traffic_paint(std::size_t index) {
 }
 
 void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const Camera3D& camera,
-              Color paint = {235, 235, 224, 255}, Shader override_shader = {}) {
-    if (!renderer.draw_body(car, camera, paint, override_shader)) {
+              Color paint = {235, 235, 224, 255}, Shader override_shader = {}, bool emergency = false) {
+    if (car.type() == forza::CarType::Police) paint = {30, 36, 48, 255};
+    const bool model_body = renderer.draw_body(car, camera, paint, override_shader);
+    if (!model_body) {
         const auto basis = car.rotation();
         draw_box(car.position() + car.rotate(forza::Vec3(0, forza::chassis_offset, 0)), basis,
                  forza::Vec3(float(1.85), float(0.5), float(3.7)), paint);
         draw_box(car.position() + car.rotate(forza::Vec3(0, float(0.93), float(0.25))), basis,
                  forza::Vec3(float(1.45), float(0.55), float(1.7)), {39, 58, 73, 255});
+    }
+    if (car.type() == forza::CarType::Police) {
+        const auto box = [&](forza::Vec3 p, forza::Vec3 size, Color color) { draw_box(car.position() + car.rotate(p), car.rotation(), size, color, false); };
+        for (float side : {-1.f, 1.f}) {
+            box({side * .945f, .52f, .25f}, {.025f, .38f, 1.15f}, RAYWHITE);
+            box({side * .965f, .55f, .25f}, {.03f, .14f, .13f}, GOLD);
+        }
+        const float roof = model_body ? .88f : 1.205f;
+        box({0, roof + .04f, .18f}, {.95f, .07f, .23f}, BLACK);
+        const bool blink = int(GetTime() * 7) % 2 == 0;
+        box({-.28f, roof + .11f, .18f}, {.36f, .12f, .22f}, emergency && blink ? RED : Color{94, 24, 36, 255});
+        box({.28f, roof + .11f, .18f}, {.36f, .12f, .22f}, emergency && !blink ? SKYBLUE : Color{26, 46, 98, 255});
     }
     for (const auto& wheel : car.wheels()) {
         const auto mount = car.position() + car.rotate(wheel.mount);
@@ -166,7 +184,7 @@ void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const C
     }
 }
 
-void draw_character(const forza::Character& character, const forza::Environment& environment, std::size_t appearance = 0) {
+void draw_character(const forza::Character& character, const forza::Environment& environment, std::size_t appearance = 0, bool police = false) {
     const auto feet = character.position();
     const float ground = environment.surface_height(feet);
     const float radius = std::clamp(0.33f - (feet.GetY() - ground) * 0.08f, 0.18f, 0.33f);
@@ -180,8 +198,8 @@ void draw_character(const forza::Character& character, const forza::Environment&
     constexpr Color shirts[]{{38, 97, 133, 255}, {160, 58, 49, 255}, {219, 174, 62, 255}, {59, 121, 82, 255},
         {168, 164, 156, 255}, {97, 70, 134, 255}, {42, 131, 145, 255}, {219, 115, 69, 255}};
     constexpr Color skins[]{{211, 155, 113, 255}, {129, 83, 60, 255}, {235, 185, 148, 255}, {173, 118, 78, 255}};
-    const Color shirt = shirts[appearance % std::size(shirts)], skin = skins[appearance % std::size(skins)];
-    constexpr Color pants{39, 48, 66, 255}, shoes{214, 221, 222, 255};
+    const Color shirt = police ? Color{25, 38, 65, 255} : shirts[appearance % std::size(shirts)], skin = skins[appearance % std::size(skins)];
+    const Color pants{39, 48, 66, 255}, shoes = police ? Color{24, 26, 29, 255} : Color{214, 221, 222, 255};
     const auto parts = character.body_parts();
     using Part = forza::BodyPart;
     for (std::size_t i = 0; i < parts.size(); ++i) {
@@ -195,11 +213,16 @@ void draw_character(const forza::Character& character, const forza::Environment&
         if (kind == Part::Head) {
             DrawSphereEx(render_vector(part.position), part.size.GetY() / 2, 10, 12, skin);
             draw_box(part.position + part.rotation * forza::Vec3(0, .14f, .02f), part.rotation,
-                forza::Vec3(.28f, .08f, .26f), {44, 35, 31, 255}, false);
+                forza::Vec3(.28f, .08f, .26f), police ? shirt : Color{44, 35, 31, 255}, false);
+            if (police) draw_box(part.position + part.rotation * forza::Vec3(0, .1f, -.13f), part.rotation, {.31f, .035f, .18f}, shirt, false);
             DrawSphereEx(render_vector(part.position + part.rotation * forza::Vec3(0, -.02f, -.16f)), .045f, 6, 8, skin);
         } else if (kind == Part::Pelvis || kind == Part::Torso || kind == Part::LeftHand || kind == Part::RightHand
             || kind == Part::LeftFoot || kind == Part::RightFoot) {
             draw_box(part.position, part.rotation, part.size, color, false);
+            if (police && kind == Part::Torso) {
+                draw_box(part.position + part.rotation * forza::Vec3(-.075f, .1f, -.116f), part.rotation, {.06f, .075f, .02f}, GOLD, false);
+                draw_box(part.position + part.rotation * forza::Vec3(0, -.15f, 0), part.rotation, {.37f, .055f, .245f}, BLACK, false);
+            }
         } else {
             const float radius = part.size.GetX() / 2;
             const auto axis = part.rotation * forza::Vec3(0, part.size.GetY() / 2 - radius, 0);
@@ -208,12 +231,11 @@ void draw_character(const forza::Character& character, const forza::Environment&
     }
 }
 
-void draw_weapon(const forza::Player& player, float flash) {
-    if (!player.can_shoot() || player.weapons().selected() == forza::WeaponType::Unarmed) return;
-    const auto hand = player.character().held_weapon();
+void draw_weapon(const forza::Character& character, forza::WeaponType type, float flash) {
+    if (!character.alive() || character.ragdolling() || character.swimming() || type == forza::WeaponType::Unarmed) return;
+    const auto hand = character.held_weapon();
     const auto rotation = hand.rotation;
-    const auto type = player.weapons().selected();
-    const float length = player.weapons().data().length;
+    const float length = forza::weapon_data(type).length;
     const Color metal{47, 49, 52, 255}, wood{127, 74, 36, 255};
     const auto box = [&](forza::Vec3 offset, forza::Vec3 size, Color color) {
         draw_box(hand.position + rotation * offset, rotation, size, color, false);
@@ -226,6 +248,22 @@ void draw_weapon(const forza::Player& player, float flash) {
         if (type == forza::WeaponType::AK47) box({0, .04f, -.26f}, {.12f, .13f, .21f}, wood);
     }
     if (flash > 0) DrawSphereEx(render_vector(hand.position + rotation * forza::Vec3(0, .06f, -length * .88f)), .07f, 6, 8, YELLOW);
+}
+
+void draw_wanted(const forza::WantedLevel& wanted, int x, int y) {
+    if (!wanted.stars()) return;
+    DrawRectangle(x, y, 180, 34, {19, 28, 45, 230});
+    for (int i = 0; i < 6; ++i) {
+        const Vector2 center{float(x + 20 + i * 28), float(y + 16)};
+        std::array<Vector2, 12> vertices; vertices[0] = center;
+        for (int j = 0; j <= 10; ++j) {
+            const float angle = -j * PI / 5 - PI / 2, radius = j % 2 ? 4.4f : 10.f;
+            vertices[j + 1] = {center.x + std::cos(angle) * radius, center.y + std::sin(angle) * radius};
+        }
+        const Color active = wanted.searching() && int(GetTime() * 3) % 2 ? GOLD : RAYWHITE;
+        DrawTriangleFan(vertices.data(), int(vertices.size()), i < wanted.stars() ? active : Color{68, 73, 89, 255});
+    }
+    if (wanted.escape_progress() > 0) DrawRectangle(x, y + 31, int(180 * wanted.escape_progress()), 3, GOLD);
 }
 
 void draw_weapon_wheel(forza::WeaponType selection, Vector2 cursor) {
@@ -555,7 +593,7 @@ int main(int argc, char** argv) {
         if (!graphics_status.empty()) { notice = "Graphics defaults in use: " + graphics_status; notice_time = 8; TraceLog(LOG_WARNING, "%s", notice.c_str()); }
         bool jump_pending = false, discard_mouse = true, orbit_dragging = false, map_dragging = false, flaps = false;
         bool fire_pending = false, suppress_fire = true;
-        float shot_flash = 0, hit_marker = 0, death_time = 0, recoil_return = 0, hurt_flash = 0;
+        float shot_flash = 0, hit_marker = 0, death_time = 0, arrest_time = 0, recoil_return = 0, hurt_flash = 0;
         float previous_health = scene->player.character().health();
         forza::Shot last_shot;
         int rendered_frames = 0;
@@ -815,12 +853,14 @@ int main(int argc, char** argv) {
             else { accumulator = 0; jump_pending = false; }
             while (accumulator >= double(forza::fixed_step)) {
                 walking.jump = jump_pending;
+                scene->police.set_view({camera.position.x, camera.position.y, camera.position.z},
+                    {camera.target.x - camera.position.x, camera.target.y - camera.position.y, camera.target.z - camera.position.z});
                 scene->player.step(driving, walking, forza::fixed_step, flight);
                 if (active && !weapon_wheel && !suppress_fire && screenshot.empty() && scene->player.can_shoot()
                     && scene->player.weapons().selected() != forza::WeaponType::Unarmed && controls.value(Action::Fire) > .5f) {
                     const auto ray = GetScreenToWorldRay({GetScreenWidth() * .5f, GetScreenHeight() * .5f}, camera);
                     const auto aim = forza::trace_shot(scene->world, &scene->pedestrians,
-                        {ray.position.x, ray.position.y, ray.position.z}, {ray.direction.x, ray.direction.y, ray.direction.z}, scene->player.weapons().data().range);
+                        {ray.position.x, ray.position.y, ray.position.z}, {ray.direction.x, ray.direction.y, ray.direction.z}, scene->player.weapons().data().range, &scene->police);
                     const auto gun = scene->player.character().held_weapon();
                     // Cast from the receiver so a barrel protruding into cover cannot bypass it.
                     const auto muzzle = gun.position + gun.rotation * forza::Vec3(0, .06f, 0);
@@ -847,6 +887,10 @@ int main(int argc, char** argv) {
                     death_time += forza::fixed_step;
                     if (death_time > 4) { scene->respawn_on_foot(); snap_camera(); death_time = 0; suppress_fire = true; }
                 } else death_time = 0;
+                if (scene->police.arrested()) {
+                    arrest_time += forza::fixed_step;
+                    if (arrest_time > 3) { scene->respawn_on_foot(); snap_camera(); arrest_time = 0; suppress_fire = true; }
+                } else arrest_time = 0;
                 accumulator -= double(forza::fixed_step);
             }
             const auto target = focus();
@@ -864,6 +908,7 @@ int main(int argc, char** argv) {
             vehicle_audio.update(scene->traffic, scene->player.car(), scene->player.position(),
                 orbit.forward().Cross(forza::Vec3::sAxisY()), scene->player.driving(),
                 active && controls.value(Action::Horn) > .5f, simulate && screenshot.empty(), frame, driving.throttle);
+            vehicle_audio.update_police(scene->police, scene->player.position(), orbit.forward().Cross(forza::Vec3::sAxisY()), simulate && screenshot.empty());
             const Camera3D view = camera;
             if (scene->player.character().health() < previous_health) hurt_flash = .3f;
             previous_health = scene->player.character().health();
@@ -885,6 +930,8 @@ int main(int argc, char** argv) {
                             render_vector((car.forward() + forza::Vec3(0, -.13f, 0)).Normalized()), .87f};
                     };
                     headlights(scene->player.car());
+                    for (const auto& unit : scene->police.units()) if (unit.active && light_count < 6
+                        && (unit.car->position() - scene->player.position()).LengthSq() < 60 * 60) headlights(*unit.car);
                     for (const auto& vehicle : scene->traffic.cars())
                         if (light_count < 6 && vehicle.car.get() != &scene->player.car() && vehicle.car->simulated() &&
                             (vehicle.car->position() - scene->player.position()).LengthSq() < 45 * 45) headlights(*vehicle.car);
@@ -916,6 +963,9 @@ int main(int argc, char** argv) {
                             (graphics.shadow_distance + 15) * (graphics.shadow_distance + 15))
                             draw_car(*vehicle.car, car_renderer, view, traffic_paint(i), shader);
                     }
+                    for (const auto& unit : scene->police.units()) if (unit.active
+                        && (unit.car->position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
+                        draw_car(*unit.car, car_renderer, view, WHITE, shader);
                     if ((scene->plane.position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
                         draw_plane(scene->plane, scene->player.flying() && &scene->player.plane() == &scene->plane);
                     for (const auto& other : scene->aircraft) if ((other->position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
@@ -940,7 +990,7 @@ int main(int argc, char** argv) {
                     forza::ui::draw_text(labels[i], int(button.x + (button.width - forza::ui::measure_text(labels[i], 16)) / 2),
                         int(button.y + 7), 16, hover ? RAYWHITE : Color{0, 0, 0, 255});
                 }
-                scenery.world_map(world_map, map_viewport, scene->car, scene->plane, scene->player.position(), scene->player.forward(), &scene->traffic, &scene->aircraft);
+                scenery.world_map(world_map, map_viewport, scene->car, scene->plane, scene->player.position(), scene->player.forward(), &scene->traffic, &scene->aircraft, &scene->police);
                 forza::ui::draw_text("Drag: pan / Wheel: zoom / Arrows or left stick: pan", 26, GetScreenHeight() - 66, 16, RAYWHITE);
                 forza::ui::draw_text("Home: region / C: player / +/-: zoom / F2 or Esc: close", 26, GetScreenHeight() - 40, 16, RAYWHITE);
             } else {
@@ -963,16 +1013,23 @@ int main(int argc, char** argv) {
                     draw_plane(*other, scene->player.flying() && &scene->player.plane() == other.get());
                 if (scene->player.on_foot()) {
                     draw_character(scene->player.character(), environment);
-                    draw_weapon(scene->player, shot_flash);
+                    draw_weapon(scene->player.character(), scene->player.weapons().selected(), shot_flash);
                     if (shot_flash > 0) DrawLine3D(render_vector(last_shot.from), render_vector(last_shot.to), {255, 223, 151, 175});
                 }
                 for (const auto& pedestrian : scene->pedestrians.people()) if (pedestrian.enabled
                     && (pedestrian.character->position() - scene->player.position()).LengthSq() < 160 * 160)
                     draw_character(*pedestrian.character, environment, pedestrian.appearance + 1);
+                for (const auto& unit : scene->police.units()) if (unit.active && (unit.car->position() - scene->player.position()).LengthSq() < graphics.view_distance * graphics.view_distance) {
+                    draw_car(*unit.car, car_renderer, view, WHITE, {}, scene->police.wanted().stars() > 0 && !unit.claimed);
+                    for (const auto& officer : unit.officers) if (!officer.seated) {
+                        draw_character(*officer.character, environment, 0, true);
+                        if (scene->police.wanted().stars()) draw_weapon(*officer.character, forza::WeaponType::Pistol, officer.flash);
+                    }
+                }
                 EndShaderMode();
                 EndMode3D();
                 draw_resume_prompt(captured || tuning_open || graphics_panel.visible() || !screenshot.empty());
-                if (!tuning_open) scenery.minimap(scene->car, scene->plane, scene->player.position(), scene->player.forward(), view, &scene->traffic, &scene->aircraft);
+                if (!tuning_open) scenery.minimap(scene->car, scene->plane, scene->player.position(), scene->player.forward(), view, &scene->traffic, &scene->aircraft, &scene->police);
                 const auto region = scene->player.position();
                 if (!tuning_open) {
                     const auto velocity = scene->player.flying() ? scene->player.plane().velocity() :
@@ -984,12 +1041,11 @@ int main(int argc, char** argv) {
                         forza::ui::draw_text(text, info_x, y, 20, RAYWHITE);
                     };
                     draw_info(TextFormat("%.0f km/h", velocity.Length() * 3.6f), info_y);
+                    const float health = scene->player.character().health();
+                    DrawRectangle(26, forza::menu_height + 18, 184, 16, {26, 20, 25, 235});
+                    DrawRectangle(28, forza::menu_height + 20, int(180 * health / 100), 12, {177, 112, 137, 255});
                     if (scene->player.on_foot()) {
                         const auto& weapons = scene->player.weapons();
-                        const float health = scene->player.character().health();
-                        draw_info(TextFormat("HP %.0f", health), info_y - 96);
-                        DrawRectangle(info_x, info_y - 67, 146, 7, {19, 28, 45, 235});
-                        DrawRectangle(info_x, info_y - 67, int(146 * health / 100), 7, health > 30 ? Color{74, 194, 110, 255} : RED);
                         draw_info(weapons.selected() == forza::WeaponType::Unarmed ? "Unarmed" :
                             TextFormat("%s  %d / %d%s", weapons.data().name, weapons.ammo(), weapons.reserve(), weapons.reloading() ? "  Reloading" : ""), info_y - 38);
                         if (scene->player.can_shoot() && weapons.selected() != forza::WeaponType::Unarmed && !weapon_wheel && active) {
@@ -1004,9 +1060,14 @@ int main(int argc, char** argv) {
                             forza::ui::draw_text(text, (GetScreenWidth() - forza::ui::measure_text(text, 44)) / 2, GetScreenHeight() / 2 - 22, 44, RED);
                         }
                     }
+                    if (scene->police.arrested()) {
+                        DrawRectangle(0, forza::menu_height, GetScreenWidth(), GetScreenHeight() - forza::menu_height, {8, 14, 28, 135});
+                        const char* text = "BUSTED";
+                        forza::ui::draw_text(text, (GetScreenWidth() - forza::ui::measure_text(text, 44)) / 2, GetScreenHeight() / 2 - 22, 44, SKYBLUE);
+                    }
                     if (scene->player.flying()) {
                         draw_info(TextFormat("ALT %.0f m", std::max(0.f, float(region.GetY()) - forza::Environment::water_level)), info_y - 28);
-                        if (scene->player.plane().damaged()) forza::ui::draw_text("BROKEN", 26, 48, 24, RED);
+                        if (scene->player.plane().damaged()) forza::ui::draw_text("BROKEN", 26, forza::menu_height + 42, 24, RED);
                     }
                     const char* location = forza::Environment::district(region.GetX(), region.GetZ());
                     const int width = forza::ui::measure_text(location, 20), x = GetScreenWidth() - width - 26;
@@ -1021,9 +1082,10 @@ int main(int argc, char** argv) {
             const auto clock = day_night.clock();
             forza::ui::draw_text(clock.data(), clock_x + (180 - forza::ui::measure_text(clock.data(), 24)) / 2,
                 clock_y + 8, 24, {174, 231, 246, 255});
+            if (!tuning_open) draw_wanted(scene->police.wanted(), clock_x, clock_y + 48);
             if (graphics_panel.visible()) graphics_panel.draw(float(GetFPS()), graphics_status.empty() && lighting.warning() ? lighting.warning() : graphics_status);
             if (weapon_wheel) draw_weapon_wheel(wheel_choice, wheel_cursor);
-            menu.draw(controls, mapping_path, captured);
+            menu.draw(controls, mapping_path);
             EndDrawing();
             if (!screenshot.empty() && ++rendered_frames >= 90) {
                 const Image capture = LoadImageFromScreen();

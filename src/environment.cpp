@@ -293,8 +293,11 @@ const std::vector<StreetLoop>& Environment::street_loops() {
             float center_x = 0;
             for (const auto& p : loop.corners) center_x += p.GetX();
             center_x /= loop.corners.size();
-            for (auto& p : loop.corners) if (p.GetX() == airports[0].center_x)
-                p.SetX(airports[0].center_x + (center_x < airports[0].center_x ? -1 : 1) * (airports[0].grounds_half_width + 20));
+            for (auto& p : loop.corners) if (p.GetX() == airports[0].center_x) {
+                const bool west = center_x < airports[0].center_x;
+                const float half = west ? std::max(airports[0].grounds_half_width, 115.f) : airports[0].grounds_half_width;
+                p.SetX(airports[0].center_x + (west ? -1 : 1) * (half + 20));
+            }
             for (auto& p : loop.corners) if (std::abs(p.GetX() + 360) < .01f && p.GetZ() <= 900)
                 p.SetX(center_x < -360 ? -382 : -338);
         }
@@ -341,11 +344,11 @@ const std::vector<Road>& Environment::roads() {
         add(-360, 520, 0, 520, 7, "SOUTHERN STREET");
         add(-700, -240, -680, -62, 7, "AIRPORT VILLAGE LANE");
         add(-770, -140, -600, -140, 7, "AIRPORT VILLAGE STREET");
-        add(-1140, -500, -1140, 120, 7, "AIRPORT NEIGHBORHOOD LANE");
-        add(-1140, -690, -1140, -500, 7, "AIRPORT NEIGHBORHOOD LANE");
-        add(-1140, 120, -1140, 750, 7, "AIRPORT NEIGHBORHOOD LANE");
+        add(-1180, -500, -1180, 120, 7, "AIRPORT NEIGHBORHOOD LANE");
+        add(-1180, -690, -1180, -500, 7, "AIRPORT NEIGHBORHOOD LANE");
+        add(-1180, 120, -1180, 750, 7, "AIRPORT NEIGHBORHOOD LANE");
         for (float z : {-400.0f, -280.0f, -40.0f, 60.0f})
-            add(-1210, z, airports[0].center_x - airports[0].grounds_half_width - 20, z, 7, "AIRPORT SERVICE STREET");
+            add(-1210, z, airports[0].center_x - std::max(airports[0].grounds_half_width, 115.f) - 20, z, 7, "AIRPORT SERVICE STREET");
         add(60, -180, 60, 180, 7, "MARKET LANE");
         add(180, 0, 180, 240, 7, "BAYFRONT LANE");
         const auto airport_access = airports[0].access_points();

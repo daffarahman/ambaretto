@@ -36,7 +36,7 @@ FetchContent_Declare(Jolt
 )
 FetchContent_MakeAvailable(Jolt)
 
-add_library(vehicle_physics src/vehicle.cpp src/environment.cpp src/player.cpp src/traffic.cpp src/pedestrians.cpp src/third_person_camera.cpp src/weapons.cpp)
+add_library(vehicle_physics src/vehicle.cpp src/environment.cpp src/player.cpp src/traffic.cpp src/pedestrians.cpp src/third_person_camera.cpp src/weapons.cpp src/police.cpp)
 target_include_directories(vehicle_physics PUBLIC include)
 target_include_directories(vehicle_physics SYSTEM PUBLIC $<TARGET_PROPERTY:Jolt,INTERFACE_INCLUDE_DIRECTORIES>)
 target_link_libraries(vehicle_physics PUBLIC Jolt)
@@ -60,6 +60,9 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(police_tests tests/police_tests.cpp)
+    target_link_libraries(police_tests PRIVATE vehicle_physics)
+    add_test(NAME wanted_and_police COMMAND police_tests)
     add_executable(weapon_tests tests/weapon_tests.cpp)
     target_link_libraries(weapon_tests PRIVATE vehicle_physics)
     add_test(NAME weapons_and_health COMMAND weapon_tests)

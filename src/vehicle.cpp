@@ -25,12 +25,14 @@
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Ragdoll/Ragdoll.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <stdexcept>
 #include <vector>
@@ -45,6 +47,32 @@ constexpr float mass = 1100;
 
 class CameraLayers final : public JPH::ObjectLayerFilter {
     bool ShouldCollide(JPH::ObjectLayer layer) const override { return layer != character_layer; }
+};
+
+class RagdollContacts final : public JPH::ContactListener {
+    static void record(const JPH::Body& body, const JPH::Body& other, float speed) {
+        if (body.GetObjectLayer() != character_layer || !body.GetUserData()
+            || body.GetUserData() == other.GetUserData() || speed <= 6) return;
+        auto& impact = *reinterpret_cast<std::atomic<float>*>(body.GetUserData());
+        float previous = impact.load(std::memory_order_relaxed);
+        while (speed > previous && !impact.compare_exchange_weak(previous, speed, std::memory_order_relaxed)) {}
+    }
+    static void contact(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold, bool added) {
+        if (manifold.mRelativeContactPointsOn1.empty()) return;
+        const auto point = manifold.GetWorldSpaceContactPointOn1(0);
+        const Vec3 relative = a.GetPointVelocity(point) - b.GetPointVelocity(point);
+        float speed = relative.Dot(manifold.mWorldSpaceNormal);
+        // A fast landing also scrapes the road even when most motion is sideways.
+        if (added && speed > 1.5f && (a.GetObjectLayer() == ground_layer || b.GetObjectLayer() == ground_layer)
+            && relative.LengthSq() > 64) speed = std::max(speed, relative.Length());
+        record(a, b, speed); record(b, a, speed);
+    }
+    void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override {
+        contact(a, b, manifold, true);
+    }
+    void OnContactPersisted(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override {
+        contact(a, b, manifold, false);
+    }
 };
 
 float clamp(float value, float low, float high) {
@@ -76,6 +104,7 @@ struct PhysicsWorld::Impl {
     std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> broad_phase_filter;
     JPH::TempAllocatorImpl allocator{64 * 1024 * 1024};
     JPH::JobSystemThreadPool jobs{JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, 2};
+    RagdollContacts contacts;
     JPH::PhysicsSystem system;
     std::vector<JPH::BodyID> bodies;
     JPH::CollisionGroup::GroupID next_character_group = 1;
@@ -92,6 +121,7 @@ struct PhysicsWorld::Impl {
             pairs.EnableCollision(character_layer, layer);
         broad_phase_filter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(broad_phase, 2, pairs, 4);
         system.Init(16384, 0, 16384, 16384, broad_phase, *broad_phase_filter, pairs);
+        system.SetContactListener(&contacts);
         system.SetGravity(Vec3(0, -9.81f, 0));
         auto settings = system.GetPhysicsSettings();
         settings.mNumVelocitySteps = 12;
@@ -497,15 +527,18 @@ struct Character::Impl {
     // Jolt's ragdoll owns its bodies and joints; these never enter the world's static-body list.
     JPH::Ref<JPH::Ragdoll> rig;
     Vec3 desired_velocity{0, 0, 0}, impact_direction{0, 0, -1};
-    Vec3 impact_velocity{0, 0, 0}, aim_direction{0, 0, 0};
+    Vec3 aim_direction{0, 0, 0};
+    std::atomic<float> impact_speed{0};
     float ragdoll_time = 0, settled_time = 0, hit_cooldown = 0;
     float sprint_amount = 0;
     WeaponType weapon = WeaponType::Unarmed;
+    const Car* hit_car = nullptr;
     bool enabled = true, swimming = false;
     ~Impl() { clear_ragdoll(); }
     void clear_ragdoll() {
         if (rig) { rig->RemoveFromPhysicsSystem(); rig = nullptr; }
         ragdoll_time = settled_time = 0;
+        impact_speed.store(0, std::memory_order_relaxed);
     }
 };
 
@@ -731,11 +764,11 @@ void Character::ragdoll(const Vec3& inherited_velocity, const Vec3& impulse) {
     settings->DisableParentChildCollisions(matrices.data());
     settings->CalculateBodyIndexToConstraintIndex();
     settings->CalculateConstraintIndexToBodyIdxPair();
-    impl_->rig = settings->CreateRagdoll(world_.impl_->next_character_group++, 0, &world_.impl_->system);
+    impl_->rig = settings->CreateRagdoll(world_.impl_->next_character_group++,
+        reinterpret_cast<JPH::uint64>(&impl_->impact_speed), &world_.impl_->system);
     if (!impl_->rig) throw std::runtime_error("Jolt could not allocate humanoid ragdoll");
     impl_->rig->AddToPhysicsSystem(JPH::EActivation::Activate);
     impl_->rig->SetLinearAndAngularVelocity(inherited_velocity, Vec3::sZero());
-    impl_->impact_velocity = inherited_velocity;
     physics.AddImpulse(impl_->rig->GetBodyID(1), impulse);
     Vec3 direction = inherited_velocity + impulse * .02f;
     direction.SetY(0);
@@ -743,6 +776,12 @@ void Character::ragdoll(const Vec3& inherited_velocity, const Vec3& impulse) {
     impl_->ragdoll_time = impl_->settled_time = 0;
 }
 
+const Car* Character::last_vehicle_hit() const { return impl_->hit_car; }
+bool Character::touching(const Car& car) const {
+    if (impl_->rig) for (const auto& body : impl_->rig->GetBodyIDs())
+        if (world_.impl_->system.WereBodiesInContact(body, car.body_id())) return true;
+    return false;
+}
 void Character::hit_by(const Car& car, float dt) {
     if (!impl_->enabled || impl_->swimming || impl_->rig || impl_->hit_cooldown > 0 || !car.simulated() || car.velocity().LengthSq() < 2.25f) return;
     const Quat inverse = car.rotation().Conjugated();
@@ -769,9 +808,11 @@ void Character::hit_by(const Car& car, float dt) {
     const float speed = relative.Length();
     if (speed < 1.5f) return;
     const Vec3 direction = relative.Normalized();
+    impl_->hit_car = &car;
     const Vec3 inherited = walking_velocity + relative * .65f + Vec3(0, std::clamp(speed * .09f, .5f, 3.5f), 0);
     ragdoll(inherited, direction * std::min(speed * 2.0f, 65.0f));
     take_damage(std::max(0.f, speed - 8) * 3);
+    impl_->hit_cooldown = .35f;
 }
 
 void Character::take_damage(float amount, BodyPart part, Vec3 impulse) {
@@ -825,6 +866,7 @@ void Character::reset(const Vec3& feet, float yaw) {
     impl_->character->SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw));
     impl_->character->SetLinearVelocity(Vec3::sZero());
     impl_->hit_cooldown = 0;
+    impl_->hit_car = nullptr;
     impl_->character->RefreshContacts({}, {}, {}, {}, world_.impl_->allocator);
 }
 
@@ -855,10 +897,11 @@ void Character::step(FootInput input, float dt) {
         auto& physics = world_.impl_->system.GetBodyInterface();
         impl_->ragdoll_time += dt;
         const bool brace = alive() && impl_->ragdoll_time < .9f;
-        const Vec3 current_velocity = velocity();
-        if (alive() && impl_->impact_velocity.GetY() < -8 && current_velocity.GetY() - impl_->impact_velocity.GetY() > 5)
-            take_damage((-impl_->impact_velocity.GetY() - 7) * 5);
-        impl_->impact_velocity = current_velocity;
+        const float impact = impl_->impact_speed.exchange(0, std::memory_order_relaxed);
+        if (alive() && impl_->hit_cooldown <= 0 && impact > 6) {
+            take_damage((impact - 6) * impact * .2f);
+            impl_->hit_cooldown = .35f;
+        }
         bool settled = true;
         for (std::size_t i = 1; i < body_part_count; ++i) {
             auto* constraint = impl_->rig->GetConstraint(static_cast<int>(i - 1));
@@ -943,7 +986,8 @@ Vec3 Car::position() const { return world_.impl_->system.GetBodyInterface().GetC
 Vec3 Car::velocity() const { return world_.impl_->system.GetBodyInterface().GetLinearVelocity(body_); }
 Quat Car::rotation() const { return world_.impl_->system.GetBodyInterface().GetRotation(body_); }
 
-Car::Car(PhysicsWorld& world) : world_(world), body_(world.create_chassis()) {
+Car::Car(PhysicsWorld& world, CarType type) : world_(world), body_(world.create_chassis()), type_(type) {
+    if (type == CarType::Police) { tuning_.acceleration = 11; tuning_.motor_grip = 1.05f; tuning_.tire_grip = 1.8f; }
     update_wheel_mounts();
     for (auto& wheel : wheels_)
         wheel.center = position() + rotate(wheel.mount - Vec3(0, tuning_.rest_length, 0));

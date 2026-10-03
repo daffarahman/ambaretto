@@ -8,6 +8,7 @@
 
 namespace forza {
 class Traffic;
+class Police;
 class EnvironmentRenderer {
 public:
     explicit EnvironmentRenderer(const Environment& environment);
@@ -19,8 +20,8 @@ public:
     void draw_shadow(Shader shader, const Vector3& focus, float distance);
     const std::vector<SceneLight>& lights() const { return local_lights_; }
     Shader object_shader() const { return land_shader_; }
-    void minimap(const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Traffic* traffic = nullptr, const std::vector<std::unique_ptr<Plane>>* aircraft = nullptr) const;
-    void world_map(const WorldMapView& view, Rectangle viewport, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Traffic* traffic = nullptr, const std::vector<std::unique_ptr<Plane>>* aircraft = nullptr) const;
+    void minimap(const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Traffic* traffic = nullptr, const std::vector<std::unique_ptr<Plane>>* aircraft = nullptr, const Police* police = nullptr) const;
+    void world_map(const WorldMapView& view, Rectangle viewport, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Traffic* traffic = nullptr, const std::vector<std::unique_ptr<Plane>>* aircraft = nullptr, const Police* police = nullptr) const;
 private:
     void load_trees(const Environment& environment);
     void load_minimap(const Environment& environment);
