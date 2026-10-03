@@ -30,7 +30,7 @@ void vehicle_combat(const forza::Environment& map) {
     const auto shots = [&] { return unit->officers[0].shots_fired + unit->officers[1].shots_fired; };
     police.crime(Crime::PoliceVehicleTheft, player.position(), unit->officers[0].character.get());
     world.take_sound_events();
-    advance(240);
+    advance(180); // Check one volley before the faster two-star response can fire again.
     const auto sounds = world.take_sound_events();
     require(std::any_of(sounds.begin(), sounds.end(), [](const SoundEvent& sound) { return sound.effect == SoundEffect::Pistol; }),
         "police gunfire did not emit pistol audio");
@@ -87,12 +87,15 @@ int main() {
         require(wanted.stars() == 6, "wanted level exceeded or did not reach six stars");
         for (int i = 1; i <= 6; ++i) {
             const auto& response = police_response(i);
-            require(response.cars == i && response.speed > 0, "stars did not determine police numbers");
-            if (i > 1) require(response.speed > police_response(i - 1).speed
-                && response.fire_interval < police_response(i - 1).fire_interval, "aggression did not increase");
+            require(response.cars >= i && response.speed > 0, "stars did not determine police numbers");
+            if (i > 1) require(response.cars > police_response(i - 1).cars && response.speed > police_response(i - 1).speed
+                && response.fire_interval < police_response(i - 1).fire_interval
+                && response.dispatch_interval < police_response(i - 1).dispatch_interval, "numbers or aggression did not increase");
             if (i > 2) require(response.pit_interval < police_response(i - 1).pit_interval, "PIT rate did not increase");
         }
         require(police_response(1).pit_interval == 0, "one-star pursuit uses dangerous PIT tactics");
+        require(police_response(6).cars >= 12 && police_response(6).fire_interval <= .4f,
+            "six stars did not get the heavier reinforcement and combat response");
         wanted.step(origin, false, 60);
         require(wanted.stars() == 6 && wanted.searching(), "hiding inside search area cleared wanted level");
         const Vec3 outside = origin + Vec3(wanted.radius() + 50, 0, 0);
@@ -150,19 +153,26 @@ int main() {
             advance(24, {1});
         }
         require(police.wanted().stars() == 6, "serious repeated crimes did not reach six stars");
-        // Keep dispatch clear of arrest, PITs and lethal high-speed city crashes.
+        const int dispatched = police_response(6).cars;
+        // Isolate dispatch from damage so the heavier combat response cannot end the pursuit early.
         for (int i = 0; i < 2400; ++i) {
+            car.repair(); player.character().revive();
+            for (const auto& unit : police.units()) if (unit.active) {
+                unit.car->repair();
+                for (const auto& officer : unit.officers) officer.character->revive();
+            }
             advance(1, {.1f});
-            if (std::count_if(police.units().begin(), police.units().end(), [](const PoliceUnit& unit) { return unit.active; }) == 6) break;
+            if (std::count_if(police.units().begin(), police.units().end(), [](const PoliceUnit& unit) { return unit.active; }) == dispatched) break;
         }
-        int count = 0;
+        int count = 0, officers = 0;
         for (const auto& unit : police.units()) if (unit.active) {
             ++count;
+            for (const auto& officer : unit.officers) officers += officer.character->alive();
             require(unit.car->simulated() && std::isfinite(unit.car->position().LengthSq()), "dispatch created an invalid/nonphysical car");
             require(!map.submerged(unit.car->position()), "police spawned or drove into water");
         }
-        require(count == 6, "six stars did not dispatch six police units");
-        std::cout << "Dispatch: six physical police units and safe spawning passed\n";
+        require(count == dispatched && officers == dispatched * 2, "six stars did not dispatch the full car and officer response");
+        std::cout << "Dispatch: " << count << " physical police cars, " << officers << " officers and safe spawning passed\n";
 
         player.reset(); advance(120, {1});
         auto& pit_unit = const_cast<PoliceUnit&>(police.units()[0]);

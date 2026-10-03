@@ -264,7 +264,7 @@ bool Player::can_shoot() const {
     return on_foot() && character_.alive() && !character_.ragdolling() && !character_.swimming() && (!police_ || !police_->arrested());
 }
 Shot Player::shoot(Vec3 origin, Vec3 direction, bool held, bool pressed, bool aiming) {
-    if (!can_shoot()) return {};
+    if (!can_shoot() || (character_.covering() && !character_.cover_aim_ready())) return {};
     const auto shot = weapons_.fire(world_, pedestrians_, origin, direction, held, pressed, aiming, police_, &character_);
     if (police_ && shot.fired) {
         police_->crime(Crime::Gunfire, position());

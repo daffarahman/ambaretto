@@ -241,6 +241,18 @@ void car_coasting_and_direction_changes() {
 void mouse_camera() {
     forza::ThirdPersonCamera camera;
     require(camera.move_direction(1, 1).Length() <= 1.001f, "diagonal movement is faster");
+    for (float yaw : {0.f, 1.2f, -2.4f}) {
+        camera.reset(yaw);
+        const auto right = camera.forward().Cross(forza::Vec3::sAxisY());
+        const auto head = forza::Vec3(20, 1.7f, -15);
+        require(std::abs((camera.shoulder_focus(head, .4f, -right) - head).Dot(right) + .4f) < .001f,
+            "left peek did not move the camera to the left shoulder");
+        require(std::abs((camera.shoulder_focus(head, .4f, right) - head).Dot(right) - .4f) < .001f,
+            "right peek did not move the camera to the right shoulder");
+        require(std::abs((camera.shoulder_focus(head, .4f) - head).Dot(right) - .4f) < .001f,
+            "ordinary aim changed its default shoulder");
+    }
+    camera.reset();
     camera.look(300, 0, 0, false, forza::Vec3(0, 0, -1), 0, 1.0f / 60);
     require(camera.move_direction(1, 0).GetX() > 0.6f, "mouse look did not rotate camera-relative movement");
     camera.look(0, 10000, 0, false, forza::Vec3(0, 0, -1), 0, 1.0f / 60);

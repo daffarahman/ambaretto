@@ -23,14 +23,14 @@ const std::array<const char*, action_count> action_labels{{
     "Plane throttle up", "Plane throttle down", "Rudder left", "Rudder right", "Toggle flaps",
     "Recover vehicle", "World map", "Car tuning", "Pause / resume",
     "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out", "Car horn",
-    "Weapon wheel (hold)", "Fire weapon", "Aim weapon", "Reload weapon"
+    "Weapon wheel (hold)", "Fire weapon", "Aim weapon", "Reload weapon", "Enter / leave cover"
 }};
 namespace {
 constexpr std::array<const char*, action_count> ids{{
     "forward", "backward", "left", "right", "brake", "interact", "sprint", "jump",
     "throttle_up", "throttle_down", "rudder_left", "rudder_right", "flaps", "recover",
     "map", "tuning", "pause", "look_left", "look_right", "look_up", "look_down", "zoom_in", "zoom_out", "horn",
-    "weapon_wheel", "fire", "aim", "reload"
+    "weapon_wheel", "fire", "aim", "reload", "cover"
 }};
 bool valid(Binding b) {
     if (b.kind == BindingKind::Mouse) return b.code >= 0 && b.code < 8 && b.direction == 1;
@@ -178,6 +178,7 @@ void ControllerMapping::defaults() {
     add(Action::Fire, {BindingKind::Mouse, MOUSE_BUTTON_LEFT}); axis(Action::Fire, GAMEPAD_AXIS_RIGHT_TRIGGER);
     add(Action::Aim, {BindingKind::Mouse, MOUSE_BUTTON_RIGHT}); axis(Action::Aim, GAMEPAD_AXIS_LEFT_TRIGGER);
     key(Action::Reload, KEY_R); button(Action::Reload, GAMEPAD_BUTTON_RIGHT_FACE_LEFT);
+    key(Action::Cover, KEY_Q); button(Action::Cover, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT);
 }
 bool ControllerMapping::add(Action a, Binding b) {
     if (int(a) < 0 || int(a) >= action_count || !valid(b)) return false;

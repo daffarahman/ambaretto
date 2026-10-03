@@ -23,6 +23,7 @@ enum class BodyPart {
     RightThigh, RightShin, RightFoot, Count
 };
 enum class DamageSource { Impact, Bullet };
+enum class CoverStance { None, Standing, Crouched, Crawling };
 struct BodyPartPose {
     Vec3 position{0, 0, 0};
     Quat rotation = Quat::sIdentity();
@@ -42,6 +43,12 @@ public:
     bool pull_from(const Car& car, float side = -1);
     bool ragdolling() const;
     bool swimming() const;
+    bool toggle_cover();
+    bool covering() const;
+    CoverStance cover_stance() const;
+    bool cover_peeking() const;
+    bool cover_aim_ready() const;
+    Vec3 cover_aim_side() const;
     void start_swimming(const Vec3& surface, float yaw = 0);
     // Velocity is inherited by every body; impulse is applied to the torso in N s.
     void ragdoll(const Vec3& inherited_velocity, const Vec3& impulse = Vec3::sZero());
@@ -63,6 +70,10 @@ public:
     float gait() const { return gait_; }
     Vec3 forward() const { return Quat::sRotation(Vec3::sAxisY(), yaw_) * Vec3(0, 0, -1); }
 private:
+    bool cover_wall(Vec3 feet, Vec3 direction, float range, GroundHit& wall, float& height) const;
+    bool set_posture(float height, bool force = false);
+    void leave_cover();
+    void begin_cover_transition(float duration);
     struct Impl;
     PhysicsWorld& world_;
     std::unique_ptr<Impl> impl_;

@@ -10,7 +10,7 @@ enum class Action {
     Forward, Backward, Left, Right, Brake, Interact, Sprint, Jump,
     ThrottleUp, ThrottleDown, RudderLeft, RudderRight, Flaps, Recover,
     Map, Tuning, Pause, LookLeft, LookRight, LookUp, LookDown, ZoomIn, ZoomOut, Horn,
-    WeaponWheel, Fire, Aim, Reload, Count
+    WeaponWheel, Fire, Aim, Reload, Cover, Count
 };
 constexpr int action_count = int(Action::Count);
 extern const std::array<const char*, action_count> action_labels;

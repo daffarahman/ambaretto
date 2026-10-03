@@ -55,7 +55,7 @@ public:
     bool is_officer(const Character* character) const;
     void raycast(Vec3 origin, Vec3 direction, ShotHit& hit, const Character* ignore = nullptr) const;
     void set_view(Vec3 position, Vec3 direction) { camera_ = position; camera_forward_ = direction.NormalizedOr(Vec3(0, 0, -1)); view_set_ = true; }
-    const std::array<PoliceUnit, 12>& units() const { return units_; }
+    const std::array<PoliceUnit, 18>& units() const { return units_; }
     const WantedLevel& wanted() const { return wanted_; }
     bool arrested() const { return arrest_time_ >= 1.5f; }
     std::vector<Vec3> road_path(Vec3 from, Vec3 to) const;
@@ -74,8 +74,8 @@ private:
     Traffic* traffic_;
     Pedestrians* pedestrians_;
     std::vector<RoadNode> roads_;
-    // ponytail: six response units plus six reserve slots; recycle distant casualties outside the camera.
-    std::array<PoliceUnit, 12> units_;
+    // ponytail: twelve response units plus six reserve slots; recycle distant casualties outside the camera.
+    std::array<PoliceUnit, 18> units_;
     WantedLevel wanted_;
     std::array<float, int(Crime::Count)> crime_cooldowns_{};
     std::array<float, 64> civilian_health_{};

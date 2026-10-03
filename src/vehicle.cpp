@@ -33,6 +33,7 @@
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <cmath>
 #include <random>
 #include <stdexcept>
@@ -343,6 +344,9 @@ bool PhysicsWorld::cast_ray(const Vec3& origin, const Vec3& direction, float dis
     hit.car = nullptr;
     hit.plane = nullptr;
     hit.body = result.mBodyID;
+    JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), result.mBodyID);
+    if (!lock.Succeeded()) return false;
+    hit.normal = lock.GetBody().GetWorldSpaceSurfaceNormal(result.mSubShapeID2, hit.point);
     for (auto* car : impl_->cars) if (car->body_id() == result.mBodyID) { hit.car = car; break; }
     for (auto* plane : impl_->planes) if (plane->body_id() == result.mBodyID) { hit.plane = plane; break; }
     return true;
@@ -609,15 +613,34 @@ Quat weapon_rotation(float yaw, WeaponType type, Vec3 aim, float sprint) {
         : (type == WeaponType::AK47 ? -.35f : -.25f) - sprint * .15f;
     return Quat::sRotation(Vec3::sAxisY(), yaw) * Quat::sRotation(Vec3::sAxisX(), pitch);
 }
+float cover_ease(float progress) { return progress * progress * (3 - 2 * progress); }
+float part_extent(const BodyPartPose& part, Vec3 axis) {
+    return (std::abs((part.rotation * Vec3::sAxisX()).Dot(axis)) * part.size.GetX()
+        + std::abs((part.rotation * Vec3::sAxisY()).Dot(axis)) * part.size.GetY()
+        + std::abs((part.rotation * Vec3::sAxisZ()).Dot(axis)) * part.size.GetZ()) / 2;
+}
 }
 
 struct Character::Impl {
     JPH::Ref<JPH::CharacterVirtual> character;
+    JPH::RefConst<JPH::Shape> standing_shape;
     const Environment* environment = nullptr;
     // Jolt's ragdoll owns its bodies and joints; these never enter the world's static-body list.
     JPH::Ref<JPH::Ragdoll> rig;
     Vec3 desired_velocity{0, 0, 0}, impact_direction{0, 0, -1};
     Vec3 aim_direction{0, 0, 0};
+    Vec3 cover_normal{0, 0, 0}, peek_offset{0, 0, 0};
+    Vec3 cover_point{0, 0, 0};
+    float cover_top = 0;
+    int cover_side = 0;
+    JPH::BodyID cover_body;
+    CoverStance cover_stance = CoverStance::None;
+    float posture_height = 1.8f;
+    bool cover_peeking = false;
+    std::array<BodyPartPose, body_part_count> cover_from_pose{};
+    Vec3 cover_from_position{0, 0, 0};
+    Quat cover_from_weapon = Quat::sIdentity();
+    float cover_transition = 1, cover_duration = .32f;
     std::atomic<float> impact_speed{0};
     float ragdoll_time = 0, settled_time = 0, hit_cooldown = 0;
     float sprint_amount = 0;
@@ -639,6 +662,7 @@ Character::Character(PhysicsWorld& world, const Environment* environment, bool p
     JPH::CharacterVirtualSettings settings;
     JPH::RefConst<JPH::Shape> capsule = new JPH::CapsuleShape(0.58f, 0.32f);
     settings.mShape = new JPH::RotatedTranslatedShape(Vec3(0, 0.9f, 0), Quat::sIdentity(), capsule);
+    impl_->standing_shape = settings.mShape;
     settings.mSupportingVolume = JPH::Plane(Vec3::sAxisY(), -0.32f);
     settings.mMaxSlopeAngle = 0.8726646f;
     settings.mEnhancedInternalEdgeRemoval = true;
@@ -672,6 +696,105 @@ bool Character::pull_from(const Car& car, float side) {
 }
 bool Character::ragdolling() const { return impl_->rig != nullptr; }
 bool Character::swimming() const { return impl_->swimming; }
+bool Character::covering() const { return !impl_->cover_body.IsInvalid(); }
+CoverStance Character::cover_stance() const { return impl_->cover_stance; }
+bool Character::cover_peeking() const { return impl_->cover_peeking; }
+bool Character::cover_aim_ready() const { return cover_peeking() && impl_->cover_transition >= .9f; }
+Vec3 Character::cover_aim_side() const {
+    if (!covering()) return Vec3::sZero();
+    return impl_->peek_offset.LengthSq() > .01f ? impl_->peek_offset.Normalized()
+        : impl_->cover_normal.Cross(Vec3::sAxisY()) * impl_->cover_side;
+}
+
+void Character::begin_cover_transition(float duration) {
+    const auto pose = body_parts();
+    const Quat weapon = held_weapon().rotation;
+    impl_->cover_from_pose = pose;
+    impl_->cover_from_weapon = weapon;
+    impl_->cover_from_position = position();
+    impl_->cover_duration = duration;
+    impl_->cover_transition = 0;
+}
+
+bool Character::set_posture(float height, bool force) {
+    if (std::abs(impl_->posture_height - height) < .01f) return true;
+    JPH::RefConst<JPH::Shape> shape = impl_->standing_shape;
+    if (height < 1.8f) {
+        const float radius = height < .65f ? .22f : .32f;
+        JPH::RefConst<JPH::Shape> capsule = new JPH::CapsuleShape(height < .65f ? .68f : height / 2 - radius, radius);
+        shape = new JPH::RotatedTranslatedShape(Vec3(0, height / 2, 0),
+            height < .65f ? Quat::sRotation(Vec3::sAxisX(), 1.57079633f) : Quat::sIdentity(), capsule);
+    }
+    if (!impl_->character->SetShape(shape, force ? FLT_MAX : .015f, {}, {}, {}, {}, world_.impl_->allocator)) return false;
+    impl_->posture_height = height;
+    return true;
+}
+
+void Character::leave_cover() {
+    if (covering()) begin_cover_transition(impl_->cover_stance == CoverStance::Crawling ? .5f : .32f);
+    impl_->cover_body = {};
+    impl_->cover_stance = CoverStance::None;
+    impl_->cover_peeking = false;
+    impl_->cover_side = 0;
+    impl_->peek_offset = Vec3::sZero();
+    set_posture(1.8f);
+}
+
+bool Character::cover_wall(Vec3 feet, Vec3 direction, float range, GroundHit& wall, float& height) const {
+    if (!world_.cast_ray(feet + Vec3(0, .32f, 0), direction, range, wall)
+        || wall.car || wall.plane || std::abs(wall.normal.GetY()) > .2f) return false;
+    float top;
+    {
+        JPH::BodyLockRead lock(world_.impl_->system.GetBodyLockInterface(), wall.body);
+        if (!lock.Succeeded() || !lock.GetBody().IsStatic()) return false;
+        top = lock.GetBody().GetWorldSpaceBounds().mMax.GetY();
+    }
+    // Sample the local top, including sloped bridge barriers, rather than the whole body's maximum.
+    Vec3 above = wall.point - wall.normal * .1f;
+    above.SetY(top + .1f);
+    GroundHit roof;
+    if (world_.cast_ray(above, -Vec3::sAxisY(), top - feet.GetY() + .2f, roof) && roof.body == wall.body)
+        top = roof.point.GetY();
+    height = top - feet.GetY();
+    return height >= .48f;
+}
+
+bool Character::toggle_cover() {
+    if (covering()) { leave_cover(); return true; }
+    if (!enabled() || !alive() || ragdolling() || swimming() || !grounded()) return false;
+    GroundHit closest;
+    float best = 1.3f, wall_height = 0;
+    for (int i = 0; i < 16; ++i) {
+        const float angle = i * 6.2831853f / 16;
+        GroundHit wall;
+        float height;
+        if (!cover_wall(position(), Vec3(std::sin(angle), 0, std::cos(angle)), best, wall, height)) continue;
+        const Vec3 side = wall.normal.Cross(Vec3::sAxisY());
+        GroundHit left, right;
+        float unused;
+        // A stable, broad face excludes tree trunks and narrow posts.
+        if (!cover_wall(position() + side * .4f, -wall.normal, 1.5f, left, unused)
+            || !cover_wall(position() - side * .4f, -wall.normal, 1.5f, right, unused)
+            || left.body != wall.body || right.body != wall.body
+            || left.normal.Dot(wall.normal) < .98f || right.normal.Dot(wall.normal) < .98f) continue;
+        closest = wall; best = wall.distance; wall_height = height;
+    }
+    if (closest.body.IsInvalid()) return false;
+    impl_->cover_normal = Vec3(closest.normal.GetX(), 0, closest.normal.GetZ()).Normalized();
+    impl_->cover_point = closest.point;
+    impl_->cover_top = position().GetY() + wall_height;
+    impl_->cover_stance = wall_height >= 1.9f ? CoverStance::Standing : wall_height >= 1.25f ? CoverStance::Crouched : CoverStance::Crawling;
+    impl_->cover_side = impl_->cover_stance == CoverStance::Crawling ? 1 : 0;
+    const Vec3 facing = impl_->cover_stance == CoverStance::Crawling ? impl_->cover_normal.Cross(Vec3::sAxisY()) : impl_->cover_normal;
+    yaw_ = std::atan2(-facing.GetX(), -facing.GetZ());
+    impl_->character->SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw_));
+    if (!set_posture(impl_->cover_stance == CoverStance::Standing ? 1.8f : impl_->cover_stance == CoverStance::Crouched ? 1.15f : .44f)) {
+        leave_cover(); return false;
+    }
+    impl_->cover_body = closest.body;
+    impl_->desired_velocity = Vec3::sZero();
+    return true;
+}
 void Character::start_swimming(const Vec3& surface, float yaw) {
     reset(Vec3(surface.GetX(), Environment::water_level - 1.25f, surface.GetZ()), yaw);
     impl_->swimming = true;
@@ -701,6 +824,9 @@ void Character::set_enabled(bool enabled) {
     }
     impl_->enabled = enabled;
     if (!enabled) {
+        leave_cover();
+        set_posture(1.8f, true);
+        impl_->cover_transition = 1;
         impl_->swimming = false;
         impl_->desired_velocity = Vec3::sZero();
         impl_->character->SetLinearVelocity(Vec3::sZero());
@@ -718,9 +844,14 @@ std::array<BodyPartPose, body_part_count> Character::body_parts() const {
         return pose;
     }
     const Vec3 speed = velocity();
-    const float moving = std::clamp(std::hypot(speed.GetX(), speed.GetZ()) / (swimming() ? 2.0f : 6.5f), 0.0f, 1.0f);
+    const float pose_height = covering() && !cover_peeking() ? (impl_->cover_stance == CoverStance::Crawling ? .44f
+        : impl_->cover_stance == CoverStance::Crouched ? 1.15f : 1.8f) : impl_->posture_height;
+    const bool crouched = pose_height < 1.5f && pose_height >= .65f;
+    const bool crawling = pose_height < .65f;
+    const Vec3 aim_direction = covering() && !cover_peeking() ? Vec3::sZero() : impl_->aim_direction;
+    const float moving = std::clamp(std::hypot(speed.GetX(), speed.GetZ()) / (covering() ? 1.2f : swimming() ? 2.0f : 6.5f), 0.0f, 1.0f);
     const float running = swimming() ? 0 : impl_->sprint_amount;
-    const float swing = std::sin(gait_) * (.65f + running * .45f) * moving;
+    const float swing = std::sin(gait_) * (covering() ? .22f : .65f + running * .45f) * moving;
     std::array<float, body_part_count> pitch{};
     pitch[1] = -.20f * running; pitch[2] = .12f * running;
     pitch[3] = -swing * (.65f + running * .15f); pitch[6] = swing * (.65f + running * .15f);
@@ -732,7 +863,7 @@ std::array<BodyPartPose, body_part_count> Character::body_parts() const {
     std::array<float, body_part_count> roll{};
     std::array<float, body_part_count> turn{};
     turn[1] = std::sin(gait_) * running * .06f;
-    if (!swimming() && weapon_data(impl_->weapon).two_handed && impl_->aim_direction.LengthSq() > .01f) {
+    if (!swimming() && weapon_data(impl_->weapon).two_handed && aim_direction.LengthSq() > .01f) {
         turn[1] = -.4f; turn[2] = .4f;
     }
     if (swimming()) {
@@ -750,22 +881,35 @@ std::array<BodyPartPose, body_part_count> Character::body_parts() const {
         pitch[11] = pitch[14] = -.2f;
         pitch[2] = .8f * moving;
     }
-    const Vec3 feet = impl_->character->GetPosition() + Vec3(0, swimming() ? .06f * moving + .025f * std::sin(gait_ * 2)
+    if (crouched) {
+        pitch[1] = -.65f; pitch[2] = .65f;
+        pitch[9] = 1.45f + swing * .2f; pitch[12] = 1.45f - swing * .2f;
+        pitch[10] = pitch[13] = -2.45f;
+        pitch[11] = -pitch[9] - pitch[10]; pitch[14] = -pitch[12] - pitch[13];
+    }
+    if (crawling) {
+        pitch[1] = 0; pitch[2] = .25f;
+        pitch[3] = 2.9f + swing; pitch[6] = 2.9f - swing;
+        pitch[4] = pitch[7] = -.4f;
+        pitch[9] = swing * .3f; pitch[12] = -swing * .3f;
+        pitch[10] = pitch[13] = -.1f; pitch[11] = pitch[14] = .1f;
+    }
+    const Vec3 feet = impl_->character->GetPosition() + impl_->peek_offset + Vec3(0, swimming() ? .06f * moving + .025f * std::sin(gait_ * 2)
         : running * .055f * std::abs(std::sin(gait_ * 2)), 0);
-    const Quat root = Quat::sRotation(Vec3::sAxisY(), yaw_) * Quat::sRotation(Vec3::sAxisX(), swimming() ? -1.05f * moving : 0);
+    const Quat root = Quat::sRotation(Vec3::sAxisY(), yaw_) * Quat::sRotation(Vec3::sAxisX(), crawling ? -1.57079633f : swimming() ? -1.05f * moving : 0);
     for (std::size_t i = 0; i < pose.size(); ++i) {
         const auto& part = parts[i];
         const Quat rotation = part.parent < 0 ? root
             : pose[part.parent].rotation * Quat::sRotation(Vec3::sAxisY(), turn[i])
                 * Quat::sRotation(Vec3::sAxisZ(), roll[i]) * Quat::sRotation(Vec3::sAxisX(), pitch[i]);
-        const Vec3 pivot = part.parent < 0 ? feet + Quat::sRotation(Vec3::sAxisY(), yaw_) * part.pivot
+        const Vec3 pivot = part.parent < 0 ? feet + Vec3(0, crawling ? .22f : crouched ? .4f : part.pivot.GetY(), 0)
             : pose[part.parent].position + pose[part.parent].rotation * (part.pivot - parts[part.parent].center);
         pose[i] = {pivot + rotation * (part.center - part.pivot), rotation, part.size};
     }
     const auto& gun = weapon_data(impl_->weapon);
-    const bool aiming = impl_->aim_direction.LengthSq() > .01f;
+    const bool aiming = aim_direction.LengthSq() > .01f;
     if (impl_->weapon != WeaponType::Unarmed && !swimming() && (gun.two_handed || aiming)) {
-        const Quat rotation = weapon_rotation(yaw_, impl_->weapon, impl_->aim_direction, running);
+        const Quat rotation = weapon_rotation(yaw_, impl_->weapon, aim_direction, running);
         Vec3 grip;
         if (aiming) {
             const Vec3 offset = impl_->weapon == WeaponType::Pistol ? Vec3(.22f, -.04f, -.40f)
@@ -773,6 +917,8 @@ std::array<BodyPartPose, body_part_count> Character::body_parts() const {
             grip = feet + Quat::sRotation(Vec3::sAxisY(), yaw_) * Vec3(0, 1.4f, 0) + rotation * offset;
         } else grip = feet + Quat::sRotation(Vec3::sAxisY(), yaw_) * (impl_->weapon == WeaponType::SMG
             ? Vec3(.12f, 1.20f, -.23f) : Vec3(.08f, 1.22f, -.22f));
+        if (!aiming && (crouched || crawling)) grip = pose[1].position + Quat::sRotation(Vec3::sAxisY(), yaw_)
+            * (crawling ? Vec3(.16f, .015f, -.55f) : Vec3(.18f, -.06f, -.15f));
         // Solve each arm to its grip, keeping the existing upper-arm and forearm lengths.
         const auto arm = [&](int upper, Vec3 hand, float side) {
             const Vec3 shoulder = pose[1].position + pose[1].rotation * (parts[upper].pivot - parts[1].center);
@@ -791,15 +937,58 @@ std::array<BodyPartPose, body_part_count> Character::body_parts() const {
         arm(6, grip, 1);
         arm(3, pose[8].position + rotation * gun.support_grip, -1);
     }
+    if (impl_->cover_transition < 1) {
+        const float blend = cover_ease(impl_->cover_transition);
+        const auto target = pose;
+        const auto& from = impl_->cover_from_pose;
+        for (std::size_t i = 0; i < pose.size(); ++i) {
+            const int parent = parts[i].parent;
+            if (parent < 0) {
+                const Vec3 source = position() + from[i].position - impl_->cover_from_position;
+                pose[i].position = source + (target[i].position - source) * blend;
+                pose[i].rotation = from[i].rotation.SLERP(target[i].rotation, blend);
+                continue;
+            }
+            // Blend joints in their parent's frame so limbs keep their lengths as the body rises or turns.
+            const Vec3 joint = parts[i].pivot - parts[parent].center;
+            const Quat source_rotation = from[parent].rotation.Conjugated() * from[i].rotation;
+            const Quat target_rotation = target[parent].rotation.Conjugated() * target[i].rotation;
+            pose[i].rotation = pose[parent].rotation * source_rotation.SLERP(target_rotation, blend);
+            const Vec3 source_offset = from[i].rotation.Conjugated()
+                * (from[i].position - from[parent].position - from[parent].rotation * joint);
+            const Vec3 target_offset = target[i].rotation.Conjugated()
+                * (target[i].position - target[parent].position - target[parent].rotation * joint);
+            pose[i].position = pose[parent].position + pose[parent].rotation * joint
+                + pose[i].rotation * (source_offset + (target_offset - source_offset) * blend);
+        }
+        float sole = position().GetY();
+        for (int foot : {int(BodyPart::LeftFoot), int(BodyPart::RightFoot)}) {
+            const auto& part = pose[foot];
+            sole = std::min(sole, part.position.GetY() - part_extent(part, Vec3::sAxisY()));
+        }
+        for (auto& part : pose) part.position += Vec3(0, position().GetY() - sole, 0);
+        if (covering() && crawling && std::abs((from[0].rotation * Vec3::sAxisY()).GetY()) < .1f) {
+            float clearance = 0;
+            for (const auto& part : pose) {
+                if (part.position.GetY() - part_extent(part, Vec3::sAxisY()) >= impl_->cover_top) continue;
+                clearance = std::max(clearance, .015f + part_extent(part, impl_->cover_normal)
+                    - (part.position - impl_->cover_point).Dot(impl_->cover_normal));
+            }
+            // Give a crawling turn enough room for the head and feet to sweep past the wall.
+            for (auto& part : pose) part.position += impl_->cover_normal * clearance;
+        }
+    }
     return pose;
 }
 
 BodyPartPose Character::held_weapon() const {
     const auto hand = body_parts()[int(BodyPart::RightHand)];
     const auto& gun = weapon_data(impl_->weapon);
-    const Quat rotation = gun.two_handed || impl_->aim_direction.LengthSq() > .01f
-        ? weapon_rotation(yaw_, impl_->weapon, impl_->aim_direction, impl_->sprint_amount)
+    const Vec3 aim = covering() && !cover_peeking() ? Vec3::sZero() : impl_->aim_direction;
+    Quat rotation = gun.two_handed || aim.LengthSq() > .01f
+        ? weapon_rotation(yaw_, impl_->weapon, aim, impl_->sprint_amount)
         : hand.rotation * Quat::sRotation(Vec3::sAxisX(), -1.2f);
+    if (impl_->cover_transition < 1) rotation = impl_->cover_from_weapon.SLERP(rotation, cover_ease(impl_->cover_transition));
     return {hand.position, rotation, {.1f, .11f, gun.length}};
 }
 
@@ -812,6 +1001,7 @@ void Character::ragdoll(const Vec3& inherited_velocity, const Vec3& impulse) {
         return;
     }
     const auto pose = body_parts();
+    leave_cover();
     const auto& parts = human_parts();
     JPH::Ref<JPH::RagdollSettings> settings = new JPH::RagdollSettings;
     settings->mSkeleton = new JPH::Skeleton;
@@ -984,6 +1174,9 @@ void Character::reset(const Vec3& feet, float yaw) {
     impl_->sprint_amount = 0;
     impl_->weapon = WeaponType::Unarmed;
     impl_->character->SetPosition(feet);
+    leave_cover();
+    impl_->cover_transition = 1;
+    set_posture(1.8f, true);
     impl_->character->SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw));
     impl_->character->SetLinearVelocity(Vec3::sZero());
     impl_->hit_cooldown = 0;
@@ -992,7 +1185,7 @@ void Character::reset(const Vec3& feet, float yaw) {
 }
 
 bool Character::can_stand_at(const Vec3& feet) const {
-    const auto* shape = impl_->character->GetShape();
+    const auto* shape = impl_->standing_shape.GetPtr();
     JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> hits;
     JPH::IgnoreMultipleBodiesFilter own_parts;
     if (impl_->rig) for (const auto& body : impl_->rig->GetBodyIDs()) own_parts.IgnoreBody(body);
@@ -1004,6 +1197,7 @@ bool Character::can_stand_at(const Vec3& feet) const {
 
 void Character::step(FootInput input, float dt) {
     if (!impl_->enabled) return;
+    impl_->cover_transition = std::min(1.f, impl_->cover_transition + dt / impl_->cover_duration);
     impl_->hit_cooldown = std::max(0.0f, impl_->hit_cooldown - dt);
     if (impl_->environment && alive()) {
         const Vec3 feet = position();
@@ -1062,13 +1256,85 @@ void Character::step(FootInput input, float dt) {
         return;
     }
     auto& character = *impl_->character;
-    impl_->aim_direction = input.aim_direction.NormalizedOr(Vec3::sZero());
-    impl_->weapon = input.weapon;
+    const Vec3 aim_direction = input.aim_direction.NormalizedOr(Vec3::sZero());
     input.direction.SetY(0);
     if (input.direction.LengthSq() > 1) input.direction = input.direction.Normalized();
-    const float run_target = input.sprint && !swimming() && input.direction.LengthSq() > .1f && grounded() ? 1.f : 0.f;
+    Vec3 cover_velocity = Vec3::sZero();
+    if (covering() && (input.sprint || input.jump || !grounded() || input.direction.Dot(impl_->cover_normal) > .75f)) leave_cover();
+    if (covering()) {
+        GroundHit wall;
+        float height;
+        if (!cover_wall(position(), -impl_->cover_normal, 1.5f, wall, height)
+            || wall.normal.Dot(impl_->cover_normal) < .95f) leave_cover();
+        else {
+            impl_->cover_body = wall.body;
+            impl_->cover_normal = Vec3(wall.normal.GetX(), 0, wall.normal.GetZ()).Normalized();
+            impl_->cover_point = wall.point;
+            impl_->cover_top = position().GetY() + height;
+            const auto stance = height >= 1.9f ? CoverStance::Standing : height >= 1.25f ? CoverStance::Crouched : CoverStance::Crawling;
+            const Vec3 side = impl_->cover_normal.Cross(Vec3::sAxisY());
+            float along = input.direction.Dot(side);
+            int travel_side = std::abs(along) > .1f ? (along < 0 ? -1 : 1) : impl_->cover_side;
+            if (!travel_side && stance == CoverStance::Crawling) travel_side = 1;
+            const bool aiming = aim_direction.LengthSq() > .01f;
+            bool peeking = aiming && (height < 1.9f || aim_direction.Dot(impl_->cover_normal) > .1f);
+            Vec3 peek_offset = Vec3::sZero();
+            if (aiming && !peeking) for (float sign : {1.f, -1.f}) {
+                GroundHit edge;
+                float unused;
+                const Vec3 lean = side * (sign * .85f);
+                if (!cover_wall(position() + lean, -impl_->cover_normal, 1.5f, edge, unused) && can_stand_at(position() + lean)) {
+                    peek_offset = lean;
+                    peeking = true;
+                    break;
+                }
+            }
+            if (peeking && !can_stand_at(position() + peek_offset)) { peeking = false; peek_offset = Vec3::sZero(); }
+            if (peeking != impl_->cover_peeking || stance != impl_->cover_stance || (peek_offset - impl_->peek_offset).LengthSq() > .001f
+                || (!peeking && travel_side != impl_->cover_side))
+                begin_cover_transition(stance == CoverStance::Crawling ? .5f : .32f);
+            impl_->cover_stance = stance;
+            impl_->cover_peeking = peeking;
+            impl_->peek_offset = peek_offset;
+            impl_->cover_side = travel_side;
+            const float tucked_height = impl_->cover_stance == CoverStance::Standing ? 1.8f
+                : impl_->cover_stance == CoverStance::Crouched ? 1.15f : .44f;
+            if (!impl_->cover_peeking && impl_->cover_stance == CoverStance::Crawling) {
+                const Vec3 facing = side * (impl_->cover_side ? impl_->cover_side : 1);
+                yaw_ = std::atan2(-facing.GetX(), -facing.GetZ());
+                character.SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw_));
+            }
+            // Keep clearance for the whole body until the lowering animation has finished.
+            if (!set_posture(impl_->cover_peeking || impl_->cover_transition < 1 ? 1.8f : tucked_height)) {
+                impl_->cover_peeking = false;
+                impl_->peek_offset = Vec3::sZero();
+                set_posture(tucked_height);
+            }
+            if (std::abs(along) > .01f) {
+                GroundHit next_wall, floor;
+                float unused;
+                const float margin = !impl_->cover_peeking && tucked_height < .65f ? .95f : .2f;
+                const Vec3 next = position() + side * std::copysign(margin, along);
+                if (!cover_wall(next, -impl_->cover_normal, 1.5f, next_wall, unused)
+                    || next_wall.normal.Dot(impl_->cover_normal) < .95f
+                    || !world_.cast_ground(next + Vec3(0, .3f, 0), -Vec3::sAxisY(), .65f, floor)) along = 0;
+            }
+            const float speed = impl_->cover_peeking ? 1.2f : tucked_height < .65f ? .55f : tucked_height < 1.5f ? .9f : 1.2f;
+            cover_velocity = side * (along * speed) - impl_->cover_normal * std::clamp((wall.distance - .44f) * 8, -1.5f, 1.5f);
+            Vec3 facing = aiming && impl_->cover_peeking ? aim_direction
+                : impl_->cover_side ? side * impl_->cover_side : impl_->cover_normal;
+            facing.SetY(0);
+            yaw_ = std::atan2(-facing.GetX(), -facing.GetZ());
+            character.SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw_));
+            input.sprint = input.jump = false;
+        }
+    }
+    impl_->aim_direction = aim_direction;
+    impl_->weapon = input.weapon;
+    if (!covering()) set_posture(1.8f);
+    const float run_target = input.sprint && !covering() && !swimming() && input.direction.LengthSq() > .1f && grounded() ? 1.f : 0.f;
     impl_->sprint_amount += (run_target - impl_->sprint_amount) * (1 - std::exp(-10 * dt));
-    const Vec3 desired = input.direction * (swimming() ? (input.sprint ? 3.4f : 1.8f) : (input.sprint ? 7.3f : 3.2f));
+    const Vec3 desired = covering() ? cover_velocity : input.direction * (swimming() ? (input.sprint ? 3.4f : 1.8f) : (input.sprint ? 7.3f : 3.2f));
     const float acceleration = swimming() ? 4.0f : character.IsSupported() ? 18.0f : 4.0f;
     impl_->desired_velocity += (desired - impl_->desired_velocity) * (1 - std::exp(-acceleration * dt));
     character.UpdateGroundVelocity();
@@ -1085,14 +1351,14 @@ void Character::step(FootInput input, float dt) {
     }
     character.SetLinearVelocity(impl_->desired_velocity + Vec3(0, vertical_speed, 0));
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
-    settings.mWalkStairsStepUp = Vec3(0, 0.35f, 0);
+    settings.mWalkStairsStepUp = Vec3(0, covering() ? .05f : 0.35f, 0);
     settings.mStickToFloorStepDown = swimming() || vertical_speed > 0.1f ? Vec3::sZero() : Vec3(0, -0.35f, 0);
     character.ExtendedUpdate(dt, swimming() ? Vec3::sZero() : Vec3(0, -18, 0), settings, {}, {}, {}, {}, world_.impl_->allocator);
     if (!swimming() && vertical_speed < -8 && grounded()) {
         ragdoll(impl_->desired_velocity + Vec3(0, vertical_speed, 0));
         return;
     }
-    if (impl_->aim_direction.LengthSq() > .01f || input.direction.LengthSq() > 0.01f) {
+    if (!covering() && (impl_->aim_direction.LengthSq() > .01f || input.direction.LengthSq() > 0.01f)) {
         const Vec3 facing = impl_->aim_direction.LengthSq() > .01f ? impl_->aim_direction : input.direction;
         const float target = std::atan2(-facing.GetX(), -facing.GetZ());
         yaw_ += std::clamp(std::remainder(target - yaw_, 6.28318530718f), -12 * dt, 12 * dt);

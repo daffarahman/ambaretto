@@ -28,9 +28,9 @@ const CrimeData& crime_data(Crime crime) {
 }
 const PoliceResponse& police_response(int stars) {
     static const std::array<PoliceResponse, 6> responses{{
-        {1, 16, 0, 2.8f, 110, 4}, {2, 22, 30, 2.2f, 130, 3.5f},
-        {3, 27, 22, 1.7f, 150, 3}, {4, 32, 14, 1.3f, 170, 2.5f},
-        {5, 37, 8, 1, 190, 2}, {6, 42, 4, .75f, 210, 1.5f}
+        {1, 17, 0, 2.8f, 110, 4}, {3, 24, 24, 1.9f, 140, 2.8f},
+        {5, 30, 16, 1.35f, 165, 2.1f}, {7, 36, 10, .95f, 190, 1.5f},
+        {9, 42, 6, .65f, 220, 1.1f}, {12, 48, 3, .4f, 250, .75f}
     }};
     return responses[std::clamp(stars - 1, 0, 5)];
 }
@@ -328,6 +328,7 @@ void Police::walk(PoliceUnit& unit, PoliceOfficer& officer, Player& player, std:
     Vec3 direction = flat(target - position).NormalizedOr(Vec3::sZero());
     const float distance = flat(target - position).Length();
     const Vec3 aim_point = player.driving() ? player.position() + player.car().rotate(Vec3(0, chassis_offset, 0))
+        : player.character().covering() ? player.character().body_parts()[int(player.character().cover_peeking() ? BodyPart::Head : BodyPart::Torso)].position
         : player.position() + Vec3(0, .95f, 0);
     const bool aiming = wanted_.stars() >= 2 && !returning && !wanted_.searching()
         && (player.on_foot() || player.driving()) && player.character().alive()
@@ -344,7 +345,7 @@ void Police::walk(PoliceUnit& unit, PoliceOfficer& officer, Player& player, std:
     if (aiming && officer.fire_time <= 0 && !arrested()) {
         const auto gun = character.held_weapon();
         const Vec3 origin = gun.position + gun.rotation * Vec3(0, .06f, 0);
-        const float miss = (7 - wanted_.stars()) * .16f;
+        const float miss = (7 - wanted_.stars()) * .12f;
         const float phase = float(index) * 2.4f + spawn_sequence_ * .71f + officer.shots_fired * .77f;
         const Vec3 aim = aim_point + Vec3(std::sin(phase) * miss, std::cos(phase) * miss * (player.driving() ? .15f : 1.f), std::cos(phase * 1.7f) * miss);
         const Vec3 ray = (aim - origin).NormalizedOr(direction);

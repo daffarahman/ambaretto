@@ -585,9 +585,12 @@ int main(int argc, char** argv) {
         auto wheel_choice = scene->player.weapons().selected();
         Vector2 wheel_cursor{};
         const auto focus = [&]() {
+            if (!tuning_open && scene->player.on_foot() && scene->player.character().covering())
+                return orbit.shoulder_focus(scene->player.character().body_parts()[int(forza::BodyPart::Head)].position,
+                    aiming ? .4f : 0, scene->player.character().cover_aim_side());
             if (scene->player.can_shoot() && scene->player.weapons().selected() != forza::WeaponType::Unarmed && !tuning_open)
-                return scene->player.position() + forza::Vec3(0, aiming ? 1.48f : 1.45f, 0)
-                + orbit.forward().Cross(forza::Vec3::sAxisY()) * (aiming ? .62f : .6f);
+                return orbit.shoulder_focus(scene->player.position() + forza::Vec3(0, aiming ? 1.48f : 1.45f, 0),
+                    aiming ? .62f : .6f);
             if (!tuning_open) return scene->player.position() + forza::Vec3(0, scene->player.flying() ? .5f : scene->player.driving() ? .7f :
                 scene->player.character().swimming() ? 1.55f : 1.25f, 0);
             const auto center = scene->player.car().position() + forza::Vec3(0, .7f, 0);
@@ -836,6 +839,12 @@ int main(int argc, char** argv) {
                     notice_time = 2.5f;
                 }
                 if (scene->player.on_foot() && controls.pressed(Action::Jump)) jump_pending = true;
+                if (scene->player.on_foot() && !scene->police.arrested() && controls.pressed(Action::Cover) && !weapon_wheel) {
+                    if (!scene->player.character().toggle_cover()) {
+                        notice = "Move closer to a wall or low barrier to take cover";
+                        notice_time = 2.5f;
+                    }
+                }
                 if (scene->player.flying() && controls.pressed(Action::Flaps)) flaps = !flaps;
                 Vector2 mouse = GetMouseDelta();
                 if (discard_mouse) { mouse = {}; discard_mouse = false; }
@@ -904,7 +913,9 @@ int main(int argc, char** argv) {
                         orbit.recoil(shot.recoil); recoil_return += before - orbit.pitch();
                     }
                 }
-                fire_pending = false;
+                fire_pending = fire_pending && active && !weapon_wheel && !suppress_fire && scene->player.can_shoot()
+                    && scene->player.character().cover_peeking() && !scene->player.character().cover_aim_ready()
+                    && controls.value(Action::Fire) > .5f;
                 jump_pending = false;
                 scene->record_skids();
                 const auto position = scene->player.position();
@@ -1029,7 +1040,7 @@ int main(int argc, char** argv) {
                     forza::ui::draw_text(labels[i], int(button.x + (button.width - forza::ui::measure_text(labels[i], 16)) / 2),
                         int(button.y + 7), 16, hover ? RAYWHITE : Color{0, 0, 0, 255});
                 }
-                scenery.world_map(world_map, map_viewport, scene->car, scene->plane, scene->player.position(), scene->player.forward(), &scene->traffic, &scene->aircraft, &scene->police);
+                scenery.world_map(world_map, map_viewport, scene->player.position(), scene->player.forward(), &scene->police);
                 forza::ui::draw_text("Drag: pan / Wheel: zoom / Arrows or left stick: pan", 26, GetScreenHeight() - 66, 16, RAYWHITE);
                 forza::ui::draw_text("Home: region / C: player / +/-: zoom / F2 or Esc: close", 26, GetScreenHeight() - 40, 16, RAYWHITE);
             } else {
@@ -1084,7 +1095,7 @@ int main(int argc, char** argv) {
                 for (const auto& plane : scene->aircraft) draw_plane_damage(*plane);
                 EndMode3D();
                 draw_resume_prompt(captured || tuning_open || graphics_panel.visible() || !screenshot.empty());
-                if (!tuning_open) scenery.minimap(scene->car, scene->plane, scene->player.position(), scene->player.forward(), view, &scene->traffic, &scene->aircraft, &scene->police);
+                if (!tuning_open) scenery.minimap(scene->player.position(), scene->player.forward(), view, &scene->police);
                 const auto region = scene->player.position();
                 if (!tuning_open) {
                     const auto velocity = scene->player.flying() ? scene->player.plane().velocity() :
@@ -1101,6 +1112,10 @@ int main(int argc, char** argv) {
                     DrawRectangle(26, forza::menu_height + 18, 184, 16, {26, 20, 25, 235});
                     DrawRectangle(28, forza::menu_height + 20, int(180 * health / 100), 12, {177, 112, 137, 255});
                     if (scene->player.on_foot()) {
+                        if (scene->player.character().covering()) draw_info(scene->player.character().cover_peeking() ? "COVER - exposed while aiming"
+                            : scene->player.character().cover_stance() == forza::CoverStance::Crawling ? "COVER - crawling | Q / B: leave"
+                            : scene->player.character().cover_stance() == forza::CoverStance::Crouched ? "COVER - crouched | Q / B: leave"
+                            : "COVER - standing | Q / B: leave", info_y - 68);
                         const auto& weapons = scene->player.weapons();
                         draw_info(weapons.selected() == forza::WeaponType::Unarmed ? "Unarmed" :
                             TextFormat("%s  %d / %d%s", weapons.data().name, weapons.ammo(), weapons.reserve(), weapons.reloading() ? "  Reloading" : ""), info_y - 38);

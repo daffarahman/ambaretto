@@ -8,6 +8,7 @@ public:
     void look(float mouse_x, float mouse_y, float wheel, bool driving, Vec3 car_forward, float speed, float dt, bool flying = false);
     Vec3 forward() const;
     Vec3 move_direction(float forward_input, float right_input) const;
+    Vec3 shoulder_focus(Vec3 center, float width, Vec3 cover_side = Vec3::sZero()) const;
     Vec3 desired_position(const Vec3& focus, bool driving, bool flying = false, float plane_scale = 1, bool aiming = false) const;
     static Vec3 above_water(Vec3 position);
     float yaw() const { return yaw_; }

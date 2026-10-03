@@ -27,6 +27,10 @@ Vec3 ThirdPersonCamera::move_direction(float forward_input, float right_input) c
     Vec3 direction = f * forward_input + f.Cross(Vec3::sAxisY()) * right_input;
     return direction.LengthSq() > 1 ? direction.Normalized() : direction;
 }
+Vec3 ThirdPersonCamera::shoulder_focus(Vec3 center, float width, Vec3 cover_side) const {
+    const Vec3 right = forward().Cross(Vec3::sAxisY());
+    return center + right * (cover_side.Dot(right) < -.05f ? -width : width);
+}
 Vec3 ThirdPersonCamera::desired_position(const Vec3& focus, bool driving, bool flying, float plane_scale, bool aiming) const {
     const float distance = aiming && !driving && !flying ? .85f : flying ? plane_distance_ * plane_scale : driving ? car_distance_ : foot_distance_;
     return above_water(focus - forward() * (distance * std::cos(pitch_)) + Vec3(0, distance * std::sin(pitch_), 0));

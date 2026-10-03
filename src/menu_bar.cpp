@@ -198,6 +198,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             "Car: W/S or left stick. Opposite direction brakes, then reverses. Space / B: handbrake.",
             "Car horn: H / right-stick click. E / Y: exit, or jump out while moving and tumble.",
             "On foot: WASD / left stick. Shift / L-stick: sprint. Space / A: jump. E / Y: enter/exit.",
+            "Cover: Q / B by a wall. Move along it slowly. Aim: peek. Sprint / jump: leave.",
             "Swim: WASD / left stick. Shift, Space / L-stick, A: faster. Surface only; no diving.",
             "Weapons: hold Tab / LB, select with mouse / right stick, release to equip.",
             "On foot: right mouse / LT aim, left mouse / RT fire, R / X reload. Dot marks aim.",

@@ -16,6 +16,14 @@ int main() {
         std::filesystem::create_directories(folder);
         ControllerMapping mapping;
         require(mapping.bindings[int(Action::Forward)].front().code == KEY_W, "keyboard defaults changed");
+        ControllerState cover;
+        cover.keys[KEY_Q] = true; mapping.update(cover);
+        require(mapping.pressed(Action::Cover), "Q did not enter cover");
+        mapping.update(cover); require(!mapping.pressed(Action::Cover), "held Q repeatedly toggled cover");
+        mapping.update({}); cover = {}; cover.pads[0].connected = true;
+        cover.pads[0].buttons[GAMEPAD_BUTTON_RIGHT_FACE_RIGHT] = true; mapping.update(cover);
+        require(mapping.pressed(Action::Cover), "gamepad B did not enter cover");
+        mapping.update({});
         ControllerState combat;
         combat.keys[KEY_TAB] = true; combat.keys[KEY_R] = true;
         combat.mouse[MOUSE_BUTTON_LEFT] = combat.mouse[MOUSE_BUTTON_RIGHT] = true;
@@ -158,6 +166,8 @@ int main() {
         require(loaded.load(path, error) && loaded.bindings[int(Action::Forward)].size() == 1 &&
             !loaded.bindings[int(Action::Interact)].empty(), "partial mapping did not retain unspecified defaults");
         require(loaded.bindings[int(Action::Horn)] == horn_defaults, "legacy file without a horn section did not retain new horn defaults");
+        require(loaded.bindings[int(Action::Cover)] == std::vector<Binding>{{BindingKind::Key, KEY_Q}, {BindingKind::Button, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT}},
+            "legacy mappings lost cover defaults");
         require(loaded.bindings[int(Action::Fire)] == std::vector<Binding>{{BindingKind::Mouse, MOUSE_BUTTON_LEFT}, {BindingKind::Axis, GAMEPAD_AXIS_RIGHT_TRIGGER}},
             "legacy mappings lost new fire defaults");
         std::ofstream(path) << "version=1\n[zoom_out]\nkey=334\n[horn]\n";

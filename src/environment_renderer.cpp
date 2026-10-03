@@ -1,6 +1,5 @@
 #include "ui_font.hpp"
 #include "environment_renderer.hpp"
-#include "traffic.hpp"
 #include "police.hpp"
 #include "airport.hpp"
 #include "minimap.hpp"
@@ -1014,7 +1013,7 @@ void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
 }
-void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Traffic* traffic, const std::vector<std::unique_ptr<Plane>>* aircraft, const Police* police) const {
+void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police) const {
     const MinimapView map(GetScreenHeight(), player_position, player_forward, camera);
     const auto bounds = map.bounds;
     DrawRectangle(int(bounds.x - 4), int(bounds.y - 4), int(bounds.width + 8), int(bounds.height + 8), {19, 28, 45, 235});
@@ -1032,28 +1031,13 @@ void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 playe
         DrawCircleV(p, radius, police->wanted().searching() ? Color{225, 174, 65, 45} : Color{211, 63, 83, 40});
         DrawCircleLines(int(p.x), int(p.y), radius, police->wanted().searching() ? GOLD : RED);
     }
-    if (police) for (const auto& unit : police->units()) if (unit.active) {
+    if (police && police->wanted().stars()) for (const auto& unit : police->units()) if (unit.active) {
         const auto p = map.project(unit.car->position());
-        if (map.contains(p)) DrawRectangle(int(p.x - 3), int(p.y - 3), 6, 6, unit.claimed ? SKYBLUE : Color{79, 142, 255, 255});
+        if (!unit.car->destroyed() && map.contains(p)) DrawRectangle(int(p.x - 3), int(p.y - 3), 6, 6, unit.claimed ? SKYBLUE : Color{79, 142, 255, 255});
         for (const auto& officer : unit.officers) if (!officer.seated && officer.character->alive()) {
             const auto dot = map.project(officer.character->position());
             if (map.contains(dot)) DrawCircleV(dot, 3.3f, {79, 142, 255, 255});
         }
-    }
-    if (traffic) for (const auto& vehicle : traffic->cars()) {
-        const auto p = map.project(vehicle.car->position());
-        if (map.contains(p)) DrawCircleV(p, 2.3f, vehicle.npc ? GREEN : SKYBLUE);
-    }
-    const auto car_dot = map.project(car.position());
-    if (map.contains(car_dot)) DrawRectangle(int(car_dot.x - 3), int(car_dot.y - 3), 6, 6, SKYBLUE);
-    const auto plane_dot = map.project(plane.position());
-    if (map.contains(plane_dot)) {
-        const auto heading = map.project(plane.position() + plane.forward());
-        DrawPoly(plane_dot, 3, 5, std::atan2(heading.y - plane_dot.y, heading.x - plane_dot.x) * RAD2DEG, YELLOW);
-    }
-    if (aircraft) for (const auto& other : *aircraft) {
-        const auto dot = map.project(other->position()), heading = map.project(other->position() + other->forward());
-        if (map.contains(dot)) DrawPoly(dot, 3, 5, std::atan2(heading.y - dot.y, heading.x - dot.x) * RAD2DEG, YELLOW);
     }
     Vec3 heading(player_forward.GetX(), 0, player_forward.GetZ());
     heading = heading.LengthSq() > 1e-8f ? heading.Normalized() : map.forward;
@@ -1066,7 +1050,7 @@ void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 playe
     EndScissorMode();
     DrawRectangleLinesEx(bounds, 2, {115, 157, 174, 255});
 }
-void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Traffic* traffic, const std::vector<std::unique_ptr<Plane>>* aircraft, const Police* police) const {
+void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police) const {
     BeginScissorMode(int(viewport.x), int(viewport.y), int(viewport.width), int(viewport.height));
     DrawRectangleRec(viewport, {43, 116, 148, 255});
     const auto corner = view.project(Vec3(-Environment::extent, 0, -Environment::extent), viewport);
@@ -1081,9 +1065,9 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
         DrawCircleV(p, radius, police->wanted().searching() ? Color{225, 174, 65, 45} : Color{211, 63, 83, 40});
         DrawCircleLines(int(p.x), int(p.y), radius, police->wanted().searching() ? GOLD : RED);
     }
-    if (police) for (const auto& unit : police->units()) if (unit.active) {
+    if (police && police->wanted().stars()) for (const auto& unit : police->units()) if (unit.active) {
         const auto p = view.project(unit.car->position(), viewport);
-        if (inside(p)) DrawRectangle(int(p.x - 3), int(p.y - 3), 6, 6, unit.claimed ? SKYBLUE : Color{79, 142, 255, 255});
+        if (!unit.car->destroyed() && inside(p)) DrawRectangle(int(p.x - 3), int(p.y - 3), 6, 6, unit.claimed ? SKYBLUE : Color{79, 142, 255, 255});
         for (const auto& officer : unit.officers) if (!officer.seated && officer.character->alive()) {
             const auto dot = view.project(officer.character->position(), viewport);
             if (inside(dot)) DrawCircleV(dot, 3.3f, {79, 142, 255, 255});
@@ -1101,19 +1085,6 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
     for (const auto& airport : airports) {
         const auto p = view.project(Vec3(airport.center_x, 0, airport.runway_z), viewport);
         if (inside(p)) DrawRectangle(int(p.x - 4), int(p.y - 4), 8, 8, YELLOW);
-    }
-    if (traffic) for (const auto& vehicle : traffic->cars()) {
-        if (vehicle.npc && view.scale < .15f) continue;
-        const auto p = view.project(vehicle.car->position(), viewport);
-        if (inside(p)) DrawCircleV(p, 2.5f, vehicle.npc ? GREEN : SKYBLUE);
-    }
-    const auto parked_car = view.project(car.position(), viewport);
-    if (inside(parked_car)) DrawRectangle(int(parked_car.x - 4), int(parked_car.y - 4), 8, 8, SKYBLUE);
-    const auto plane_dot = view.project(plane.position(), viewport);
-    if (inside(plane_dot)) DrawPoly(plane_dot, 3, 7, std::atan2(plane.forward().GetZ(), plane.forward().GetX()) * RAD2DEG, YELLOW);
-    if (aircraft) for (const auto& other : *aircraft) {
-        const auto dot = view.project(other->position(), viewport);
-        if (inside(dot)) DrawPoly(dot, 3, 7, std::atan2(other->forward().GetZ(), other->forward().GetX()) * RAD2DEG, YELLOW);
     }
     const auto player = view.project(player_position, viewport);
     if (inside(player)) {
