@@ -214,7 +214,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         for (int i = 0; i < int(std::size(lines)); ++i) text(lines[i], r.x + 20, r.y + 108 + i * spacing, 16, RAYWHITE);
         button(4, "Close");
     } else {
-        text("FORZA AMBAZON", r.x + 20, r.y + 90, 26, RAYWHITE);
+        text("AMBARETTO", r.x + 20, r.y + 90, 26, RAYWHITE);
         text("Explore Miami and the Florida Keys by car, on foot, or by plane.", r.x + 20, r.y + 145, 18, RAYWHITE);
         text("Built with C++17, raylib and Jolt Physics.", r.x + 20, r.y + 180, 18, RAYWHITE);
         button(4, "Close");

@@ -57,7 +57,7 @@ struct KeyLayout { Vec3 entry, center, exit; float rx, rz; const char* name; };
 const std::vector<KeyLayout>& keys() {
     static const std::vector<KeyLayout> layout{
         {{-360, 0, 1260}, {-360, 0, 1500}, {-360, 0, 1740}, 390, 360, "KEY LARGO"},
-        {{-540, 0, 2040}, {-780, 0, 2220}, {-840, 0, 2340}, 390, 330, "ISLAMORADA"},
+        {{-540, 0, 2040}, {-780, 0, 2220}, {-840, 0, 2340}, 390, 330, "AMBAMORADA"},
         {{-1080, 0, 2790}, {-1320, 0, 2940}, {-1440, 0, 3090}, 420, 300, "MARATHON"},
         {{-1590, 0, 3540}, {-1740, 0, 3720}, {-1890, 0, 3870}, 372, 300, "LOWER KEYS"},
         {{-1980, 0, 4170}, {-2100, 0, 4380}, {-2190, 0, 4530}, 288, 330, "KEY WEST"}

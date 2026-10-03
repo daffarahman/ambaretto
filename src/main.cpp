@@ -418,7 +418,7 @@ int main(int argc, char** argv) {
     unsigned int window_flags = FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE;
     if (!screenshot.empty()) window_flags |= FLAG_WINDOW_HIDDEN;
     SetConfigFlags(window_flags);
-    InitWindow(1280, 720, "Forza Ambazon - Miami & Florida Keys");
+    InitWindow(1280, 720, "Ambaretto - Miami & Florida Keys");
     if (!IsWindowReady()) return 1;
     SetWindowMinSize(1024, 600);
     SetExitKey(KEY_NULL);
@@ -993,8 +993,8 @@ int main(int argc, char** argv) {
                         draw_info(weapons.selected() == forza::WeaponType::Unarmed ? "Unarmed" :
                             TextFormat("%s  %d / %d%s", weapons.data().name, weapons.ammo(), weapons.reserve(), weapons.reloading() ? "  Reloading" : ""), info_y - 38);
                         if (scene->player.can_shoot() && weapons.selected() != forza::WeaponType::Unarmed && !weapon_wheel && active) {
-                            DrawCircle(GetScreenWidth() / 2, GetScreenHeight() / 2, 2, BLACK);
-                            DrawCircle(GetScreenWidth() / 2, GetScreenHeight() / 2, 1, hit_marker > 0 ? RED : RAYWHITE);
+                            DrawCircle(GetScreenWidth() / 2, GetScreenHeight() / 2, 3, BLACK);
+                            DrawCircle(GetScreenWidth() / 2, GetScreenHeight() / 2, 2, hit_marker > 0 ? RED : RAYWHITE);
                         }
                         if (hurt_flash > 0) DrawRectangle(0, forza::menu_height, GetScreenWidth(), GetScreenHeight() - forza::menu_height,
                             {160, 0, 0, static_cast<unsigned char>(hurt_flash * 160)});
