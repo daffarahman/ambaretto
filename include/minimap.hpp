@@ -14,7 +14,7 @@ struct MinimapView {
     MinimapView(int screen_height, Vec3 player_position, Vec3 player_forward, const Camera3D& camera)
         : bounds{14, float(screen_height - 194), 320, 180},
           anchor{bounds.x + bounds.width * .5f, bounds.y + bounds.height * .65f},
-          scale(bounds.width / 500), player(player_position) {
+          scale(bounds.width / 200), player(player_position) {
         const Vec3 fallback = Vec3(player_forward.GetX(), 0, player_forward.GetZ()).NormalizedOr(Vec3(0, 0, -1));
         forward = Vec3(camera.target.x - camera.position.x, 0, camera.target.z - camera.position.z).NormalizedOr(fallback);
     }

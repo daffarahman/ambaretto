@@ -48,6 +48,15 @@ void Weapons::select(WeaponType type) {
 void Weapons::reload() {
     if (!reloading() && ammo() < data().magazine && reserve() > 0) reload_time_ = data().reload_time;
 }
+bool Weapons::pickup(WeaponType type) {
+    if (type <= WeaponType::Unarmed || type >= WeaponType::Count) return false;
+    const auto& gun = weapon_data(type);
+    const int slot = int(type), loaded = std::min(gun.magazine - ammo_[slot], gun.magazine);
+    const int stored = std::min(gun.reserve - reserve_[slot], gun.magazine - loaded);
+    ammo_[slot] += loaded; reserve_[slot] += stored;
+    if (type == selected_ && loaded > 0) reload_time_ = 0;
+    return loaded + stored > 0;
+}
 void Weapons::step(float dt) {
     if (!std::isfinite(dt) || dt <= 0) return;
     cooldown_ = std::max(0.f, cooldown_ - dt);

@@ -23,9 +23,10 @@ Rectangle title_rect(int menu) {
 Rectangle dropdown_rect(int menu) { return {title_rect(menu).x, menu_height, 302, float(counts[menu] * 32 + 8)}; }
 Rectangle item_rect(int menu, int item) { auto r = dropdown_rect(menu); return {r.x + 4, r.y + 4 + item * 32, r.width - 8, 32}; }
 Rectangle panel_rect() { return {float((GetScreenWidth() - 944) / 2), 64, 944, float(GetScreenHeight() - 96)}; }
-int visible_rows() { return std::max(1, int((panel_rect().height - 230) / 28)); }
+int visible_rows() { return std::max(1, int((panel_rect().height - 264) / 28)); }
 int first_row(int selection, int total) { return std::clamp(selection - visible_rows() / 2, 0, std::max(0, total - visible_rows())); }
-Rectangle row_rect(int row, bool binding) { auto r = panel_rect(); return {r.x + (binding ? 456 : 20), r.y + 120 + row * 28, binding ? 468.0f : 416.0f, 28}; }
+Rectangle group_rect(int group) { auto r = panel_rect(); return {r.x + 20 + group * 226, r.y + 98, 216, 28}; }
+Rectangle row_rect(int row, bool binding) { auto r = panel_rect(); return {r.x + (binding ? 456 : 20), r.y + 154 + row * 28, binding ? 468.0f : 416.0f, 28}; }
 Rectangle button_rect(int index) { auto r = panel_rect(); return {r.x + 20 + index * 182, r.y + r.height - 76, 172, 30}; }
 bool hit(Rectangle r) { return CheckCollisionPointRec(GetMousePosition(), r); }
 bool repeat(int key) { return IsKeyPressed(key) || IsKeyPressedRepeat(key); }
@@ -43,7 +44,7 @@ void button(int index, const char* label) {
 }
 }
 void MenuBar::show(MenuCommand command) {
-    popup_ = command; dropdown_ = -1; capturing_ = false; selected_ = binding_ = 0; status_.clear();
+    popup_ = command; dropdown_ = -1; capturing_ = false; selected_ = binding_ = group_ = 0; status_.clear();
 }
 bool MenuBar::save_pending(const ControllerMapping& mapping, const std::filesystem::path& path) {
     if (!dirty_) return true;
@@ -72,6 +73,16 @@ MenuCommand MenuBar::update(ControllerMapping& mapping, const std::filesystem::p
             if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) || (click && hit(button_rect(4)))) popup_ = MenuCommand::None;
             return MenuCommand::None;
         }
+        if (!capturing_) {
+            int next_group = group_;
+            if (IsKeyPressed(KEY_TAB)) next_group = (group_ + (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT) ? 3 : 1)) % int(action_groups.size());
+            if (click) for (int i = 0; i < int(action_groups.size()); ++i) if (hit(group_rect(i))) next_group = i;
+            if (next_group != group_) {
+                group_ = next_group; selected_ = int(action_groups[group_].first); binding_ = 0; status_.clear();
+                return MenuCommand::None;
+            }
+        }
+        const int group_first = int(action_groups[group_].first), group_end = int(action_groups[group_].end);
         auto& list = mapping.bindings[selected_];
         if (capturing_) {
             if (IsKeyPressed(KEY_ESCAPE)) { capturing_ = false; status_ = "Binding cancelled"; return MenuCommand::None; }
@@ -93,14 +104,14 @@ MenuCommand MenuBar::update(ControllerMapping& mapping, const std::filesystem::p
         const int direction = int(repeat(KEY_DOWN)) - int(repeat(KEY_UP));
         const int wheel = int(GetMouseWheelMove());
         if (direction || (wheel && GetMousePosition().x < panel_rect().x + 456)) {
-            selected_ = std::clamp(selected_ + direction - wheel, 0, action_count - 1); binding_ = 0;
+            selected_ = std::clamp(selected_ + direction - wheel, group_first, group_end - 1); binding_ = 0;
             return MenuCommand::None;
         } else if (wheel) binding_ = std::clamp(binding_ - wheel, 0, std::max(0, int(list.size()) - 1));
         binding_ = std::clamp(binding_ + int(repeat(KEY_RIGHT)) - int(repeat(KEY_LEFT)), 0, std::max(0, int(list.size()) - 1));
-        const int first = first_row(selected_, action_count);
+        const int first = group_first + first_row(selected_ - group_first, group_end - group_first);
         const int binding_first = first_row(binding_, int(list.size()));
         if (click) for (int i = 0; i < visible_rows(); ++i) {
-            if (first + i < action_count && hit(row_rect(i, false))) { selected_ = first + i; binding_ = 0; return MenuCommand::None; }
+            if (first + i < group_end && hit(row_rect(i, false))) { selected_ = first + i; binding_ = 0; return MenuCommand::None; }
             if (binding_first + i < int(list.size()) && hit(row_rect(i, true))) binding_ = binding_first + i;
         }
         if (IsKeyPressed(KEY_INSERT) || (click && hit(button_rect(0)))) {
@@ -166,16 +177,23 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
     const auto r = panel_rect(); box(r, blue);
     text(popup_ == MenuCommand::Controllers ? "SETTINGS / CONTROLLER MAPPING" : popup_ == MenuCommand::Controls ? "HELP / CONTROLS" : "HELP / ABOUT", r.x + 20, r.y + 16, 22, YELLOW);
     if (popup_ == MenuCommand::Controllers) {
-        text("Up/Down: action. Left/Right: binding. Scroll either list. Any connected gamepad.", r.x + 20, r.y + 50, 15, RAYWHITE);
+        text("Tab: control mode. Up/Down: action. Left/Right: binding. Scroll either list.", r.x + 20, r.y + 50, 15, RAYWHITE);
         BeginScissorMode(int(r.x + 20), int(r.y + 74), int(r.width - 40), 19);
         text(devices_.empty() ? "Controller detection runs during interactive play." : devices_.c_str(), r.x + 20, r.y + 74, 15, YELLOW);
         EndScissorMode();
-        text("ACTION", r.x + 20, r.y + 98, 16, YELLOW);
-        text(capturing_ ? "WAITING FOR INPUT..." : "BINDINGS (click to select)", r.x + 456, r.y + 98, 16, YELLOW);
+        for (int i = 0; i < int(action_groups.size()); ++i) {
+            const auto tab = group_rect(i);
+            DrawRectangleRec(tab, i == group_ ? selected : gray);
+            DrawRectangleLinesEx(tab, 1, RAYWHITE);
+            text(action_groups[i].label, tab.x + 10, tab.y + 5, 16, i == group_ ? RAYWHITE : ink);
+        }
+        text("ACTION", r.x + 20, r.y + 132, 16, YELLOW);
+        text(capturing_ ? "WAITING FOR INPUT..." : "BINDINGS (click to select)", r.x + 456, r.y + 132, 16, YELLOW);
         const auto& list = mapping.bindings[selected_];
-        const int first = first_row(selected_, action_count), binding_first = first_row(binding_, int(list.size()));
+        const int group_first = int(action_groups[group_].first), group_end = int(action_groups[group_].end);
+        const int first = group_first + first_row(selected_ - group_first, group_end - group_first), binding_first = first_row(binding_, int(list.size()));
         for (int i = 0; i < visible_rows(); ++i) {
-            if (first + i < action_count) {
+            if (first + i < group_end) {
                 auto row = row_rect(i, false);
                 if (first + i == selected_) DrawRectangleRec(row, selected);
                 text(action_labels[first + i], row.x + 6, row.y + 5, 16, RAYWHITE);
@@ -186,7 +204,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
                 text(binding_label(list[binding_first + i]).c_str(), row.x + 6, row.y + 5, 16, RAYWHITE);
             }
         }
-        if (list.empty()) text("Unbound - choose Add binding", r.x + 462, r.y + 125, 16, GRAY);
+        if (list.empty()) text("Unbound - choose Add binding", r.x + 462, r.y + 159, 16, GRAY);
         text(status_.empty() ? "Insert: add   Delete: remove   Enter/Esc: save and close" : status_.c_str(), r.x + 20, r.y + r.height - 106, 15, YELLOW);
         button(0, capturing_ ? "Listening..." : "Add binding"); button(1, "Remove binding"); button(2, "Defaults");
         button(3, TextFormat("Deadzone: %d%%", int(std::round(mapping.deadzone * 100)))); button(4, "Save & close");
@@ -197,7 +215,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         constexpr const char* lines[] = {
             "Car: W/S or left stick. Opposite direction brakes, then reverses. Space / B: handbrake.",
             "Car horn: H / right-stick click. E / Y: exit, or jump out while moving and tumble.",
-            "On foot: WASD / left stick. Shift / L-stick: sprint. Space / A: jump. E / Y: enter/exit.",
+            "On foot: WASD / left stick. Shift / L-stick: sprint. Space / A: jump. E / Y: enter.",
             "Cover: Q / B by a wall. Move along it slowly. Aim: peek. Sprint / jump: leave.",
             "Swim: WASD / left stick. Shift, Space / L-stick, A: faster. Surface only; no diving.",
             "Weapons: hold Tab / LB, select with mouse / right stick, release to equip.",
@@ -205,7 +223,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             "Plane: W/S or left stick Y: pitch. A/D or left stick X: bank.",
             "Plane throttle: Shift/Ctrl or RT/LT. Rudder: arrows or LB/RB. Flaps: F / X.",
             "Camera: mouse / right stick. Zoom: wheel / D-pad down or left.",
-            "Recover: D-pad up / R (unarmed or in vehicle). Map: F2 / Back. Tuning: F3.",
+            "Recover vehicle: R / D-pad up. Respawn on foot: F5 / D-pad up. Map: F2 / Back.",
             "Esc: map / close. Start: pause/resume. F10: menubar; arrows and Enter navigate.",
             "Tuning: drag sliders; arrows adjust; Shift is fine adjustment.",
             "Tuning camera: right-drag outside panel; scroll to zoom. Menus pause physics."

@@ -17,6 +17,7 @@ namespace forza {
 namespace {
 constexpr float pi = 3.14159265359f;
 constexpr int sign_rows = 11;
+constexpr Color map_water{24, 44, 70, 255};
 std::pair<int, int> cell(Vec3 position) {
     return {int(std::floor(position.GetX() / 256)), int(std::floor(position.GetZ() / 256))};
 }
@@ -822,21 +823,20 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
 
 void EnvironmentRenderer::load_minimap(const Environment& env) {
     constexpr int size = 2048;
-    Image map = GenImageColor(size, size, {43, 116, 148, 255});
+    Image map = GenImageColor(size, size, map_water);
     for (int z = 0; z < size; ++z) for (int x = 0; x < size; ++x) {
         const float y = env.terrain_height((x + .5f) * (2 * Environment::extent / size) - Environment::extent,
             (z + .5f) * (2 * Environment::extent / size) - Environment::extent);
-        if (y > .1f) ImageDrawPixel(&map, x, z, y < 2.6f ? Color{225, 203, 155, 255} : Color{110, 157, 112, 255});
+        if (y > .1f) ImageDrawPixel(&map, x, z, {96, 96, 96, 255});
     }
     const auto pixel = [](float value) { return int((value + Environment::extent) * size / (2 * Environment::extent)); };
     for (const auto& road : env.roads()) {
-        const Color color = road.bridge >= 0 ? Color{221, 195, 134, 255} : Color{66, 78, 85, 255};
         ImageDrawLineEx(&map, {float(pixel(road.a.GetX())), float(pixel(road.a.GetZ()))},
             {float(pixel(road.b.GetX())), float(pixel(road.b.GetZ()))},
-            std::max(1, int(road.width * size / (2 * Environment::extent))), color);
+            std::max(1, int(road.width * size / (2 * Environment::extent))), {205, 205, 205, 255});
     }
     for (const auto& airport : airports) {
-        const Color pavement{66, 78, 85, 255};
+        const Color pavement{205, 205, 205, 255};
         ImageDrawRectangle(&map, pixel(airport.center_x - 115), pixel(airport.runway_z - 220),
             pixel(airport.center_x - 38) - pixel(airport.center_x - 115),
             pixel(airport.runway_z + 160) - pixel(airport.runway_z - 220), pavement);
@@ -870,7 +870,7 @@ void EnvironmentRenderer::load_minimap(const Environment& env) {
     for (const auto& b : env.buildings())
         ImageDrawRectangle(&map, pixel(b.center.GetX() - b.size.GetX() / 2), pixel(b.center.GetZ() - b.size.GetZ() / 2),
             std::max(1, int(b.size.GetX() * size / (2 * Environment::extent))),
-            std::max(1, int(b.size.GetZ() * size / (2 * Environment::extent))), {157, 164, 162, 255});
+            std::max(1, int(b.size.GetZ() * size / (2 * Environment::extent))), {145, 145, 145, 255});
     minimap_texture_ = LoadTextureFromImage(map); UnloadImage(map);
     SetTextureFilter(minimap_texture_, TEXTURE_FILTER_BILINEAR);
 }
@@ -1018,7 +1018,7 @@ void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, con
     const auto bounds = map.bounds;
     DrawRectangle(int(bounds.x - 4), int(bounds.y - 4), int(bounds.width + 8), int(bounds.height + 8), {19, 28, 45, 235});
     BeginScissorMode(int(bounds.x), int(bounds.y), int(bounds.width), int(bounds.height));
-    DrawRectangleRec(bounds, {43, 116, 148, 255});
+    DrawRectangleRec(bounds, map_water);
     const float size = 2 * Environment::extent * map.scale;
     // Draw only the finite world texture; the ocean backdrop fills views beyond its edge.
     DrawTexturePro(minimap_texture_, {0, 0, float(minimap_texture_.width), float(minimap_texture_.height)},
@@ -1028,12 +1028,13 @@ void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, con
     if (police && police->wanted().stars()) {
         const auto p = map.project(police->wanted().last_seen());
         const float radius = police->wanted().radius() * map.scale;
-        DrawCircleV(p, radius, police->wanted().searching() ? Color{225, 174, 65, 45} : Color{211, 63, 83, 40});
-        DrawCircleLines(int(p.x), int(p.y), radius, police->wanted().searching() ? GOLD : RED);
+        DrawCircleV(p, radius, Fade(int(GetTime() * 2) % 2 ? BLUE : RED, .18f));
     }
     if (police && police->wanted().stars()) for (const auto& unit : police->units()) if (unit.active) {
         const auto p = map.project(unit.car->position());
-        if (!unit.car->destroyed() && map.contains(p)) DrawRectangle(int(p.x - 3), int(p.y - 3), 6, 6, unit.claimed ? SKYBLUE : Color{79, 142, 255, 255});
+        if (!unit.car->destroyed() && map.contains(p)
+            && std::any_of(unit.officers.begin(), unit.officers.end(), [](const PoliceOfficer& officer) { return officer.seated && officer.character->alive(); }))
+            DrawRectangle(int(p.x - 3), int(p.y - 3), 6, 6, unit.claimed ? SKYBLUE : Color{79, 142, 255, 255});
         for (const auto& officer : unit.officers) if (!officer.seated && officer.character->alive()) {
             const auto dot = map.project(officer.character->position());
             if (map.contains(dot)) DrawCircleV(dot, 3.3f, {79, 142, 255, 255});
@@ -1041,7 +1042,7 @@ void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, con
     }
     Vec3 heading(player_forward.GetX(), 0, player_forward.GetZ());
     heading = heading.LengthSq() > 1e-8f ? heading.Normalized() : map.forward;
-    const auto tip = map.project(player_position + heading * 15);
+    const auto tip = map.project(player_position + heading * (9.6f / map.scale));
     const Vector2 delta{tip.x - map.anchor.x, tip.y - map.anchor.y};
     const Vector2 a{map.anchor.x - delta.x * .5f - delta.y * .55f, map.anchor.y - delta.y * .5f + delta.x * .55f};
     const Vector2 b{map.anchor.x - delta.x * .5f + delta.y * .55f, map.anchor.y - delta.y * .5f - delta.x * .55f};
@@ -1052,7 +1053,7 @@ void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, con
 }
 void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police) const {
     BeginScissorMode(int(viewport.x), int(viewport.y), int(viewport.width), int(viewport.height));
-    DrawRectangleRec(viewport, {43, 116, 148, 255});
+    DrawRectangleRec(viewport, map_water);
     const auto corner = view.project(Vec3(-Environment::extent, 0, -Environment::extent), viewport);
     const float size = 2 * Environment::extent * view.scale;
     DrawTexturePro(minimap_texture_, {0, 0, float(minimap_texture_.width), float(minimap_texture_.height)},
@@ -1062,12 +1063,13 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
     if (police && police->wanted().stars()) {
         const auto p = view.project(police->wanted().last_seen(), viewport);
         const float radius = police->wanted().radius() * view.scale;
-        DrawCircleV(p, radius, police->wanted().searching() ? Color{225, 174, 65, 45} : Color{211, 63, 83, 40});
-        DrawCircleLines(int(p.x), int(p.y), radius, police->wanted().searching() ? GOLD : RED);
+        DrawCircleV(p, radius, Fade(int(GetTime() * 2) % 2 ? BLUE : RED, .18f));
     }
     if (police && police->wanted().stars()) for (const auto& unit : police->units()) if (unit.active) {
         const auto p = view.project(unit.car->position(), viewport);
-        if (!unit.car->destroyed() && inside(p)) DrawRectangle(int(p.x - 3), int(p.y - 3), 6, 6, unit.claimed ? SKYBLUE : Color{79, 142, 255, 255});
+        if (!unit.car->destroyed() && inside(p)
+            && std::any_of(unit.officers.begin(), unit.officers.end(), [](const PoliceOfficer& officer) { return officer.seated && officer.character->alive(); }))
+            DrawRectangle(int(p.x - 3), int(p.y - 3), 6, 6, unit.claimed ? SKYBLUE : Color{79, 142, 255, 255});
         for (const auto& officer : unit.officers) if (!officer.seated && officer.character->alive()) {
             const auto dot = view.project(officer.character->position(), viewport);
             if (inside(dot)) DrawCircleV(dot, 3.3f, {79, 142, 255, 255});

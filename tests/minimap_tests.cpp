@@ -20,8 +20,8 @@ int main() {
         for (Vec3 direction : {Vec3(0, 0, -1), Vec3(1, 0, 0), Vec3(0, 0, 1), Vec3(-1, 0, 0), Vec3(1, 0, -1).Normalized()}) {
             const forza::MinimapView map(720, player, Vec3(0, 0, -1), looking(direction));
             require(near(map.project(player), map.anchor), "player moved away from map anchor");
-            require(near(map.project(player + direction * 50), {map.anchor.x, map.anchor.y - 32}), "camera forward must point up");
-            require(near(map.project(player + direction.Cross(Vec3::sAxisY()) * 50), {map.anchor.x + 32, map.anchor.y}), "camera right must point right");
+            require(near(map.project(player + direction * 50), {map.anchor.x, map.anchor.y - 80}), "camera forward must point up");
+            require(near(map.project(player + direction.Cross(Vec3::sAxisY()) * 50), {map.anchor.x + 80, map.anchor.y}), "camera right must point right");
             // Raylib rotates the complete texture about the player's scaled texel.
             const Vector2 origin{(player.GetX() + extent) * map.scale, (player.GetZ() + extent) * map.scale};
             const float radians = map.rotation() * .01745329252f;
@@ -34,7 +34,7 @@ int main() {
             }
         }
         const forza::MinimapView pitched(720, player, Vec3(0, 0, 1), looking(Vec3(0, -100, -10)));
-        require(near(pitched.forward.GetZ(), -1) && near(pitched.project(player + Vec3(0, 500, -50)).y, pitched.anchor.y - 32), "pitch/height changed map scale");
+        require(near(pitched.forward.GetZ(), -1) && near(pitched.project(player + Vec3(0, 500, -50)).y, pitched.anchor.y - 80), "pitch/height changed map scale");
         const forza::MinimapView vertical(720, player, Vec3(1, 7, 0), looking(Vec3(0, -10, 0)));
         require(near(vertical.forward.GetX(), 1), "vertical camera lost player-heading fallback");
         const forza::MinimapView zero(720, player, Vec3::sZero(), looking(Vec3::sZero()));
@@ -42,7 +42,7 @@ int main() {
         for (int height : {720, 600}) {
             const forza::MinimapView map(height, player, Vec3(0, 0, -1), looking(Vec3(0, 0, -1)));
             require(near(map.bounds.x, 14) && near(map.bounds.y + map.bounds.height, float(height - 14)), "map lost bottom-left margin");
-            require(near(map.bounds.width, 320) && near(map.bounds.height, 180) && near(map.scale, .64f), "map dimensions/zoom changed");
+            require(near(map.bounds.width, 320) && near(map.bounds.height, 180) && near(map.scale, 1.6f), "map lost its 200m zoom");
             require(near(map.anchor.x, 174) && near(map.anchor.y, float(height - 77)), "look-ahead player anchor changed");
             require(map.contains(map.anchor) && map.contains({map.bounds.x + 6, map.bounds.y + 6}), "visible markers rejected");
             require(!map.contains({map.bounds.x + 5, map.bounds.y + 6}) && !map.contains({map.bounds.x + 314, map.bounds.y + 175}), "markers escaped clipped bounds");

@@ -7,13 +7,20 @@
 
 namespace forza {
 enum class Action {
-    Forward, Backward, Left, Right, Brake, Interact, Sprint, Jump,
-    ThrottleUp, ThrottleDown, RudderLeft, RudderRight, Flaps, Recover,
-    Map, Tuning, Pause, LookLeft, LookRight, LookUp, LookDown, ZoomIn, ZoomOut, Horn,
-    WeaponWheel, Fire, Aim, Reload, Cover, Count
+    FootForward, FootBackward, FootLeft, FootRight, EnterVehicle, Sprint, Jump, Respawn,
+    WeaponWheel, Fire, Aim, Reload, Cover,
+    FootLookLeft, FootLookRight, FootLookUp, FootLookDown, FootZoomIn, FootZoomOut,
+    Forward, Backward, Left, Right, Brake, ExitVehicle, Recover, Horn, Tuning,
+    VehicleLookLeft, VehicleLookRight, VehicleLookUp, VehicleLookDown, VehicleZoomIn, VehicleZoomOut,
+    PitchDown, PitchUp, BankLeft, BankRight, ThrottleUp, ThrottleDown, RudderLeft, RudderRight,
+    Flaps, PlaneBrake, PlaneExit, PlaneRecover,
+    PlaneLookLeft, PlaneLookRight, PlaneLookUp, PlaneLookDown, PlaneZoomIn, PlaneZoomOut,
+    Map, Pause, Count
 };
 constexpr int action_count = int(Action::Count);
 extern const std::array<const char*, action_count> action_labels;
+struct ActionGroup { const char* label; Action first, end; };
+extern const std::array<ActionGroup, 4> action_groups;
 enum class BindingKind { Key, Button, Axis, JoystickButton, JoystickAxis, JoystickHat, Mouse };
 struct Binding {
     BindingKind kind;

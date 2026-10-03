@@ -1,13 +1,15 @@
 #pragma once
 #include "player.hpp"
+#include <random>
 #include <vector>
 
 namespace forza {
-enum class Crime { RecklessDriving, VehicleTheft, Gunfire, Assault, Homicide, OfficerAssault, OfficerHomicide, PoliceVehicleTheft, Count };
+enum class Crime { VehicleTheft, Gunfire, Assault, Homicide, OfficerAssault, OfficerHomicide, PoliceVehicleTheft, Count };
 struct CrimeData { const char* name; int points, minimum_stars; float report_range, repeat_delay; };
 const CrimeData& crime_data(Crime crime);
 struct PoliceResponse { int cars; float speed, pit_interval, fire_interval, sight_range, dispatch_interval; };
 const PoliceResponse& police_response(int stars);
+WeaponType police_weapon(int stars, unsigned roll);
 
 class WantedLevel {
 public:
@@ -17,7 +19,7 @@ public:
     int stars() const { return stars_; }
     bool searching() const { return stars_ > 0 && !seen_; }
     Vec3 last_seen() const { return last_seen_; }
-    float radius() const { return 120.f + stars_ * 45; }
+    float radius() const { return 120.f + stars_ * 45 + stars_ * (stars_ - 1) * 17; }
     float cooldown() const { return 6.f + stars_ * 4; }
     float escape_progress() const { return stars_ ? outside_time_ / cooldown() : 0; }
 private:
@@ -29,6 +31,8 @@ private:
 
 struct PoliceOfficer {
     std::unique_ptr<Character> character;
+    WeaponType weapon = WeaponType::Pistol;
+    bool weapon_dropped = false;
     bool seated = true;
     float fire_time = 0, flash = 0, previous_health = 100;
     unsigned shots_fired = 0;
@@ -56,6 +60,8 @@ public:
     void raycast(Vec3 origin, Vec3 direction, ShotHit& hit, const Character* ignore = nullptr) const;
     void set_view(Vec3 position, Vec3 direction) { camera_ = position; camera_forward_ = direction.NormalizedOr(Vec3(0, 0, -1)); view_set_ = true; }
     const std::array<PoliceUnit, 18>& units() const { return units_; }
+    const std::vector<WeaponPickup>& pickups() const { return pickups_; }
+    WeaponType take_pickup() { const auto weapon = collected_weapon_; collected_weapon_ = WeaponType::Unarmed; return weapon; }
     const WantedLevel& wanted() const { return wanted_; }
     bool arrested() const { return arrest_time_ >= 1.5f; }
     std::vector<Vec3> road_path(Vec3 from, Vec3 to) const;
@@ -69,6 +75,7 @@ private:
     bool exit(PoliceUnit& unit, PoliceOfficer& officer, std::size_t side);
     void drive(PoliceUnit& unit, Player& player, std::size_t index, float dt);
     void walk(PoliceUnit& unit, PoliceOfficer& officer, Player& player, std::size_t index, float dt);
+    void drop_weapon(PoliceOfficer& officer);
     PhysicsWorld& world_;
     const Environment& environment_;
     Traffic* traffic_;
@@ -76,6 +83,9 @@ private:
     std::vector<RoadNode> roads_;
     // ponytail: twelve response units plus six reserve slots; recycle distant casualties outside the camera.
     std::array<PoliceUnit, 18> units_;
+    std::vector<WeaponPickup> pickups_;
+    WeaponType collected_weapon_ = WeaponType::Unarmed;
+    std::minstd_rand weapon_random_{8147};
     WantedLevel wanted_;
     std::array<float, int(Crime::Count)> crime_cooldowns_{};
     std::array<float, 64> civilian_health_{};

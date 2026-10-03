@@ -16,7 +16,7 @@ public:
     void draw(const ControllerMapping& mapping, const std::filesystem::path& path) const;
 private:
     bool close_mapping(const ControllerMapping& mapping, const std::filesystem::path& path, bool save = false);
-    int dropdown_ = -1, item_ = 0, selected_ = 0, binding_ = 0;
+    int dropdown_ = -1, item_ = 0, selected_ = 0, binding_ = 0, group_ = 0;
     MenuCommand popup_ = MenuCommand::None;
     bool capturing_ = false, interacted_ = false, dirty_ = false;
     BindingCapture capture_;

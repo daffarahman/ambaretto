@@ -258,9 +258,8 @@ void draw_character(const forza::Character& character, const forza::Environment&
     }
 }
 
-void draw_weapon(const forza::Character& character, forza::WeaponType type, float flash) {
-    if (!character.alive() || character.ragdolling() || character.swimming() || type == forza::WeaponType::Unarmed) return;
-    const auto hand = character.held_weapon();
+void draw_weapon_model(const forza::BodyPartPose& hand, forza::WeaponType type, float flash = 0) {
+    if (type == forza::WeaponType::Unarmed) return;
     const auto rotation = hand.rotation;
     const float length = forza::weapon_data(type).length;
     const Color metal{47, 49, 52, 255}, wood{127, 74, 36, 255};
@@ -275,6 +274,9 @@ void draw_weapon(const forza::Character& character, forza::WeaponType type, floa
         if (type == forza::WeaponType::AK47) box({0, .04f, -.26f}, {.12f, .13f, .21f}, wood);
     }
     if (flash > 0) DrawSphereEx(render_vector(hand.position + rotation * forza::Vec3(0, .06f, -length * .88f)), .07f, 6, 8, YELLOW);
+}
+void draw_weapon(const forza::Character& character, forza::WeaponType type, float flash) {
+    if (character.alive() && !character.ragdolling() && !character.swimming()) draw_weapon_model(character.held_weapon(), type, flash);
 }
 
 void draw_wanted(const forza::WantedLevel& wanted, int x, int y) {
@@ -633,6 +635,20 @@ int main(int argc, char** argv) {
         forza::Shot last_shot;
         int rendered_frames = 0;
         bool quit_requested = false;
+        const auto mode_action = [&](Action foot, Action car, Action plane) {
+            return scene->player.on_foot() ? foot : scene->player.flying() ? plane : car;
+        };
+        const auto mode_value = [&](Action foot, Action car, Action plane) { return controls.value(mode_action(foot, car, plane)); };
+        const auto look_stick = [&]() {
+            return Vector2{mode_value(Action::FootLookRight, Action::VehicleLookRight, Action::PlaneLookRight)
+                    - mode_value(Action::FootLookLeft, Action::VehicleLookLeft, Action::PlaneLookLeft),
+                mode_value(Action::FootLookDown, Action::VehicleLookDown, Action::PlaneLookDown)
+                    - mode_value(Action::FootLookUp, Action::VehicleLookUp, Action::PlaneLookUp)};
+        };
+        const auto zoom_amount = [&]() {
+            return mode_value(Action::FootZoomIn, Action::VehicleZoomIn, Action::PlaneZoomIn)
+                - mode_value(Action::FootZoomOut, Action::VehicleZoomOut, Action::PlaneZoomOut);
+        };
         while (!quit_requested && !WindowShouldClose()) {
             const float elapsed = GetFrameTime(), frame = std::min(elapsed, 0.1f);
             shot_flash = std::max(0.f, shot_flash - frame);
@@ -734,7 +750,7 @@ int main(int argc, char** argv) {
                 }
                 if (command == MenuCommand::CarDefaults) scene->player.car().set_tuning({});
                 const bool shortcuts = IsWindowFocused() && !menu.blocking() && !menu.interacted() && !graphics_panel.visible() && !mode_changed;
-                if (command == MenuCommand::Tuning || (shortcuts && controls.pressed(Action::Tuning))) {
+                if (command == MenuCommand::Tuning || (shortcuts && scene->player.driving() && controls.pressed(Action::Tuning))) {
                     if (scene->player.flying()) { notice = "Land and exit the plane before tuning the car"; notice_time = 3; }
                     else toggle_tuning();
                 }
@@ -760,13 +776,14 @@ int main(int argc, char** argv) {
                     const auto pressed = [](int key) { return IsKeyPressed(key) || IsKeyPressedRepeat(key); };
                     if (IsKeyPressed(KEY_HOME)) world_map.fit(map_viewport, map_region, forza::Environment::extent);
                     if (IsKeyPressed(KEY_C)) world_map.focus(scene->player.position(), map_viewport, forza::Environment::extent);
-                    const float horizontal = std::max(float(IsKeyDown(KEY_RIGHT)), std::max(controls.value(Action::Right), controls.value(Action::LookRight)))
-                        - std::max(float(IsKeyDown(KEY_LEFT)), std::max(controls.value(Action::Left), controls.value(Action::LookLeft)));
-                    const float vertical = std::max(float(IsKeyDown(KEY_DOWN)), std::max(controls.value(Action::Backward), controls.value(Action::LookDown)))
-                        - std::max(float(IsKeyDown(KEY_UP)), std::max(controls.value(Action::Forward), controls.value(Action::LookUp)));
+                    const auto stick = look_stick();
+                    const float horizontal = std::max(float(IsKeyDown(KEY_RIGHT)), std::max(mode_value(Action::FootRight, Action::Right, Action::BankRight), std::max(0.f, stick.x)))
+                        - std::max(float(IsKeyDown(KEY_LEFT)), std::max(mode_value(Action::FootLeft, Action::Left, Action::BankLeft), std::max(0.f, -stick.x)));
+                    const float vertical = std::max(float(IsKeyDown(KEY_DOWN)), std::max(mode_value(Action::FootBackward, Action::Backward, Action::PitchUp), std::max(0.f, stick.y)))
+                        - std::max(float(IsKeyDown(KEY_UP)), std::max(mode_value(Action::FootForward, Action::Forward, Action::PitchDown), std::max(0.f, -stick.y)));
                     world_map.pan({-horizontal * 400 * frame, -vertical * 400 * frame}, forza::Environment::extent);
                     const float zoom = float(pressed(KEY_EQUAL) || pressed(KEY_KP_ADD)) - float(pressed(KEY_MINUS) || pressed(KEY_KP_SUBTRACT))
-                        + (controls.value(Action::ZoomIn) - controls.value(Action::ZoomOut)) * 4 * frame;
+                        + zoom_amount() * 4 * frame;
                     if (zoom != 0) world_map.zoom(zoom, {map_viewport.x + map_viewport.width / 2, map_viewport.y + map_viewport.height / 2}, map_viewport, forza::Environment::extent);
                     if (inside) world_map.zoom(GetMouseWheelMove(), mouse, map_viewport, forza::Environment::extent);
                     if (click && inside) map_dragging = true;
@@ -821,11 +838,11 @@ int main(int argc, char** argv) {
                 const bool armed = scene->player.on_foot() && scene->player.weapons().selected() != forza::WeaponType::Unarmed;
                 const bool reload_pressed = controls.pressed(Action::Reload) && scene->player.can_shoot() && armed && !weapon_wheel;
                 if (reload_pressed) scene->player.weapons().reload();
-                if (controls.pressed(Action::Recover) && !reload_pressed && !weapon_wheel) {
+                if (controls.pressed(mode_action(Action::Respawn, Action::Recover, Action::PlaneRecover)) && !reload_pressed && !weapon_wheel) {
                     if (scene->player.on_foot()) scene->respawn_on_foot(); else scene->reset();
                     snap_camera(); accumulator = 0; jump_pending = false; flaps = false;
                 }
-                if (controls.pressed(Action::Interact) && !weapon_wheel) {
+                if (controls.pressed(mode_action(Action::EnterVehicle, Action::ExitVehicle, Action::PlaneExit)) && !weapon_wheel) {
                     const bool stealing = scene->player.can_steal();
                     const auto result = scene->player.interact();
                     if (result == forza::Interaction::Entered || result == forza::Interaction::Exited) {
@@ -848,11 +865,10 @@ int main(int argc, char** argv) {
                 if (scene->player.flying() && controls.pressed(Action::Flaps)) flaps = !flaps;
                 Vector2 mouse = GetMouseDelta();
                 if (discard_mouse) { mouse = {}; discard_mouse = false; }
-                mouse.x += (controls.value(Action::LookRight) - controls.value(Action::LookLeft)) * 700 * frame;
-                mouse.y += (controls.value(Action::LookDown) - controls.value(Action::LookUp)) * 700 * frame;
+                const auto stick = look_stick();
+                mouse.x += stick.x * 700 * frame;
+                mouse.y += stick.y * 700 * frame;
                 if (weapon_wheel) {
-                    const Vector2 stick{controls.value(Action::LookRight) - controls.value(Action::LookLeft),
-                        controls.value(Action::LookDown) - controls.value(Action::LookUp)};
                     if (std::hypot(stick.x, stick.y) > .1f) wheel_cursor = stick;
                     else { wheel_cursor.x += mouse.x / 200; wheel_cursor.y += mouse.y / 200; }
                     const float length = std::hypot(wheel_cursor.x, wheel_cursor.y);
@@ -863,7 +879,7 @@ int main(int argc, char** argv) {
                 if (!weapon_wheel && !suppress_fire && controls.pressed(Action::Fire)) fire_pending = true;
                 const float returned = std::min(recoil_return, recoil_return * 7 * frame);
                 orbit.recoil(-returned); recoil_return -= returned;
-                orbit.look(mouse.x, mouse.y, weapon_wheel ? 0 : GetMouseWheelMove() + (controls.value(Action::ZoomIn) - controls.value(Action::ZoomOut)) * 6 * frame, scene->player.driving(), scene->player.forward(),
+                orbit.look(mouse.x, mouse.y, weapon_wheel ? 0 : GetMouseWheelMove() + zoom_amount() * 6 * frame, scene->player.driving(), scene->player.forward(),
                     scene->player.flying() ? scene->player.plane().velocity().Length() : scene->player.driving() ? scene->player.car().velocity().Length() : 0, frame, scene->player.flying());
             }
             forza::Input driving;
@@ -875,7 +891,8 @@ int main(int argc, char** argv) {
                 driving.throttle = controls.value(Action::Forward) - controls.value(Action::Backward);
                 driving.steer = controls.value(Action::Left) - controls.value(Action::Right);
                 driving.handbrake = controls.value(Action::Brake) > .5f;
-                walking.direction = orbit.move_direction(driving.throttle, -driving.steer);
+                walking.direction = orbit.move_direction(controls.value(Action::FootForward) - controls.value(Action::FootBackward),
+                    controls.value(Action::FootRight) - controls.value(Action::FootLeft));
                 walking.sprint = controls.value(Action::Sprint) > .5f
                     || (scene->player.character().swimming() && controls.value(Action::Jump) > .5f);
                 if ((aiming || (!suppress_fire && controls.value(Action::Fire) > .5f)) && scene->player.can_shoot()
@@ -885,10 +902,10 @@ int main(int argc, char** argv) {
                     walking.direction *= .6f;
                 }
                 flight.throttle = controls.value(Action::ThrottleUp) - controls.value(Action::ThrottleDown);
-                flight.pitch = -driving.throttle;
-                flight.roll = driving.steer;
+                flight.pitch = controls.value(Action::PitchUp) - controls.value(Action::PitchDown);
+                flight.roll = controls.value(Action::BankLeft) - controls.value(Action::BankRight);
                 flight.yaw = controls.value(Action::RudderLeft) - controls.value(Action::RudderRight);
-                flight.brake = driving.handbrake;
+                flight.brake = controls.value(Action::PlaneBrake) > .5f;
             }
             if (simulate) accumulator += frame * (weapon_wheel ? .15f : 1.f);
             else { accumulator = 0; jump_pending = false; }
@@ -937,6 +954,10 @@ int main(int argc, char** argv) {
                 } else arrest_time = 0;
                 accumulator -= double(forza::fixed_step);
             }
+            const auto pickup = scene->police.take_pickup();
+            if (pickup != forza::WeaponType::Unarmed) {
+                notice = std::string("Picked up ") + forza::weapon_data(pickup).name + " ammo"; notice_time = 2.5f;
+            }
             const auto target = focus();
             const auto desired = orbit.desired_position(target, tuning_open || scene->player.driving(), !tuning_open && scene->player.flying(),
                 scene->player.plane().camera_scale(), aiming && scene->player.can_shoot());
@@ -951,7 +972,7 @@ int main(int argc, char** argv) {
             camera.position = render_vector(forza::ThirdPersonCamera::above_water(camera_target + offset * fraction));
             vehicle_audio.update(scene->traffic, scene->player.car(), scene->player.position(),
                 orbit.forward().Cross(forza::Vec3::sAxisY()), scene->player.driving(),
-                active && controls.value(Action::Horn) > .5f, simulate && screenshot.empty(), frame, driving.throttle);
+                active && scene->player.driving() && controls.value(Action::Horn) > .5f, simulate && screenshot.empty(), frame, driving.throttle);
             vehicle_audio.update_police(scene->police, scene->player.position(), orbit.forward().Cross(forza::Vec3::sAxisY()), simulate && screenshot.empty());
             vehicle_audio.update_effects(scene->world, scene->player.position(), orbit.forward().Cross(forza::Vec3::sAxisY()), simulate && screenshot.empty());
             const Camera3D view = camera;
@@ -1078,8 +1099,12 @@ int main(int argc, char** argv) {
                     draw_car(*unit.car, car_renderer, view, WHITE, {}, scene->police.wanted().stars() > 0 && !unit.claimed);
                     for (const auto& officer : unit.officers) if (!officer.seated) {
                         draw_character(*officer.character, environment, 0, true);
-                        if (scene->police.wanted().stars()) draw_weapon(*officer.character, forza::WeaponType::Pistol, officer.flash);
+                        if (scene->police.wanted().stars()) draw_weapon(*officer.character, officer.weapon, officer.flash);
                     }
+                }
+                for (const auto& pickup : scene->police.pickups()) if ((pickup.position - scene->player.position()).LengthSq() < 160 * 160) {
+                    DrawCylinder(render_vector(pickup.position - forza::Vec3(0, .07f, 0)), .4f, .4f, .02f, 16, {238, 198, 66, 180});
+                    draw_weapon_model({pickup.position + forza::Vec3(0, .08f, 0), forza::Quat::sRotation(forza::Vec3::sAxisZ(), 1.57079633f)}, pickup.weapon);
                 }
                 EndShaderMode();
                 draw_vehicle_damage(scene->car);
@@ -1117,6 +1142,11 @@ int main(int argc, char** argv) {
                             : scene->player.character().cover_stance() == forza::CoverStance::Crouched ? "COVER - crouched | Q / B: leave"
                             : "COVER - standing | Q / B: leave", info_y - 68);
                         const auto& weapons = scene->player.weapons();
+                        const auto& pickups = scene->police.pickups();
+                        const auto nearby = std::find_if(pickups.begin(), pickups.end(), [&](const forza::WeaponPickup& drop) {
+                            return (drop.position - scene->player.position()).LengthSq() < 6 * 6;
+                        });
+                        if (nearby != pickups.end()) draw_info(TextFormat("%s ammo - walk over to collect", forza::weapon_data(nearby->weapon).name), info_y - 98);
                         draw_info(weapons.selected() == forza::WeaponType::Unarmed ? "Unarmed" :
                             TextFormat("%s  %d / %d%s", weapons.data().name, weapons.ammo(), weapons.reserve(), weapons.reloading() ? "  Reloading" : ""), info_y - 38);
                         if (scene->player.can_shoot() && weapons.selected() != forza::WeaponType::Unarmed && !weapon_wheel && active) {

@@ -64,6 +64,29 @@ int main() {
             "sprint arms remained in walking pose");
         Weapons weapons;
         const Vec3 origin(0, 2, 0), direction(0, 0, -1);
+        Weapons loot;
+        require(!loot.pickup(WeaponType::Unarmed) && !loot.pickup(WeaponType::Count), "invalid pickup added ammo");
+        for (auto type : {WeaponType::Pistol, WeaponType::SMG, WeaponType::AK47}) {
+            loot.reset(); loot.select(type);
+            require(!loot.pickup(type), "full ammo consumed a pickup");
+            require(loot.fire(flat, nullptr, Vec3(0, 50, 0), Vec3::sAxisY(), true, true, true).fired, "pickup check could not use ammo");
+            loot.reload();
+            require(loot.pickup(type) && loot.ammo() == loot.data().magazine && !loot.reloading(), "pickup failed to refill magazine or cancel its reload");
+            require(loot.reserve() == loot.data().reserve && !loot.pickup(type), "pickup exceeded reserve capacity or repeated");
+            loot.step(1);
+            loot.fire(flat, nullptr, Vec3(0, 50, 0), Vec3::sAxisY(), true, true, true);
+            loot.reload(); loot.step(3);
+            require(loot.pickup(type) && loot.reserve() == loot.data().reserve, "pickup did not replenish reserve ammo");
+        }
+        loot.reset(); loot.select(WeaponType::SMG);
+        loot.fire(flat, nullptr, Vec3(0, 50, 0), Vec3::sAxisY(), true, true, true);
+        loot.select(WeaponType::Pistol);
+        loot.step(.3f);
+        loot.fire(flat, nullptr, Vec3(0, 50, 0), Vec3::sAxisY(), true, true, true);
+        loot.reload();
+        require(loot.pickup(WeaponType::SMG) && loot.selected() == WeaponType::Pistol && loot.ammo() == 11 && loot.reloading(),
+            "pickup changed weapon selection or another weapon's magazine/reload");
+        flat.take_sound_events();
         require(!weapons.fire(flat, nullptr, origin, direction, true, true, true).fired, "unarmed fired");
         weapons.select(WeaponType::Pistol);
         const auto shot = weapons.fire(flat, nullptr, origin, direction, true, true, true);

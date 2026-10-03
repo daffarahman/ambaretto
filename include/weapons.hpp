@@ -17,6 +17,7 @@ struct WeaponData {
     bool two_handed;
 };
 const WeaponData& weapon_data(WeaponType type);
+struct WeaponPickup { WeaponType weapon; Vec3 position; float lifetime = 120; };
 // Four clockwise slots, starting at the top. The centre keeps the current selection.
 WeaponType wheel_selection(float x, float y, WeaponType current);
 struct ShotHit {
@@ -47,6 +48,7 @@ public:
     int reserve() const { return reserve_[int(selected_)]; }
     bool reloading() const { return reload_time_ > 0; }
     void reload();
+    bool pickup(WeaponType type);
     void step(float dt);
     Shot fire(PhysicsWorld& world, const Pedestrians* pedestrians, Vec3 origin, Vec3 direction,
         bool held, bool pressed, bool aiming, const Police* police = nullptr, const Character* ignore = nullptr);

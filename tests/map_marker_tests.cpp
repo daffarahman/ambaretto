@@ -46,8 +46,15 @@ int main() {
         const auto texture = LoadRenderTexture(640, 480);
         for (bool full : {false, true}) {
             police.clear(); unit.car->reset(car_position); unit.car->repair();
+            for (auto& officer : unit.officers) { officer.seated = true; officer.character->revive(); }
             const auto project = [&](Vec3 point) { return full ? view.project(point, viewport) : mini.project(point); };
-            const auto render = [&](const Police* cops) {
+            const auto render = [&](const Police* cops, bool blue = false) {
+                // Capture early in a flash phase so image comparisons stay deterministic.
+                if (cops && cops->wanted().stars()) {
+                    const double phase = std::fmod(GetTime(), 1.0), start = blue ? .5 : 0;
+                    if (phase < start || phase > start + .35)
+                        WaitTime((phase < start ? start - phase : 1 + start - phase) + .001);
+                }
                 BeginTextureMode(texture); ClearBackground(BLACK);
                 if (full) scenery.world_map(view, viewport, player, heading, cops);
                 else scenery.minimap(player, heading, camera, cops);
@@ -62,15 +69,52 @@ int main() {
             require(equal(baseline, quiet), "police marker appeared with no wanted level");
             police.crime(Crime::PoliceVehicleTheft, player, unit.officers[0].character.get());
             require(police.wanted().stars() > 0, "marker test did not become wanted");
-            unit.active = false; Image wanted_base = render(&police); unit.active = true;
+            unit.active = false;
+            Image wanted_base = render(&police), wanted_blue = render(&police, true);
+            const auto sample = project(player + Vec3(30, 0, 20));
+            const Color red = GetImageColor(wanted_base, int(sample.x), int(sample.y));
+            const Color blue = GetImageColor(wanted_blue, int(sample.x), int(sample.y));
+            require(red.r > blue.r && blue.b > red.b, "search circle did not alternate red and blue");
+            if (full) {
+                const auto edge = project(player + Vec3(police.wanted().radius(), 0, 0));
+                require(!marker_pixels(wanted_base, edge, RED) && !marker_pixels(wanted_blue, edge, BLUE),
+                    "search circle retained its opaque border");
+            }
+            const_cast<WantedLevel&>(police.wanted()).step(player, false, .01f);
+            require(police.wanted().searching(), "marker test did not enter search mode");
+            Image searching = render(&police);
+            require(equal(wanted_base, searching), "searching changed the red/blue circle styling");
+            unit.active = true;
             Image live = render(&police);
             require(marker_pixels(live, project(car_position), {79, 142, 255, 255}) > 20,
                 "live police car had no marker while wanted");
             ExportImage(live, full ? "map-markers-world-wanted.png" : "map-markers-minimap-wanted.png");
+            auto& officer = unit.officers[0];
+            officer.seated = false; officer.character->reset(foot_position);
+            Image one_out = render(&police);
+            require(marker_pixels(one_out, project(car_position), {79, 142, 255, 255}) > 20
+                && marker_pixels(one_out, project(foot_position), {79, 142, 255, 255}) > 15,
+                "car with one seated officer or its foot officer lost their marker");
+            auto& partner = unit.officers[1];
+            const Vec3 partner_position = foot_position + Vec3(20, 0, 15);
+            partner.seated = false; partner.character->reset(partner_position);
+            Image empty = render(&police);
+            require(!marker_pixels(empty, project(car_position), {79, 142, 255, 255})
+                && marker_pixels(empty, project(foot_position), {79, 142, 255, 255}) > 15
+                && marker_pixels(empty, project(partner_position), {79, 142, 255, 255}) > 15,
+                "empty patrol car kept its marker or dismounted officers lost theirs");
+            partner.seated = true;
+            Image reboarded = render(&police);
+            require(equal(one_out, reboarded), "car marker did not return when an officer reboarded");
+            partner.character->take_damage(100);
+            Image dead_crew = render(&police);
+            require(!marker_pixels(dead_crew, project(car_position), {79, 142, 255, 255})
+                && marker_pixels(dead_crew, project(foot_position), {79, 142, 255, 255}) > 15,
+                "dead seated officer kept the car marker or hid a living foot officer");
+            partner.character->revive(); officer.seated = true;
             unit.car->take_damage(100);
             Image wreck = render(&police);
             require(equal(wanted_base, wreck), "destroyed police vehicle kept its marker");
-            auto& officer = unit.officers[0];
             officer.seated = false; officer.character->reset(foot_position); officer.character->revive();
             Image foot = render(&police);
             require(marker_pixels(foot, project(foot_position), {79, 142, 255, 255}) > 15,
@@ -83,10 +127,10 @@ int main() {
             Image escaped = render(&police);
             require(equal(baseline, escaped), "police or search markers remained after wanted level cleared");
             ExportImage(escaped, full ? "map-markers-world-clear.png" : "map-markers-minimap-clear.png");
-            for (Image image : {baseline, quiet, wanted_base, live, wreck, foot, dead, escaped}) UnloadImage(image);
+            for (Image image : {baseline, quiet, wanted_base, wanted_blue, searching, live, one_out, empty, reboarded, dead_crew, wreck, foot, dead, escaped}) UnloadImage(image);
         }
         UnloadRenderTexture(texture);
-        std::cout << "Both maps: hidden civilian cars/aircraft, wanted-only police, wreck/dead marker removal and escape passed\n";
+        std::cout << "Both maps: hidden civilian cars/aircraft, wanted-only occupied police cars, foot officers, reboarding, wreck/dead marker removal and escape passed\n";
     } catch (const std::exception& error) {
         std::cerr << "Map marker check failed: " << error.what() << '\n'; CloseWindow(); return 1;
     }

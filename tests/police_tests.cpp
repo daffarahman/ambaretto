@@ -8,6 +8,83 @@
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void weapon_pickups(const forza::Environment& map) {
+    using namespace forza;
+    PhysicsWorld world(map);
+    Car car(world);
+    Car blocker(world); blocker.set_simulated(false);
+    Police police(world, map);
+    Player player(world, car, map, nullptr, nullptr, nullptr, nullptr, &police);
+    const Vec3 feet(-360, map.height(-360, 250) + .08f, 250);
+    auto& unit = const_cast<PoliceUnit&>(police.units()[0]);
+    auto& officer = unit.officers[0];
+    for (auto type : {WeaponType::Pistol, WeaponType::SMG, WeaponType::AK47}) {
+        police.clear(); player.reset();
+        unit.active = true; unit.car->reset(feet + Vec3(30, .48f, 0));
+        officer.weapon = type; officer.weapon_dropped = false; officer.seated = false;
+        officer.character->reset(feet); officer.character->revive(); officer.character->take_damage(100);
+        police.finish(player); police.finish(player);
+        require(police.pickups().size() == 1 && police.pickups()[0].weapon == type, "officer drop was missing, duplicated or the wrong weapon");
+        const Vec3 drop = police.pickups()[0].position;
+        unit.active = false;
+        car.reset(drop + Vec3(0, .46f, 0));
+        player.weapons().select(type);
+        player.weapons().fire(world, nullptr, Vec3(0, 50, 0), Vec3::sAxisY(), true, true, true);
+        police.finish(player);
+        require(police.pickups().size() == 1, "driving collected a dropped weapon");
+        car.reset(map.spawn());
+        player.respawn_on_foot(drop - Vec3(0, .02f, 0));
+        police.finish(player);
+        require(police.pickups().size() == 1, "full ammo consumed the dropped gun");
+        player.weapons().select(type);
+        player.weapons().fire(world, nullptr, Vec3(0, 50, 0), Vec3::sAxisY(), true, true, true);
+        player.weapons().select(WeaponType::Pistol);
+        player.character().take_damage(100);
+        police.finish(player);
+        require(police.pickups().size() == 1, "dead player collected a dropped weapon");
+        player.character().reset(drop - Vec3(0, .02f, 0)); player.character().revive();
+        blocker.set_simulated(true); blocker.reset(drop + Vec3(0, .46f, 0));
+        police.finish(player);
+        require(police.pickups().size() == 1, "pickup passed through a solid vehicle");
+        blocker.set_simulated(false);
+        police.finish(player);
+        require(police.pickups().empty() && police.take_pickup() == type && police.take_pickup() == WeaponType::Unarmed,
+            "nearby on-foot pickup failed or repeated its notification");
+        require(player.weapons().selected() == WeaponType::Pistol, "pickup changed the selected weapon");
+        player.weapons().select(type);
+        require(player.weapons().ammo() == weapon_data(type).magazine, "pickup did not reload the matching gun");
+    }
+    unit.active = true; unit.car->reset(feet + Vec3(400, 0, 0));
+    officer.weapon_dropped = false; officer.character->revive(); officer.character->take_damage(100);
+    police.prepare(player, .1f);
+    require(!unit.active && police.pickups().size() == 1, "despawning a defeated patrol lost its weapon drop");
+    police.finish(player, 121);
+    require(police.pickups().empty(), "expired weapon drop remained in the world");
+    unit.active = unit.claimed = true; officer.weapon_dropped = false;
+    police.clear(); police.finish(player);
+    require(police.pickups().empty(), "reset recreated a drop from a dead officer in an owned car");
+    std::cout << "Police drops: each gun type, one drop per officer, on-foot ammo refill, despawning and expiry passed\n";
+}
+void speeding(const forza::Environment& map) {
+    using namespace forza;
+    PhysicsWorld world(false);
+    Car car(world);
+    Police police(world, map);
+    Player player(world, car, map, nullptr, nullptr, nullptr, nullptr, &police);
+    for (int i = 0; i < 120 * 15 && car.velocity().Length() < 40; ++i) {
+        car.step({1}); world.step();
+    }
+    require(player.driving() && car.velocity().Length() >= 40, "speeding check did not exceed the former speed limit");
+    auto& patrol = const_cast<PoliceUnit&>(police.units()[0]);
+    patrol.active = true;
+    patrol.car->reset(car.position() + Vec3(10, 0, 0));
+    police.prepare(player, .1f);
+    require(police.wanted().stars() == 0, "speeding past police started a pursuit");
+    // Verify the patrol can witness an actual crime at the same position.
+    police.crime(Crime::VehicleTheft, player.position());
+    require(police.wanted().stars() == 1, "speeding check had no police witness");
+    std::cout << "Speeding: driving above 144 km/h past police did not start a pursuit\n";
+}
 void vehicle_combat(const forza::Environment& map) {
     using namespace forza;
     PhysicsWorld world(map);
@@ -69,6 +146,25 @@ void vehicle_combat(const forza::Environment& map) {
     const float protected_health = car.health();
     advance(1);
     require(shots() == before_cover && car.health() == protected_health, "police shot an occupied car through solid cover");
+    cover_left.set_simulated(false); cover_right.set_simulated(false);
+    for (auto type : {WeaponType::SMG, WeaponType::AK47}) {
+        unit->car->reset(Vec3(0, map.height(0, 280) + .56f, 280));
+        car.reset(Vec3(0, map.height(0, 295) + .56f, 295)); car.repair();
+        auto& gunner = unit->officers[0];
+        gunner.character->reset(Vec3(-3, map.height(-3, 280) + .08f, 280)); gunner.character->revive();
+        gunner.seated = false; gunner.weapon = type; gunner.fire_time = 0;
+        unit->officers[1].fire_time = 100;
+        const_cast<WantedLevel&>(police.wanted()).step(player.position(), true, .1f);
+        world.take_sound_events();
+        const unsigned before_shot = gunner.shots_fired;
+        advance(1);
+        const auto sounds = world.take_sound_events();
+        const auto expected_sound = type == WeaponType::SMG ? SoundEffect::SMG : SoundEffect::AK47;
+        require(gunner.shots_fired > before_shot && std::any_of(sounds.begin(), sounds.end(), [&](const SoundEvent& sound) { return sound.effect == expected_sound; }),
+            "police automatic weapon did not fire with its matching sound");
+        require(std::abs(gunner.fire_time - police_response(police.wanted().stars()).fire_interval * weapon_data(type).interval / weapon_data(WeaponType::Pistol).interval) < .001f,
+            "police automatic weapon kept pistol firing speed");
+    }
     std::cout << "Vehicle combat: nearby gunfire, moving targets, return to pursuit, dismounting and cover passed\n";
 }
 }
@@ -77,7 +173,13 @@ int main() {
     try {
         WantedLevel wanted;
         const Vec3 origin(0, 3.2f, 0);
-        wanted.report(Crime::RecklessDriving, origin);
+        const int expected_weapons[6][3] = {{100, 0, 0}, {40, 60, 0}, {25, 75, 0}, {20, 20, 60}, {10, 20, 70}, {5, 15, 80}};
+        for (int stars = 1; stars <= 6; ++stars) {
+            int counts[3]{};
+            for (unsigned roll = 0; roll < 100; ++roll) ++counts[int(police_weapon(stars, roll)) - 1];
+            for (int gun = 0; gun < 3; ++gun) require(counts[gun] == expected_weapons[stars - 1][gun], "wanted-level weapon probabilities changed");
+        }
+        wanted.report(Crime::Gunfire, origin);
         require(wanted.stars() == 1, "minor crime did not start at one star");
         wanted.report(Crime::Assault, origin);
         require(wanted.stars() == 2, "assault did not escalate the response");
@@ -85,7 +187,12 @@ int main() {
         require(wanted.stars() >= 4, "officer homicide had a minor response");
         for (int i = 0; i < 100; ++i) wanted.report(Crime::OfficerHomicide, origin);
         require(wanted.stars() == 6, "wanted level exceeded or did not reach six stars");
+        WantedLevel search;
+        const float search_radii[] = {165, 244, 357, 504, 685, 900};
         for (int i = 1; i <= 6; ++i) {
+            while (search.stars() < i) search.report(Crime::Gunfire, origin);
+            require(std::abs(search.radius() - search_radii[i - 1]) < .01f,
+                "search circle did not grow faster toward its six-star radius");
             const auto& response = police_response(i);
             require(response.cars >= i && response.speed > 0, "stars did not determine police numbers");
             if (i > 1) require(response.cars > police_response(i - 1).cars && response.speed > police_response(i - 1).speed
@@ -106,11 +213,13 @@ int main() {
         require(wanted.escape_progress() == 0, "returning inside did not cancel escape countdown");
         wanted.step(outside, false, 5); wanted.step(outside, true, .1f);
         require(wanted.escape_progress() == 0 && !wanted.searching(), "police sighting did not restart pursuit");
-        wanted.step(outside + Vec3(500, 0, 0), false, wanted.cooldown() + .1f);
+        wanted.step(outside + Vec3(wanted.radius() + 50, 0, 0), false, wanted.cooldown() + .1f);
         require(wanted.stars() == 0, "escaping did not clear the wanted level");
         std::cout << "Wanted: crime severity, six levels, escalating tactics and escape rules passed\n";
 
         const Environment map;
+        weapon_pickups(map);
+        speeding(map);
         PhysicsWorld world(map);
         Car car(world);
         Pedestrians pedestrians(world, map);

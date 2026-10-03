@@ -18,19 +18,33 @@
 
 namespace forza {
 const std::array<const char*, action_count> action_labels{{
-    "Forward / pitch down", "Reverse / pitch up", "Left / bank left", "Right / bank right",
-    "Handbrake / wheel brake", "Enter / exit vehicle", "Sprint", "Jump",
-    "Plane throttle up", "Plane throttle down", "Rudder left", "Rudder right", "Toggle flaps",
-    "Recover vehicle", "World map", "Car tuning", "Pause / resume",
-    "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out", "Car horn",
-    "Weapon wheel (hold)", "Fire weapon", "Aim weapon", "Reload weapon", "Enter / leave cover"
+    "Walk forward", "Walk backward", "Walk left", "Walk right", "Enter vehicle", "Sprint", "Jump", "Respawn on foot",
+    "Weapon wheel (hold)", "Fire weapon", "Aim weapon", "Reload weapon", "Enter / leave cover",
+    "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out",
+    "Accelerate", "Brake / reverse", "Steer left", "Steer right", "Handbrake", "Exit car", "Recover car", "Car horn", "Car tuning",
+    "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out",
+    "Pitch down", "Pitch up", "Bank left", "Bank right", "Throttle up", "Throttle down", "Rudder left", "Rudder right",
+    "Toggle flaps", "Wheel brake", "Exit plane", "Recover plane",
+    "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out",
+    "World map", "Pause / resume"
+}};
+const std::array<ActionGroup, 4> action_groups{{
+    {"On foot", Action::FootForward, Action::Forward},
+    {"Car", Action::Forward, Action::PitchDown},
+    {"Plane", Action::PitchDown, Action::Map},
+    {"General", Action::Map, Action::Count}
 }};
 namespace {
 constexpr std::array<const char*, action_count> ids{{
-    "forward", "backward", "left", "right", "brake", "interact", "sprint", "jump",
-    "throttle_up", "throttle_down", "rudder_left", "rudder_right", "flaps", "recover",
-    "map", "tuning", "pause", "look_left", "look_right", "look_up", "look_down", "zoom_in", "zoom_out", "horn",
-    "weapon_wheel", "fire", "aim", "reload", "cover"
+    "foot_forward", "foot_backward", "foot_left", "foot_right", "foot_enter", "foot_sprint", "foot_jump", "foot_respawn",
+    "foot_weapon_wheel", "foot_fire", "foot_aim", "foot_reload", "foot_cover",
+    "foot_look_left", "foot_look_right", "foot_look_up", "foot_look_down", "foot_zoom_in", "foot_zoom_out",
+    "car_forward", "car_backward", "car_left", "car_right", "car_brake", "car_exit", "car_recover", "car_horn", "car_tuning",
+    "car_look_left", "car_look_right", "car_look_up", "car_look_down", "car_zoom_in", "car_zoom_out",
+    "plane_pitch_down", "plane_pitch_up", "plane_bank_left", "plane_bank_right", "plane_throttle_up", "plane_throttle_down", "plane_rudder_left", "plane_rudder_right",
+    "plane_flaps", "plane_brake", "plane_exit", "plane_recover",
+    "plane_look_left", "plane_look_right", "plane_look_up", "plane_look_down", "plane_zoom_in", "plane_zoom_out",
+    "map", "pause"
 }};
 bool valid(Binding b) {
     if (b.kind == BindingKind::Mouse) return b.code >= 0 && b.code < 8 && b.direction == 1;
@@ -151,28 +165,46 @@ std::optional<Binding> BindingCapture::poll(const ControllerState& input) {
 ControllerMapping::ControllerMapping() { defaults(); }
 void ControllerMapping::defaults() {
     for (auto& list : bindings) list.clear();
+    values_ = {}; pressed_ = {};
     deadzone = .2f;
     const auto key = [&](Action a, int code) { add(a, {BindingKind::Key, code}); };
     const auto button = [&](Action a, int code) { add(a, {BindingKind::Button, code}); };
     const auto axis = [&](Action a, int code, int sign = 1) { add(a, {BindingKind::Axis, code, sign}); };
-    key(Action::Forward, KEY_W); key(Action::Backward, KEY_S); key(Action::Left, KEY_A); key(Action::Right, KEY_D);
-    key(Action::Brake, KEY_SPACE); key(Action::Interact, KEY_E); key(Action::Jump, KEY_SPACE);
+    for (const auto actions : {std::array<Action, 4>{Action::FootForward, Action::FootBackward, Action::FootLeft, Action::FootRight},
+            std::array<Action, 4>{Action::Forward, Action::Backward, Action::Left, Action::Right},
+            std::array<Action, 4>{Action::PitchDown, Action::PitchUp, Action::BankLeft, Action::BankRight}}) {
+        key(actions[0], KEY_W); key(actions[1], KEY_S); key(actions[2], KEY_A); key(actions[3], KEY_D);
+        axis(actions[0], GAMEPAD_AXIS_LEFT_Y, -1); axis(actions[1], GAMEPAD_AXIS_LEFT_Y);
+        axis(actions[2], GAMEPAD_AXIS_LEFT_X, -1); axis(actions[3], GAMEPAD_AXIS_LEFT_X);
+    }
+    for (const auto a : {Action::EnterVehicle, Action::ExitVehicle, Action::PlaneExit}) {
+        key(a, KEY_E); button(a, GAMEPAD_BUTTON_RIGHT_FACE_UP);
+    }
+    for (const auto a : {Action::Brake, Action::PlaneBrake}) {
+        key(a, KEY_SPACE); button(a, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT);
+    }
+    key(Action::Jump, KEY_SPACE);
     for (int k : {KEY_LEFT_SHIFT, KEY_RIGHT_SHIFT}) { key(Action::Sprint, k); key(Action::ThrottleUp, k); }
     for (int k : {KEY_LEFT_CONTROL, KEY_RIGHT_CONTROL}) key(Action::ThrottleDown, k);
     key(Action::RudderLeft, KEY_LEFT); key(Action::RudderRight, KEY_RIGHT); key(Action::Flaps, KEY_F);
-    key(Action::Recover, KEY_R); key(Action::Map, KEY_F2); key(Action::Map, KEY_ESCAPE); key(Action::Tuning, KEY_F3);
-    axis(Action::Forward, GAMEPAD_AXIS_LEFT_Y, -1); axis(Action::Backward, GAMEPAD_AXIS_LEFT_Y);
-    axis(Action::Left, GAMEPAD_AXIS_LEFT_X, -1); axis(Action::Right, GAMEPAD_AXIS_LEFT_X);
-    button(Action::Brake, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT); button(Action::Interact, GAMEPAD_BUTTON_RIGHT_FACE_UP);
+    for (const auto a : {Action::Recover, Action::PlaneRecover}) {
+        key(a, KEY_R); button(a, GAMEPAD_BUTTON_LEFT_FACE_UP);
+    }
+    key(Action::Respawn, KEY_F5); button(Action::Respawn, GAMEPAD_BUTTON_LEFT_FACE_UP);
+    key(Action::Map, KEY_F2); key(Action::Map, KEY_ESCAPE); key(Action::Tuning, KEY_F3);
     button(Action::Sprint, GAMEPAD_BUTTON_LEFT_THUMB); button(Action::Jump, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
     axis(Action::ThrottleUp, GAMEPAD_AXIS_RIGHT_TRIGGER); axis(Action::ThrottleDown, GAMEPAD_AXIS_LEFT_TRIGGER);
     button(Action::RudderLeft, GAMEPAD_BUTTON_LEFT_TRIGGER_1); button(Action::RudderRight, GAMEPAD_BUTTON_RIGHT_TRIGGER_1);
-    button(Action::Flaps, GAMEPAD_BUTTON_RIGHT_FACE_LEFT); button(Action::Recover, GAMEPAD_BUTTON_LEFT_FACE_UP);
+    button(Action::Flaps, GAMEPAD_BUTTON_RIGHT_FACE_LEFT);
     button(Action::Map, GAMEPAD_BUTTON_MIDDLE_LEFT); button(Action::Tuning, GAMEPAD_BUTTON_LEFT_FACE_RIGHT);
     button(Action::Pause, GAMEPAD_BUTTON_MIDDLE_RIGHT);
-    axis(Action::LookLeft, GAMEPAD_AXIS_RIGHT_X, -1); axis(Action::LookRight, GAMEPAD_AXIS_RIGHT_X);
-    axis(Action::LookUp, GAMEPAD_AXIS_RIGHT_Y, -1); axis(Action::LookDown, GAMEPAD_AXIS_RIGHT_Y);
-    button(Action::ZoomIn, GAMEPAD_BUTTON_LEFT_FACE_DOWN); button(Action::ZoomOut, GAMEPAD_BUTTON_LEFT_FACE_LEFT);
+    for (const auto actions : {std::array<Action, 6>{Action::FootLookLeft, Action::FootLookRight, Action::FootLookUp, Action::FootLookDown, Action::FootZoomIn, Action::FootZoomOut},
+            std::array<Action, 6>{Action::VehicleLookLeft, Action::VehicleLookRight, Action::VehicleLookUp, Action::VehicleLookDown, Action::VehicleZoomIn, Action::VehicleZoomOut},
+            std::array<Action, 6>{Action::PlaneLookLeft, Action::PlaneLookRight, Action::PlaneLookUp, Action::PlaneLookDown, Action::PlaneZoomIn, Action::PlaneZoomOut}}) {
+        axis(actions[0], GAMEPAD_AXIS_RIGHT_X, -1); axis(actions[1], GAMEPAD_AXIS_RIGHT_X);
+        axis(actions[2], GAMEPAD_AXIS_RIGHT_Y, -1); axis(actions[3], GAMEPAD_AXIS_RIGHT_Y);
+        button(actions[4], GAMEPAD_BUTTON_LEFT_FACE_DOWN); button(actions[5], GAMEPAD_BUTTON_LEFT_FACE_LEFT);
+    }
     key(Action::Horn, KEY_H); button(Action::Horn, GAMEPAD_BUTTON_RIGHT_THUMB);
     key(Action::WeaponWheel, KEY_TAB); button(Action::WeaponWheel, GAMEPAD_BUTTON_LEFT_TRIGGER_1);
     add(Action::Fire, {BindingKind::Mouse, MOUSE_BUTTON_LEFT}); axis(Action::Fire, GAMEPAD_AXIS_RIGHT_TRIGGER);
@@ -234,7 +266,7 @@ bool ControllerMapping::load(const std::filesystem::path& path, std::string& err
             std::replace(line.begin(), line.end(), ',', ' ');
             std::istringstream row(line);
             std::string kind, extra; row >> kind;
-            if (kind == "version" && section == -1 && !version) { int v = 0; ok = bool(row >> v) && v == 1; version = ok; }
+            if (kind == "version" && section == -1 && !version) { int v = 0; ok = bool(row >> v) && v == 2; version = ok; }
             else if (kind == "deadzone" && section == -1) { ok = version && bool(row >> candidate.deadzone) && std::isfinite(candidate.deadzone) && candidate.deadzone >= .05f && candidate.deadzone <= .5f; }
             else if (section >= 0) {
                 Binding b{BindingKind::Key, 0};
@@ -255,6 +287,7 @@ bool ControllerMapping::load(const std::filesystem::path& path, std::string& err
     }
     if (!version || file.bad()) { error = "Incomplete controller mapping file"; return false; }
     bindings = std::move(candidate.bindings); deadzone = candidate.deadzone;
+    values_ = {}; pressed_ = {};
     return true;
 }
 bool ControllerMapping::save(const std::filesystem::path& path, std::string& error) const {
@@ -262,7 +295,7 @@ bool ControllerMapping::save(const std::filesystem::path& path, std::string& err
     auto temporary = path; temporary += ".tmp";
     std::ofstream file(temporary, std::ios::trunc);
     if (!file) { error = "Cannot write controller mappings"; return false; }
-    file << "; Forza Ambazon - raylib key/button/axis codes; gamepad bindings use any connected pad\nversion=1\ndeadzone=" << deadzone << '\n';
+    file << "; Forza Ambazon - independent on-foot, car and plane bindings; gamepad bindings use any connected pad\nversion=2\ndeadzone=" << deadzone << '\n';
     for (int a = 0; a < action_count; ++a) {
         file << '\n' << '[' << ids[a] << "]\n";
         for (auto b : bindings[a]) {
