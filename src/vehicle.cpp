@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <random>
 #include <stdexcept>
 #include <vector>
 
@@ -622,7 +623,8 @@ struct Character::Impl {
     float sprint_amount = 0;
     WeaponType weapon = WeaponType::Unarmed;
     const Car* hit_car = nullptr;
-    bool enabled = true, swimming = false;
+    bool enabled = true, swimming = false, player_controlled = false;
+    std::minstd_rand hit_random{39821};
     ~Impl() { clear_ragdoll(); }
     void clear_ragdoll() {
         if (rig) { rig->RemoveFromPhysicsSystem(); rig = nullptr; }
@@ -631,8 +633,9 @@ struct Character::Impl {
     }
 };
 
-Character::Character(PhysicsWorld& world, const Environment* environment) : world_(world), impl_(std::make_unique<Impl>()) {
+Character::Character(PhysicsWorld& world, const Environment* environment, bool player_controlled) : world_(world), impl_(std::make_unique<Impl>()) {
     impl_->environment = environment;
+    impl_->player_controlled = player_controlled;
     JPH::CharacterVirtualSettings settings;
     JPH::RefConst<JPH::Shape> capsule = new JPH::CapsuleShape(0.58f, 0.32f);
     settings.mShape = new JPH::RotatedTranslatedShape(Vec3(0, 0.9f, 0), Quat::sIdentity(), capsule);
@@ -928,11 +931,16 @@ void Character::hit_by(const Car& car, float dt) {
     impl_->hit_cooldown = .35f;
 }
 
-void Character::take_damage(float amount, BodyPart part, Vec3 impulse) {
+void Character::take_damage(float amount, BodyPart part, Vec3 impulse, DamageSource source) {
     if (!impl_->enabled || !std::isfinite(amount) || amount <= 0) return;
     health_ = std::max(0.f, health_ - amount);
     if (swimming()) { if (alive()) return; impl_->swimming = false; }
-    if (!ragdolling()) ragdoll(velocity());
+    if (!ragdolling()) {
+        // Most nonfatal player shots preserve control; NPCs, fatal hits and impacts still knock down.
+        const bool stay_standing = impl_->player_controlled && source == DamageSource::Bullet && alive()
+            && std::uniform_real_distribution<float>(0, 1)(impl_->hit_random) >= .2f;
+        if (!stay_standing) ragdoll(velocity());
+    }
     if (impl_->rig) {
         const int index = std::clamp(int(part), 0, int(BodyPart::Count) - 1);
         world_.impl_->system.GetBodyInterface().AddImpulse(impl_->rig->GetBodyID(index), impulse);

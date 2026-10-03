@@ -72,7 +72,7 @@ Shot Weapons::fire(PhysicsWorld& world, const Pedestrians* pedestrians, Vec3 ori
     if (hit.character) {
         const auto part = BodyPart(hit.part);
         const float multiplier = part == BodyPart::Head ? 3.f : hit.part >= int(BodyPart::LeftUpperArm) ? .65f : 1.f;
-        hit.character->take_damage(data().damage * multiplier, part, direction * data().impulse);
+        hit.character->take_damage(data().damage * multiplier, part, direction * data().impulse, DamageSource::Bullet);
     }
     if (hit.car) hit.car->take_damage(data().damage * VehicleDamage::gunfire_multiplier);
     if (hit.plane) hit.plane->take_damage(data().damage * VehicleDamage::gunfire_multiplier);

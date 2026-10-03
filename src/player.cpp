@@ -10,7 +10,7 @@
 namespace forza {
 Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane, Traffic* traffic, Pedestrians* pedestrians,
     const std::vector<std::unique_ptr<Plane>>* aircraft, Police* police)
-    : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world, &environment), plane_(plane), traffic_(traffic),
+    : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world, &environment, true), plane_(plane), traffic_(traffic),
       pedestrians_(pedestrians), police_(police) { starter_plane_ = plane; aircraft_ = aircraft; reset(); }
 
 void Player::reset() {

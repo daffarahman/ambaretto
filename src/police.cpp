@@ -350,7 +350,7 @@ void Police::walk(PoliceUnit& unit, PoliceOfficer& officer, Player& player, std:
         const Vec3 ray = (aim - origin).NormalizedOr(direction);
         const auto obstruction = trace_shot(world_, pedestrians_, origin, ray, 55, this, &character);
         if (obstruction.character == &player.character())
-            player.character().take_damage(12, BodyPart(obstruction.part), ray * 16);
+            player.character().take_damage(12, BodyPart(obstruction.part), ray * 16, DamageSource::Bullet);
         else if (obstruction.character) { officer.fire_time = .3f; return; }
         else if (obstruction.car) obstruction.car->take_damage(12 * VehicleDamage::gunfire_multiplier);
         else if (obstruction.plane) obstruction.plane->take_damage(12 * VehicleDamage::gunfire_multiplier);

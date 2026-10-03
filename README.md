@@ -49,6 +49,8 @@ There are six wanted levels. Each level dispatches one additional car with two o
 
 The stars appear below the clock, with blue police markers and a search area on both maps. Break police line of sight, leave the last-known search area (165–390 m depending on stars), and remain unseen outside it for 10–30 seconds to clear the wanted level. Returning inside the area or being spotted resets the escape timer. A completed arrest displays **BUSTED** and respawns the player on foot.
 
+Nonfatal bullets deal full damage to the player, with a 20% chance of knocking them down. Most shots let the player keep walking and shooting. Fatal hits, explosions, and vehicle impacts still knock the player down; NPC hit reactions remain unchanged.
+
 ## Controls
 
 The DOS-style menubar groups commands under **File** (resume, pause, quit), **Edit** (recover vehicle, restore car tuning), **Settings** (world map, car tuning, graphics, controller mapping), and **Help** (controls, about). Press **F10** to release the mouse and open it; navigate with arrows and Enter, or click menus while paused. Escape closes menus. Opening a dropdown or dialog pauses gameplay, including flight and live tuning. Resume through File, a gameplay click, or the mapped Pause/resume button (Start by default).

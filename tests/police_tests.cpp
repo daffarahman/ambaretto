@@ -113,7 +113,15 @@ int main() {
         Pedestrians pedestrians(world, map);
         Police police(world, map, nullptr, &pedestrians);
         Player player(world, car, map, nullptr, nullptr, &pedestrians, nullptr, &police);
-        const auto advance = [&](int steps, Input input = Input{}) { for (int i = 0; i < steps; ++i) player.step(input, {}); };
+        bool standing_police_hit = false;
+        const auto advance = [&](int steps, Input input = Input{}) {
+            for (int i = 0; i < steps; ++i) {
+                const float health = player.character().health();
+                player.step(input, {});
+                standing_police_hit |= player.on_foot() && player.character().health() < health
+                    && player.character().alive() && !player.character().ragdolling();
+            }
+        };
         police.crime(Crime::Gunfire, Vec3(2800, 0, 1800));
         advance(360);
         require(police.wanted().stars() == 0, "unwitnessed isolated gunfire alerted police magically");
@@ -239,6 +247,7 @@ int main() {
         car.reset(map.spawn());
         // Use a clear avenue so the earlier theft/cover scene cannot shelter the suspect.
         const Vec3 cop_position(-360, map.height(-360, 250) + .08f, 250);
+        standing_police_hit = false;
         target.revive(); target.reset(Vec3(cop_position.GetX(), map.surface_height(cop_position) + .08f, cop_position.GetZ()));
         const Vec3 suspect_position = cop_position + Vec3(0, 0, 8);
         player.respawn_on_foot(Vec3(suspect_position.GetX(), map.surface_height(suspect_position) + .08f, suspect_position.GetZ()));
@@ -251,6 +260,7 @@ int main() {
         advance(600);
         require(patrol->officers[0].shots_fired > 0 && player.character().health() < 100,
             "armed police did not fire or their shots failed to damage the player");
+        require(standing_police_hit, "police bullets always knocked the player down");
         std::cout << "Police combat: native aiming and gunfire damaged the suspect\n";
         vehicle_combat(map);
         std::cout << "All police checks passed.\n";

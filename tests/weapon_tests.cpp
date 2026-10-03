@@ -161,9 +161,40 @@ int main() {
         require(player.character().health() == 100 && player.weapons().selected() == WeaponType::Unarmed, "player respawn failed to restore health/loadout");
         player.respawn_on_foot(feet, .4f);
         require(player.on_foot() && player.character().alive() && (player.position() - feet).Length() < .01f, "on-foot respawn lost its location or mode");
+        const Vec3 target_feet(-360, environment.height(-360, 280) + .08f, 280);
+        int standing_hits = 0, knockdowns = 0;
+        for (int i = 0; i < 64; ++i) {
+            player.respawn_on_foot(target_feet);
+            weapons.reset(); weapons.select(WeaponType(1 + i % 3));
+            const Vec3 target = player.character().body_parts()[int(BodyPart::Torso)].position;
+            const auto shot = weapons.fire(world, &pedestrians, target + Vec3(0, 0, 5), direction, true, true, true);
+            require(shot.victim == &player.character() && std::abs(player.character().health() - (100 - weapons.data().damage)) < .01f,
+                "player bullet reaction changed damage or failed to hit");
+            if (player.character().ragdolling()) {
+                ++knockdowns;
+                require(!player.can_shoot(), "knocked-down player could shoot");
+            } else {
+                ++standing_hits;
+                require(player.can_shoot(), "standing bullet hit disabled player controls");
+                for (int step = 0; step < 60; ++step) player.step({}, {Vec3(1, 0, 0)});
+                require(!player.character().ragdolling() && player.position().GetX() > target_feet.GetX() + .2f,
+                    "standing player could not keep walking after a shot");
+            }
+        }
+        require(standing_hits > knockdowns && knockdowns > 0, "player shots did not mix mostly standing hits with occasional knockdowns");
+        player.respawn_on_foot(target_feet);
+        weapons.reset(); weapons.select(WeaponType::AK47);
+        const Vec3 player_head = player.character().body_parts()[int(BodyPart::Head)].position;
+        const auto fatal = weapons.fire(world, &pedestrians, player_head + Vec3(0, 0, 5), direction, true, true, true);
+        require(fatal.victim == &player.character() && fatal.killed && player.character().ragdolling(), "fatal player bullet did not knock down");
+        player.respawn_on_foot(target_feet);
+        player.character().take_damage(1, BodyPart::Torso, Vec3(0, 0, -50));
+        require(player.character().health() == 99 && player.character().ragdolling(), "player impact incorrectly used the bullet knockdown chance");
+        player.respawn_on_foot(target_feet);
         player.weapons().select(WeaponType::AK47);
         player.character().start_swimming(Vec3(1200, Environment::water_level, 1000));
         require(!player.shoot(shooter, direction, true, true, true).fired, "swimming player fired");
-        std::cout << "Weapon data, wheel, ammo, fire rates, reload, cover, body-part hits, health, death and on-foot gating passed\n";
+        std::cout << "Weapon data, wheel, ammo, fire rates, reload, cover, body-part hits, health, death and on-foot gating passed\n"
+            << "Player bullet reactions: " << standing_hits << " standing hits, " << knockdowns << " knockdowns; damage, movement, fatal hits and impacts passed\n";
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

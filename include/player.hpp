@@ -22,6 +22,7 @@ enum class BodyPart {
     LeftThigh, LeftShin, LeftFoot,
     RightThigh, RightShin, RightFoot, Count
 };
+enum class DamageSource { Impact, Bullet };
 struct BodyPartPose {
     Vec3 position{0, 0, 0};
     Quat rotation = Quat::sIdentity();
@@ -30,7 +31,7 @@ struct BodyPartPose {
 
 class Character {
 public:
-    explicit Character(PhysicsWorld& world, const Environment* environment = nullptr);
+    explicit Character(PhysicsWorld& world, const Environment* environment = nullptr, bool player_controlled = false);
     ~Character();
     Character(const Character&) = delete;
     Character& operator=(const Character&) = delete;
@@ -56,7 +57,7 @@ public:
     float health() const { return health_; }
     bool alive() const { return health_ > 0; }
     void revive() { health_ = 100; }
-    void take_damage(float amount, BodyPart part = BodyPart::Torso, Vec3 impulse = Vec3::sZero());
+    void take_damage(float amount, BodyPart part = BodyPart::Torso, Vec3 impulse = Vec3::sZero(), DamageSource source = DamageSource::Impact);
     bool raycast(Vec3 origin, Vec3 direction, float& distance, BodyPart& part) const;
     float yaw() const { return yaw_; }
     float gait() const { return gait_; }
