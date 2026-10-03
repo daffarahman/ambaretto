@@ -200,15 +200,18 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             "Car horn: H / right-stick click. E / Y: exit, or jump out while moving and tumble.",
             "On foot: WASD / left stick. Shift / L-stick: sprint. Space / A: jump. E / Y: enter/exit.",
             "Swim: WASD / left stick. Shift, Space / L-stick, A: faster. Surface only; no diving.",
+            "Weapons: hold Tab / LB, select with mouse / right stick, release to equip.",
+            "On foot: right mouse / LT aim, left mouse / RT fire, R / X reload. Dot marks aim.",
             "Plane: W/S or left stick Y: pitch. A/D or left stick X: bank.",
             "Plane throttle: Shift/Ctrl or RT/LT. Rudder: arrows or LB/RB. Flaps: F / X.",
             "Camera: mouse / right stick. Zoom: wheel / D-pad down or left.",
-            "Recover: R / D-pad up. Map: F2 / Back. Tuning: F3 / D-pad right.",
+            "Recover: D-pad up / R (unarmed or in vehicle). Map: F2 / Back. Tuning: F3.",
             "Esc: map / close. Start: pause/resume. F10: menubar; arrows and Enter navigate.",
             "Tuning: drag sliders; arrows adjust; Shift is fine adjustment.",
             "Tuning camera: right-drag outside panel; scroll to zoom. Menus pause physics."
         };
-        for (int i = 0; i < int(std::size(lines)); ++i) text(lines[i], r.x + 20, r.y + 108 + i * 30, 16, RAYWHITE);
+        const int spacing = std::min(30, int((r.height - 220) / std::size(lines)));
+        for (int i = 0; i < int(std::size(lines)); ++i) text(lines[i], r.x + 20, r.y + 108 + i * spacing, 16, RAYWHITE);
         button(4, "Close");
     } else {
         text("FORZA AMBAZON", r.x + 20, r.y + 90, 26, RAYWHITE);

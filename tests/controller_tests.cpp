@@ -16,6 +16,29 @@ int main() {
         std::filesystem::create_directories(folder);
         ControllerMapping mapping;
         require(mapping.bindings[int(Action::Forward)].front().code == KEY_W, "keyboard defaults changed");
+        ControllerState combat;
+        combat.keys[KEY_TAB] = true; combat.keys[KEY_R] = true;
+        combat.mouse[MOUSE_BUTTON_LEFT] = combat.mouse[MOUSE_BUTTON_RIGHT] = true;
+        mapping.update(combat);
+        require(mapping.pressed(Action::WeaponWheel) && mapping.pressed(Action::Reload) &&
+            mapping.pressed(Action::Fire) && mapping.value(Action::Aim) == 1, "keyboard/mouse weapon bindings failed");
+        mapping.update(combat);
+        require(!mapping.pressed(Action::Fire) && mapping.value(Action::Fire) == 1, "held mouse repeated its leading edge");
+        mapping.update({});
+        combat = {}; combat.pads[1].connected = true; combat.pads[1].axis_count = 6;
+        combat.pads[1].buttons[GAMEPAD_BUTTON_LEFT_TRIGGER_1] = true;
+        combat.pads[1].buttons[GAMEPAD_BUTTON_RIGHT_FACE_LEFT] = true;
+        combat.pads[1].axes[4] = combat.pads[1].axes[5] = 1;
+        mapping.update(combat);
+        require(mapping.pressed(Action::WeaponWheel) && mapping.pressed(Action::Reload) &&
+            mapping.value(Action::Fire) == 1 && mapping.value(Action::Aim) == 1, "gamepad weapon bindings failed");
+        BindingCapture mouse_capture;
+        mouse_capture.start({});
+        combat = {}; combat.mouse[MOUSE_BUTTON_MIDDLE] = true;
+        const auto mouse_binding = mouse_capture.poll(combat);
+        require(mouse_binding && *mouse_binding == Binding{BindingKind::Mouse, MOUSE_BUTTON_MIDDLE}, "mouse remap capture failed");
+        require(!mapping.add(Action::Fire, {BindingKind::Mouse, 8}), "invalid mouse binding accepted");
+        mapping.update({});
         static_assert(int(Action::ZoomOut) == 22 && int(Action::Horn) == 23, "existing action IDs must stay stable");
         const std::vector<Binding> horn_defaults{{BindingKind::Key, KEY_H}, {BindingKind::Button, GAMEPAD_BUTTON_RIGHT_THUMB}};
         require(mapping.bindings[int(Action::Horn)] == horn_defaults, "horn defaults must be H and right-stick click");
@@ -135,6 +158,8 @@ int main() {
         require(loaded.load(path, error) && loaded.bindings[int(Action::Forward)].size() == 1 &&
             !loaded.bindings[int(Action::Interact)].empty(), "partial mapping did not retain unspecified defaults");
         require(loaded.bindings[int(Action::Horn)] == horn_defaults, "legacy file without a horn section did not retain new horn defaults");
+        require(loaded.bindings[int(Action::Fire)] == std::vector<Binding>{{BindingKind::Mouse, MOUSE_BUTTON_LEFT}, {BindingKind::Axis, GAMEPAD_AXIS_RIGHT_TRIGGER}},
+            "legacy mappings lost new fire defaults");
         std::ofstream(path) << "version=1\n[zoom_out]\nkey=334\n[horn]\n";
         require(loaded.load(path, error) && loaded.bindings[int(Action::ZoomOut)] == std::vector<Binding>{{BindingKind::Key, 334}} &&
             loaded.bindings[int(Action::Horn)].empty(), "explicitly unbound horn or existing INI section was not preserved");

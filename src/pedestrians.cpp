@@ -127,6 +127,7 @@ void Pedestrians::stream(const Car* starter, const Traffic* traffic, Vec3 player
             person.target = next_point(person, spawn.point, routes_[person.route].size());
             const Vec3 direction = routes_[person.route][person.target] - p;
             person.character->reset(p, std::atan2(-direction.GetX(), -direction.GetZ()));
+            person.character->revive();
             person.character->set_enabled(true);
             person.enabled = true; person.was_ragdoll = false; person.stuck_time = 0;
             break;

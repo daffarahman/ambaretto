@@ -22,15 +22,18 @@ const std::array<const char*, action_count> action_labels{{
     "Handbrake / wheel brake", "Enter / exit vehicle", "Sprint", "Jump",
     "Plane throttle up", "Plane throttle down", "Rudder left", "Rudder right", "Toggle flaps",
     "Recover vehicle", "World map", "Car tuning", "Pause / resume",
-    "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out", "Car horn"
+    "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out", "Car horn",
+    "Weapon wheel (hold)", "Fire weapon", "Aim weapon", "Reload weapon"
 }};
 namespace {
 constexpr std::array<const char*, action_count> ids{{
     "forward", "backward", "left", "right", "brake", "interact", "sprint", "jump",
     "throttle_up", "throttle_down", "rudder_left", "rudder_right", "flaps", "recover",
-    "map", "tuning", "pause", "look_left", "look_right", "look_up", "look_down", "zoom_in", "zoom_out", "horn"
+    "map", "tuning", "pause", "look_left", "look_right", "look_up", "look_down", "zoom_in", "zoom_out", "horn",
+    "weapon_wheel", "fire", "aim", "reload"
 }};
 bool valid(Binding b) {
+    if (b.kind == BindingKind::Mouse) return b.code >= 0 && b.code < 8 && b.direction == 1;
     if (b.kind == BindingKind::Key) return b.code > 0 && b.code < 512 && b.direction == 1;
     if (b.kind == BindingKind::Button) return b.code > 0 && b.code < 18 && b.direction == 1;
     if (b.kind == BindingKind::JoystickButton) return b.code >= 0 && b.code < 64 && b.direction == 1;
@@ -43,6 +46,7 @@ bool valid(Binding b) {
 ControllerState read_controllers() {
     ControllerState input;
     for (int key = 1; key < 512; ++key) input.keys[key] = IsKeyDown(key);
+    for (int b = 0; b < 8; ++b) input.mouse[b] = IsMouseButtonDown(b);
     for (int pad = 0; pad < int(input.pads.size()); ++pad) {
         auto& p = input.pads[pad];
         if (!(p.connected = glfwJoystickPresent(pad) == GLFW_TRUE)) continue;
@@ -77,6 +81,10 @@ float axis_amount(int axis, int direction, float raw, float deadzone, bool joyst
     return std::clamp((amount - deadzone) / (1 - deadzone), 0.0f, 1.0f);
 }
 std::string binding_label(Binding b) {
+    if (b.kind == BindingKind::Mouse) {
+        constexpr const char* names[] = {"Left mouse", "Right mouse", "Middle mouse", "Mouse 4", "Mouse 5", "Mouse 6", "Mouse 7", "Mouse 8"};
+        return names[std::clamp(b.code, 0, 7)];
+    }
     if (b.kind == BindingKind::JoystickButton) return "USB button " + std::to_string(b.code + 1);
     if (b.kind == BindingKind::JoystickAxis) return "USB axis " + std::to_string(b.code + 1) + (b.direction < 0 ? " -" : " +");
     if (b.kind == BindingKind::JoystickHat) {
@@ -96,7 +104,7 @@ std::string binding_label(Binding b) {
     if (b.code >= KEY_ZERO && b.code <= KEY_NINE) return std::string(1, char(b.code));
     if (b.code >= KEY_F1 && b.code <= KEY_F12) return "F" + std::to_string(b.code - KEY_F1 + 1);
     switch (b.code) {
-        case KEY_SPACE: return "Space"; case KEY_ESCAPE: return "Esc"; case KEY_ENTER: return "Enter";
+        case KEY_SPACE: return "Space"; case KEY_ESCAPE: return "Esc"; case KEY_ENTER: return "Enter"; case KEY_TAB: return "Tab";
         case KEY_LEFT_SHIFT: return "Left Shift"; case KEY_RIGHT_SHIFT: return "Right Shift";
         case KEY_LEFT_CONTROL: return "Left Ctrl"; case KEY_RIGHT_CONTROL: return "Right Ctrl";
         case KEY_LEFT: return "Left arrow"; case KEY_RIGHT: return "Right arrow";
@@ -115,6 +123,7 @@ void BindingCapture::start(const ControllerState& input) {
 }
 std::optional<Binding> BindingCapture::poll(const ControllerState& input) {
     std::optional<Binding> result;
+    for (int b = 0; b < 8; ++b) if (input.mouse[b] && !previous_.mouse[b]) { result = Binding{BindingKind::Mouse, b}; break; }
     for (int p = 0; p < int(input.pads.size()) && !result; ++p) {
         const auto& pad = input.pads[p];
         const auto& before = previous_.pads[p];
@@ -165,6 +174,10 @@ void ControllerMapping::defaults() {
     axis(Action::LookUp, GAMEPAD_AXIS_RIGHT_Y, -1); axis(Action::LookDown, GAMEPAD_AXIS_RIGHT_Y);
     button(Action::ZoomIn, GAMEPAD_BUTTON_LEFT_FACE_DOWN); button(Action::ZoomOut, GAMEPAD_BUTTON_LEFT_FACE_LEFT);
     key(Action::Horn, KEY_H); button(Action::Horn, GAMEPAD_BUTTON_RIGHT_THUMB);
+    key(Action::WeaponWheel, KEY_TAB); button(Action::WeaponWheel, GAMEPAD_BUTTON_LEFT_TRIGGER_1);
+    add(Action::Fire, {BindingKind::Mouse, MOUSE_BUTTON_LEFT}); axis(Action::Fire, GAMEPAD_AXIS_RIGHT_TRIGGER);
+    add(Action::Aim, {BindingKind::Mouse, MOUSE_BUTTON_RIGHT}); axis(Action::Aim, GAMEPAD_AXIS_LEFT_TRIGGER);
+    key(Action::Reload, KEY_R); button(Action::Reload, GAMEPAD_BUTTON_RIGHT_FACE_LEFT);
 }
 bool ControllerMapping::add(Action a, Binding b) {
     if (int(a) < 0 || int(a) >= action_count || !valid(b)) return false;
@@ -178,6 +191,7 @@ void ControllerMapping::update(const ControllerState& input) {
         float next = 0;
         for (const auto b : bindings[a]) {
             if (b.kind == BindingKind::Key) next = std::max(next, float(input.keys[b.code]));
+            else if (b.kind == BindingKind::Mouse) next = std::max(next, float(input.mouse[b.code]));
             else for (const auto& p : input.pads) if (p.connected) {
                 const bool joystick = b.kind == BindingKind::JoystickButton || b.kind == BindingKind::JoystickAxis || b.kind == BindingKind::JoystickHat;
                 if (p.raw != joystick) continue;
@@ -228,6 +242,7 @@ bool ControllerMapping::load(const std::filesystem::path& path, std::string& err
                 else if (kind == "joystick_button") b.kind = BindingKind::JoystickButton;
                 else if (kind == "joystick_axis") b.kind = BindingKind::JoystickAxis;
                 else if (kind == "joystick_hat") b.kind = BindingKind::JoystickHat;
+                else if (kind == "mouse") b.kind = BindingKind::Mouse;
                 else if (kind != "key") ok = false;
                 ok = ok && bool(row >> b.code);
                 if (b.kind == BindingKind::Axis || b.kind == BindingKind::JoystickAxis) ok = ok && bool(row >> b.direction);
@@ -250,7 +265,7 @@ bool ControllerMapping::save(const std::filesystem::path& path, std::string& err
     for (int a = 0; a < action_count; ++a) {
         file << '\n' << '[' << ids[a] << "]\n";
         for (auto b : bindings[a]) {
-            constexpr const char* kinds[] = {"key=", "button=", "axis=", "joystick_button=", "joystick_axis=", "joystick_hat="};
+            constexpr const char* kinds[] = {"key=", "button=", "axis=", "joystick_button=", "joystick_axis=", "joystick_hat=", "mouse="};
             file << kinds[int(b.kind)] << b.code;
             if (b.kind == BindingKind::Axis || b.kind == BindingKind::JoystickAxis) file << ',' << b.direction;
             file << '\n';

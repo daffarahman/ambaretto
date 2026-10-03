@@ -515,7 +515,9 @@ float Environment::elevation(float x, float z) {
         const float airport_blend = (1 - smooth(airport.grounds_half_width + padding, airport.grounds_half_width + 90,
             std::abs(x - airport.center_x))) * (1 - smooth(airport.grounds_half_length() + padding,
             airport.grounds_half_length() + 65, std::abs(z - airport.runway_z)));
-        ground += (Airport::elevation - ground) * airport_blend;
+        const float parking_distance = std::max(std::abs(x - airport.center_x + 76.5f) - 38.5f,
+            std::abs(z - airport.runway_z + 30) - 190);
+        ground += (Airport::elevation - ground) * std::max(airport_blend, 1 - smooth(5, 45, parking_distance));
     }
     // Nearby road verges must stop at the riverbank instead of damming the channel.
     const float river = 1.30f - .40f * river_radius(x, z);
@@ -711,7 +713,7 @@ Environment::Environment() {
     add_building(miami.gate_x() + 40, miami.gate_z(), Vec3(42, 9, 30), BuildingKind::Terminal, true, false);
     add_building(miami.center_x - 48, miami.apron_z() + 80, Vec3(28, 9, 24), BuildingKind::Hangar, true, true);
     add_building(miami.center_x - 48, miami.apron_z() - 80, Vec3(7, 18, 7), BuildingKind::ControlTower);
-    add_building(airports[1].center_x + 82, airports[1].plane_z(), Vec3(24, 4.5f, 14), BuildingKind::Terminal, true, false);
+    add_building(airports[1].center_x + 82, airports[1].runway_z - airports[1].departure * 140, Vec3(24, 4.5f, 14), BuildingKind::Terminal, true, false);
     // Frontage lots fill both sides of streets; a second row fills deep blocks.
     // ponytail: cardinal footprints on angled streets; rotate lots if precise parcel geometry is needed.
     for (const auto& street : roads()) {

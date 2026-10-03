@@ -718,6 +718,11 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
 
     for (const auto& airport : airports) {
         const float ax = airport.center_x, rz = airport.runway_z;
+        roads.ribbon(env, Vec3(ax - 76.5f, 0, rz - 220), Vec3(ax - 76.5f, 0, rz + 160), 77, asphalt, .06f);
+        roads.ribbon(env, Vec3(ax - 78, 0, rz - 200), Vec3(ax, 0, rz - 200), 16, asphalt, .06f);
+        city.ribbon(env, Vec3(ax - 78, 0, rz - 200), Vec3(ax, 0, rz - 200), .3f, YELLOW, .095f);
+        for (float stand : {-180.f, -140.f, 0.f, 40.f, 100.f})
+            city.ribbon(env, Vec3(ax - 78, 0, rz + stand - 8), Vec3(ax - 78, 0, rz + stand + 8), .25f, YELLOW, .095f);
         const auto vector = [](AirportPoint p, float y = 0) { return Vec3(p.x, y, p.z); };
         if (airport.international) {
             roads.ribbon(env, Vec3(airport.apron_x(), 0, airport.apron_z() - 60),
@@ -728,7 +733,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
                 city.ribbon(env, vector(access[i - 1]), vector(access[i]), .35f, YELLOW, .095f);
             }
         } else {
-            roads.ribbon(env, Vec3(airport.apron_x(), 0, rz + airport.departure * 156), Vec3(airport.apron_x(), 0, airport.plane_z()), 30, asphalt, .06f);
+            roads.ribbon(env, Vec3(airport.apron_x(), 0, rz + airport.departure * (airport.runway_length() / 2 - 12)), Vec3(airport.apron_x(), 0, airport.plane_z()), 30, asphalt, .06f);
             roads.ribbon(env, Vec3(ax, 0, airport.plane_z()), Vec3(airport.apron_x(), 0, airport.plane_z()), 10, asphalt, .06f);
             city.ribbon(env, Vec3(airport.apron_x(), 0, airport.apron_z()), Vec3(airport.apron_x(), 0, airport.plane_z()), .25f, YELLOW, .09f);
             city.ribbon(env, Vec3(airport.apron_x(), 0, airport.plane_z()), Vec3(ax, 0, airport.plane_z()), .25f, YELLOW, .09f);
@@ -832,10 +837,14 @@ void EnvironmentRenderer::load_minimap(const Environment& env) {
     }
     for (const auto& airport : airports) {
         const Color pavement{66, 78, 85, 255};
+        ImageDrawRectangle(&map, pixel(airport.center_x - 115), pixel(airport.runway_z - 220),
+            pixel(airport.center_x - 38) - pixel(airport.center_x - 115),
+            pixel(airport.runway_z + 160) - pixel(airport.runway_z - 220), pavement);
         const auto line = [&](AirportPoint a, AirportPoint b, float width) {
             ImageDrawLineEx(&map, {float(pixel(a.x)), float(pixel(a.z))}, {float(pixel(b.x)), float(pixel(b.z))},
                 std::max(1, int(width * size / (2 * Environment::extent))), pavement);
         };
+        line({airport.center_x - 78, airport.runway_z - 200}, {airport.center_x, airport.runway_z - 200}, 16);
         if (airport.international) {
             ImageDrawRectangle(&map, pixel(airport.apron_x() - 15), pixel(airport.apron_z() - 60),
                 pixel(airport.apron_x() + 15) - pixel(airport.apron_x() - 15),
@@ -843,10 +852,11 @@ void EnvironmentRenderer::load_minimap(const Environment& env) {
             const auto access = airport.access_points();
             for (int i = 1; i < int(access.size()); ++i) line(access[i - 1], access[i], airport.gate_width());
         } else {
-            const float apron_start = std::min(airport.plane_z(), airport.runway_z + airport.departure * 156);
+            const float apron_end = airport.runway_z + airport.departure * (airport.runway_length() / 2 - 12);
+            const float apron_start = std::min(airport.plane_z(), apron_end);
             ImageDrawRectangle(&map, pixel(airport.apron_x() - 15), pixel(apron_start),
                 pixel(airport.apron_x() + 15) - pixel(airport.apron_x() - 15),
-                pixel(apron_start + 296) - pixel(apron_start), pavement);
+                pixel(std::max(airport.plane_z(), apron_end)) - pixel(apron_start), pavement);
             line({airport.center_x, airport.plane_z()}, {airport.apron_x(), airport.plane_z()}, 10);
         }
         for (int runway = 0; runway < airport.runway_count(); ++runway) {
@@ -1003,7 +1013,7 @@ void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
 }
-void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Traffic* traffic) const {
+void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Traffic* traffic, const std::vector<std::unique_ptr<Plane>>* aircraft) const {
     const MinimapView map(GetScreenHeight(), player_position, player_forward, camera);
     const auto bounds = map.bounds;
     DrawRectangle(int(bounds.x - 4), int(bounds.y - 4), int(bounds.width + 8), int(bounds.height + 8), {19, 28, 45, 235});
@@ -1026,6 +1036,10 @@ void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 playe
         const auto heading = map.project(plane.position() + plane.forward());
         DrawPoly(plane_dot, 3, 5, std::atan2(heading.y - plane_dot.y, heading.x - plane_dot.x) * RAD2DEG, YELLOW);
     }
+    if (aircraft) for (const auto& other : *aircraft) {
+        const auto dot = map.project(other->position()), heading = map.project(other->position() + other->forward());
+        if (map.contains(dot)) DrawPoly(dot, 3, 5, std::atan2(heading.y - dot.y, heading.x - dot.x) * RAD2DEG, YELLOW);
+    }
     Vec3 heading(player_forward.GetX(), 0, player_forward.GetZ());
     heading = heading.LengthSq() > 1e-8f ? heading.Normalized() : map.forward;
     const auto tip = map.project(player_position + heading * 15);
@@ -1037,7 +1051,7 @@ void EnvironmentRenderer::minimap(const Car& car, const Plane& plane, Vec3 playe
     EndScissorMode();
     DrawRectangleLinesEx(bounds, 2, {115, 157, 174, 255});
 }
-void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Traffic* traffic) const {
+void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, const Car& car, const Plane& plane, Vec3 player_position, Vec3 player_forward, const Traffic* traffic, const std::vector<std::unique_ptr<Plane>>* aircraft) const {
     BeginScissorMode(int(viewport.x), int(viewport.y), int(viewport.width), int(viewport.height));
     DrawRectangleRec(viewport, {43, 116, 148, 255});
     const auto corner = view.project(Vec3(-Environment::extent, 0, -Environment::extent), viewport);
@@ -1066,8 +1080,12 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
     }
     const auto parked_car = view.project(car.position(), viewport);
     if (inside(parked_car)) DrawRectangle(int(parked_car.x - 4), int(parked_car.y - 4), 8, 8, SKYBLUE);
-    const auto aircraft = view.project(plane.position(), viewport);
-    if (inside(aircraft)) DrawPoly(aircraft, 3, 7, std::atan2(plane.forward().GetZ(), plane.forward().GetX()) * RAD2DEG, YELLOW);
+    const auto plane_dot = view.project(plane.position(), viewport);
+    if (inside(plane_dot)) DrawPoly(plane_dot, 3, 7, std::atan2(plane.forward().GetZ(), plane.forward().GetX()) * RAD2DEG, YELLOW);
+    if (aircraft) for (const auto& other : *aircraft) {
+        const auto dot = view.project(other->position(), viewport);
+        if (inside(dot)) DrawPoly(dot, 3, 7, std::atan2(other->forward().GetZ(), other->forward().GetX()) * RAD2DEG, YELLOW);
+    }
     const auto player = view.project(player_position, viewport);
     if (inside(player)) {
         DrawCircleV(player, 11, {19, 28, 45, 255});

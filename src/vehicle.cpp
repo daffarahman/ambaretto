@@ -2,6 +2,7 @@
 #include "environment.hpp"
 #include "player.hpp"
 #include "plane.hpp"
+#include "airport.hpp"
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/TempAllocator.h>
@@ -238,6 +239,16 @@ void PhysicsWorld::step(float dt) {
         throw std::runtime_error("Jolt physics capacity exceeded");
 }
 
+bool PhysicsWorld::cast_ray(const Vec3& origin, const Vec3& direction, float distance, GroundHit& hit) const {
+    if (distance <= 0 || !std::isfinite(distance) || direction.LengthSq() < .00001f) return false;
+    const JPH::RRayCast ray(origin, direction.Normalized() * distance);
+    JPH::RayCastResult result;
+    if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, result, {}, CameraLayers{})) return false;
+    hit.point = ray.GetPointOnRay(result.mFraction);
+    hit.distance = distance * result.mFraction;
+    return true;
+}
+
 float PhysicsWorld::camera_fraction(const Vec3& origin, const Vec3& offset, JPH::BodyID ignore) const {
     if (offset.LengthSq() < 0.0001f) return 1;
     JPH::SphereShape sphere(0.28f);
@@ -249,39 +260,97 @@ float PhysicsWorld::camera_fraction(const Vec3& origin, const Vec3& offset, JPH:
     return hits.HadHit() ? std::clamp(hits.mHit.mFraction - 0.03f / offset.Length(), 0.0f, 1.0f) : 1;
 }
 
-Plane::Plane(PhysicsWorld& world) : world_(world) {
+const PlaneSpecs& plane_specs(PlaneType type) {
+    // Dimensions follow NASA's Hornet and Boeing's 747-400 data; handling is tuned for this map.
+    static const std::array<PlaneSpecs, 3> specs{{
+        {"Light aircraft", 11, 6.3f, 850, 16, 3200, 28, .48f, .48f, .5f, .26f},
+        {"F-18 Hornet", 12.3f, 17.1f, 15000, 37, 180000, 48, .75f, .65f, .8f, .38f},
+        {"Boeing 747", 64.44f, 70.66f, 180000, 525, 1600000, 62, 3.1f, 1.9f, 2.4f, .65f}
+    }};
+    return specs[static_cast<std::size_t>(type)];
+}
+Plane::Plane(PhysicsWorld& world, PlaneType type) : world_(world), type_(type) {
+    const auto& spec = specs();
     JPH::StaticCompoundShapeSettings parts;
     const auto box = [&](Vec3 center, Vec3 half) {
         JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(half, .03f);
         parts.AddShape(center, Quat::sIdentity(), shape);
     };
+    if (type == PlaneType::Trainer) {
     box(Vec3(0, 0, -.2f), Vec3(.48f, .48f, 2.8f));
     box(Vec3(0, .6f, -.3f), Vec3(5.5f, .09f, .75f));
     box(Vec3(0, .35f, 2.5f), Vec3(1.8f, .08f, .55f));
     box(Vec3(0, .95f, 2.5f), Vec3(.08f, .65f, .55f));
+    } else {
+        box(Vec3(0, 0, 0), Vec3(spec.body_radius, spec.body_radius, spec.length * .40f));
+        box(Vec3(0, type == PlaneType::F18 ? -.15f : -.2f, spec.length * .04f), Vec3(spec.span / 2, .12f, spec.length * .10f));
+        box(Vec3(0, .5f, spec.length * .38f), Vec3(spec.span * .19f, .1f, spec.length * .045f));
+        if (type == PlaneType::F18) for (float side : {-1.f, 1.f})
+            box(Vec3(side * .9f, 1.3f, spec.length * .36f), Vec3(.12f, 1.2f, 1.5f));
+        else {
+            box(Vec3(0, 6, 27), Vec3(.18f, 6, 4));
+            box(Vec3(0, 3, -20), Vec3(2.2f, 1, 9));
+            for (float side : {-1.f, 1.f}) for (float engine : {11.f, 21.f})
+                box(Vec3(side * engine, -1.7f, 1.5f), Vec3(1.3f, 1.3f, 3));
+        }
+    }
     const auto result = parts.Create();
     if (result.HasError()) throw std::runtime_error(result.GetError().c_str());
     JPH::RefConst<JPH::Shape> shape = new JPH::OffsetCenterOfMassShape(result.Get(), -result.Get()->GetCenterOfMass());
-    JPH::BodyCreationSettings settings(shape, Vec3(0, parked_height, 0), Quat::sIdentity(),
+    JPH::BodyCreationSettings settings(shape, Vec3(0, parking_height(), 0), Quat::sIdentity(),
         JPH::EMotionType::Dynamic, vehicle_layer);
     settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
-    settings.mMassPropertiesOverride.mMass = 850;
-    settings.mMassPropertiesOverride.mInertia = JPH::Mat44::sScale(Vec3(2100, 5500, 3300));
+    settings.mMassPropertiesOverride.mMass = spec.mass;
+    settings.mMassPropertiesOverride.mInertia = JPH::Mat44::sScale(type == PlaneType::Trainer ? Vec3(2100, 5500, 3300)
+        : spec.mass * Vec3(spec.length * spec.length * .025f, (spec.span * spec.span + spec.length * spec.length) * .03f, spec.span * spec.span * .035f));
     settings.mLinearDamping = .005f;
     settings.mAngularDamping = .05f;
-    settings.mMaxLinearVelocity = 160;
-    settings.mMaxAngularVelocity = 5;
+    settings.mMaxLinearVelocity = type == PlaneType::F18 ? 350 : type == PlaneType::Boeing747 ? 240 : 160;
+    settings.mMaxAngularVelocity = type == PlaneType::Boeing747 ? 1.5f : 5;
     settings.mFriction = .6f;
     settings.mRestitution = .05f;
-    settings.mAllowSleeping = false;
+    settings.mAllowSleeping = true;
     settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
     settings.mEnhancedInternalEdgeRemoval = true;
     body_ = world_.impl_->add_body(settings);
+    if (type == PlaneType::Trainer) {
     wheels_[0].mount = Vec3(-1.25f, -.48f, .32f);
     wheels_[1].mount = Vec3(1.25f, -.48f, .32f);
     wheels_[2].mount = Vec3(0, -.48f, -2);
+    } else {
+        const float track = type == PlaneType::F18 ? 1.6f : 5.5f;
+        wheels_[0].mount = Vec3(-track, -spec.gear_mount, spec.length * .06f);
+        wheels_[1].mount = Vec3(track, -spec.gear_mount, spec.length * .06f);
+        wheels_[2].mount = Vec3(0, -spec.gear_mount, -spec.length * .30f);
+    }
     wheels_[2].front = true;
-    reset(Vec3(0, parked_height, 0), 0);
+    reset(Vec3(0, parking_height(), 0), 0);
+}
+std::array<Vec3, 5> Plane::exit_offsets() const {
+    if (type_ == PlaneType::Trainer) return {Vec3(-1.9f, 0, -1.8f), Vec3(1.9f, 0, -1.8f), Vec3(-6.3f, 0, 0), Vec3(6.3f, 0, 0), Vec3(0, 0, 4.2f)};
+    const float side = specs().body_radius + 1, nose = -specs().length * .30f;
+    return {Vec3(-side, 0, nose), Vec3(side, 0, nose), Vec3(-specs().span / 2 - 1, 0, 0),
+        Vec3(specs().span / 2 + 1, 0, 0), Vec3(0, 0, specs().length / 2 + 1)};
+}
+Vec3 Plane::boarding_position() const {
+    Vec3 door = exit_offsets()[0]; door.SetY(-parking_height() + .08f);
+    return position() + rotate(door);
+}
+std::vector<std::unique_ptr<Plane>> parked_aircraft(PhysicsWorld& world, const Environment& environment) {
+    std::vector<std::unique_ptr<Plane>> result;
+    for (std::size_t a = 0; a < airports.size(); ++a) {
+        const auto& airport = airports[a];
+        for (int i = 0; i < 5 + (a == 1); ++i) {
+            const PlaneType type = i == 4 ? PlaneType::Boeing747 : i == 2 || i == 3 ? PlaneType::F18 : PlaneType::Trainer;
+            auto plane = std::make_unique<Plane>(world, type);
+            const float offset[] = {-180, -140, 0, 40, 100};
+            const float x = i == 5 ? airport.plane_x() : airport.center_x - (i == 4 ? 78 : 70);
+            const float z = i == 5 ? airport.plane_z() : airport.runway_z + offset[i];
+            plane->reset(Vec3(x, environment.terrain_height(x, z) + plane->parking_height(), z), airport.yaw());
+            result.push_back(std::move(plane));
+        }
+    }
+    return result;
 }
 Vec3 Plane::position() const { return world_.impl_->system.GetBodyInterface().GetCenterOfMassPosition(body_); }
 Vec3 Plane::velocity() const { return world_.impl_->system.GetBodyInterface().GetLinearVelocity(body_); }
@@ -300,21 +369,24 @@ void Plane::reset(const Vec3& center, float yaw, const Vec3& speed, float thrott
     refresh_gear();
 }
 void Plane::refresh_gear() {
+    const float rest = specs().gear_rest, radius = specs().wheel_radius;
     const Vec3 down = -rotate(Vec3::sAxisY());
     for (auto& wheel : wheels_) {
         const Vec3 mount = position() + rotate(wheel.mount);
         GroundHit hit;
-        wheel.grounded = world_.cast_ground(mount, down, .66f + tire_radius, hit)
+        wheel.grounded = world_.cast_ground(mount, down, rest + .16f + radius, hit)
             && hit.normal.Dot(-down) > .45f;
-        const float length = wheel.grounded ? clamp(hit.distance - tire_radius, .34f, .66f) : .66f;
+        const float length = wheel.grounded ? clamp(hit.distance - radius, rest - .16f, rest + .16f) : rest + .16f;
         wheel.center = mount + down * length;
-        wheel.compression = .5f - length;
-        wheel.ground_point = wheel.grounded ? hit.point : wheel.center + down * tire_radius;
+        wheel.compression = rest - length;
+        wheel.ground_point = wheel.grounded ? hit.point : wheel.center + down * radius;
         wheel.ground_normal = wheel.grounded ? hit.normal : -down;
         wheel.normal_force = 0;
     }
 }
 void Plane::step(FlightInput input, float dt) {
+    const auto& spec = specs();
+    const float mass_scale = spec.mass / 850;
     auto& physics = world_.impl_->system.GetBodyInterface();
     const Vec3 v = velocity(), center = position();
     // Large collision decelerations disable the engine. Ordinary gear
@@ -334,7 +406,7 @@ void Plane::step(FlightInput input, float dt) {
     stalled_ = forward_speed > 8 && std::abs(wing_alpha) > .28f;
     const float density = 1.225f * std::exp(-std::max(center.GetY(), 0.0f) / 8500);
     const float q = .5f * density * airspeed_ * airspeed_;
-    const float area = 16;
+    const float area = spec.wing_area;
     // L = q*S*Cl; Cd includes parasite and induced drag. Beyond the stall
     // angle, lift rolls off and drag rises, including backwards/inverted flight.
     float cl = .25f + 5.2f * clamp(wing_alpha, -.28f, .28f) + (input.flaps ? .35f : 0);
@@ -346,24 +418,27 @@ void Plane::step(FlightInput input, float dt) {
     if (airspeed_ > .5f) {
         const Vec3 flow = v / airspeed_;
         const Vec3 lift_direction = right.Cross(flow).NormalizedOr(up);
-        const float lift = clamp(q * area * cl, -45000, 45000);
+        const float lift = clamp(q * area * cl, -spec.mass * 53, spec.mass * 53);
         physics.AddForce(body_, lift_direction * lift - flow * (q * area * cd)
             - right * (local.GetX() * q * .08f));
     }
-    // Fixed-pitch propeller thrust falls with forward speed.
-    physics.AddForce(body_, fwd * (throttle_ * 3200 * clamp(1 - forward_speed / 115, .15f, 1)));
-    const float authority = clamp(std::max(forward_speed, 0.0f) / 28, 0, 2);
+    // Jets retain thrust farther into flight; the fighter has the higher speed envelope.
+    const float thrust_speed = type_ == PlaneType::Trainer ? 115 : spec.reference_speed * (type_ == PlaneType::F18 ? 9 : 5);
+    physics.AddForce(body_, fwd * (throttle_ * spec.thrust * clamp(1 - forward_speed / thrust_speed, .15f, 1)));
+    const float authority = clamp(std::max(forward_speed, 0.0f) / spec.reference_speed, 0, 2);
     const float sideslip = std::atan2(local.GetX(), std::max(std::abs(forward_speed), 1.0f));
-    const float pitch_moment = clamp(q * area * 1.45f * 1.25f * (.025f + input.pitch * .20f - alpha_), -16000, 16000);
-    const Vec3 torque(pitch_moment - angular.GetX() * (800 + 2400 * authority),
-        input.yaw * 2400 * authority - sideslip * q * 8 - angular.GetY() * (600 + 2000 * authority),
-        input.roll * 6000 * authority - angular.GetZ() * (700 + 3500 * authority));
+    const float chord = type_ == PlaneType::Trainer ? 1.45f : spec.wing_area / spec.span;
+    const float pitch_moment = clamp(q * area * chord * 1.25f * (.025f + input.pitch * (type_ == PlaneType::Trainer ? .20f : .40f) - alpha_), -16000 * mass_scale, 16000 * mass_scale);
+    const float damping = mass_scale * (type_ == PlaneType::Boeing747 ? 8 : type_ == PlaneType::F18 ? 2 : 1);
+    const Vec3 torque(pitch_moment - angular.GetX() * (800 + 2400 * authority) * damping,
+        input.yaw * 2400 * authority * mass_scale - sideslip * q * 8 * (spec.span / 11) - angular.GetY() * (600 + 2000 * authority) * damping,
+        input.roll * 6000 * authority * mass_scale * (spec.span / 11) - angular.GetZ() * (700 + 3500 * authority) * damping);
     physics.AddTorque(body_, basis * torque);
     refresh_gear();
     for (auto& wheel : wheels_) {
         if (!wheel.grounded) continue;
         const Vec3 point_velocity = v + (basis * angular).Cross(wheel.ground_point - center);
-        wheel.normal_force = clamp(wheel.compression * 42000 - point_velocity.Dot(up) * 5000, 0, 16000);
+        wheel.normal_force = clamp((wheel.compression * 42000 - point_velocity.Dot(up) * 5000) * mass_scale, 0, 16000 * mass_scale);
         physics.AddImpulse(body_, up * (wheel.normal_force * dt), wheel.ground_point);
         const auto steer = Quat::sRotation(up, wheel.front ? input.yaw * .45f : 0);
         Vec3 wheel_fwd = steer * fwd;
@@ -371,12 +446,12 @@ void Plane::step(FlightInput input, float dt) {
         const Vec3 side = wheel_fwd.Cross(wheel.ground_normal);
         const float speed = point_velocity.Dot(wheel_fwd);
         const float grip = wheel.normal_force * dt;
-        const float sideways = clamp(-point_velocity.Dot(side) * (850.0f / 3), -grip, grip);
+        const float sideways = clamp(-point_velocity.Dot(side) * (spec.mass / 3), -grip, grip);
         const float rolling = input.brake || input.parking_brake ? 1.0f : .015f;
         const float remaining = std::sqrt(std::max(0.0f, grip * grip - sideways * sideways));
-        const float longitudinal = clamp(-speed * (850.0f / 3), -remaining * rolling, remaining * rolling);
+        const float longitudinal = clamp(-speed * (spec.mass / 3), -remaining * rolling, remaining * rolling);
         physics.AddImpulse(body_, side * sideways + wheel_fwd * longitudinal, wheel.ground_point);
-        wheel.spin = std::remainder(wheel.spin + speed * dt / tire_radius, 6.2831853f);
+        wheel.spin = std::remainder(wheel.spin + speed * dt / spec.wheel_radius, 6.2831853f);
     }
 }
 
@@ -409,6 +484,11 @@ const std::array<HumanPart, body_part_count>& human_parts() {
     return parts;
 }
 bool hinge_part(std::size_t part) { return part == 4 || part == 7 || part == 10 || part == 13; }
+Quat weapon_rotation(float yaw, WeaponType type, Vec3 aim, float sprint) {
+    const float pitch = aim.LengthSq() > .01f ? std::asin(std::clamp(aim.GetY(), -.9f, .9f))
+        : (type == WeaponType::AK47 ? -.35f : -.25f) - sprint * .15f;
+    return Quat::sRotation(Vec3::sAxisY(), yaw) * Quat::sRotation(Vec3::sAxisX(), pitch);
+}
 }
 
 struct Character::Impl {
@@ -417,7 +497,10 @@ struct Character::Impl {
     // Jolt's ragdoll owns its bodies and joints; these never enter the world's static-body list.
     JPH::Ref<JPH::Ragdoll> rig;
     Vec3 desired_velocity{0, 0, 0}, impact_direction{0, 0, -1};
+    Vec3 impact_velocity{0, 0, 0}, aim_direction{0, 0, 0};
     float ragdoll_time = 0, settled_time = 0, hit_cooldown = 0;
+    float sprint_amount = 0;
+    WeaponType weapon = WeaponType::Unarmed;
     bool enabled = true, swimming = false;
     ~Impl() { clear_ragdoll(); }
     void clear_ragdoll() {
@@ -487,15 +570,22 @@ std::array<BodyPartPose, body_part_count> Character::body_parts() const {
     }
     const Vec3 speed = velocity();
     const float moving = std::clamp(std::hypot(speed.GetX(), speed.GetZ()) / (swimming() ? 2.0f : 6.5f), 0.0f, 1.0f);
-    const float swing = std::sin(gait_) * .65f * moving;
+    const float running = swimming() ? 0 : impl_->sprint_amount;
+    const float swing = std::sin(gait_) * (.65f + running * .45f) * moving;
     std::array<float, body_part_count> pitch{};
-    pitch[3] = -swing * .65f; pitch[6] = swing * .65f;
-    pitch[4] = pitch[7] = .12f + .25f * moving;
+    pitch[1] = -.20f * running; pitch[2] = .12f * running;
+    pitch[3] = -swing * (.65f + running * .15f); pitch[6] = swing * (.65f + running * .15f);
+    pitch[4] = pitch[7] = .12f + .25f * moving + running * .9f;
     pitch[9] = swing; pitch[12] = -swing;
-    pitch[10] = -.05f - std::max(0.0f, -swing) * 1.1f;
-    pitch[13] = -.05f - std::max(0.0f, swing) * 1.1f;
+    pitch[10] = -.05f - running * .15f - std::max(0.0f, -swing) * (1.1f + running * .45f);
+    pitch[13] = -.05f - running * .15f - std::max(0.0f, swing) * (1.1f + running * .45f);
     pitch[11] = -pitch[9] - pitch[10]; pitch[14] = -pitch[12] - pitch[13];
     std::array<float, body_part_count> roll{};
+    std::array<float, body_part_count> turn{};
+    turn[1] = std::sin(gait_) * running * .06f;
+    if (!swimming() && weapon_data(impl_->weapon).two_handed && impl_->aim_direction.LengthSq() > .01f) {
+        turn[1] = -.4f; turn[2] = .4f;
+    }
     if (swimming()) {
         // Tread upright at rest; alternate crawl strokes and flutter kicks while moving.
         for (const int arm : {3, 6}) {
@@ -511,17 +601,57 @@ std::array<BodyPartPose, body_part_count> Character::body_parts() const {
         pitch[11] = pitch[14] = -.2f;
         pitch[2] = .8f * moving;
     }
-    const Vec3 feet = impl_->character->GetPosition() + Vec3(0, swimming() ? .06f * moving + .025f * std::sin(gait_ * 2) : 0, 0);
+    const Vec3 feet = impl_->character->GetPosition() + Vec3(0, swimming() ? .06f * moving + .025f * std::sin(gait_ * 2)
+        : running * .055f * std::abs(std::sin(gait_ * 2)), 0);
     const Quat root = Quat::sRotation(Vec3::sAxisY(), yaw_) * Quat::sRotation(Vec3::sAxisX(), swimming() ? -1.05f * moving : 0);
     for (std::size_t i = 0; i < pose.size(); ++i) {
         const auto& part = parts[i];
         const Quat rotation = part.parent < 0 ? root
-            : pose[part.parent].rotation * Quat::sRotation(Vec3::sAxisZ(), roll[i]) * Quat::sRotation(Vec3::sAxisX(), pitch[i]);
+            : pose[part.parent].rotation * Quat::sRotation(Vec3::sAxisY(), turn[i])
+                * Quat::sRotation(Vec3::sAxisZ(), roll[i]) * Quat::sRotation(Vec3::sAxisX(), pitch[i]);
         const Vec3 pivot = part.parent < 0 ? feet + Quat::sRotation(Vec3::sAxisY(), yaw_) * part.pivot
             : pose[part.parent].position + pose[part.parent].rotation * (part.pivot - parts[part.parent].center);
         pose[i] = {pivot + rotation * (part.center - part.pivot), rotation, part.size};
     }
+    const auto& gun = weapon_data(impl_->weapon);
+    const bool aiming = impl_->aim_direction.LengthSq() > .01f;
+    if (impl_->weapon != WeaponType::Unarmed && !swimming() && (gun.two_handed || aiming)) {
+        const Quat rotation = weapon_rotation(yaw_, impl_->weapon, impl_->aim_direction, running);
+        Vec3 grip;
+        if (aiming) {
+            const Vec3 offset = impl_->weapon == WeaponType::Pistol ? Vec3(.22f, -.04f, -.40f)
+                : impl_->weapon == WeaponType::SMG ? Vec3(.20f, -.07f, -.32f) : Vec3(.20f, -.06f, -.28f);
+            grip = feet + Quat::sRotation(Vec3::sAxisY(), yaw_) * Vec3(0, 1.4f, 0) + rotation * offset;
+        } else grip = feet + Quat::sRotation(Vec3::sAxisY(), yaw_) * (impl_->weapon == WeaponType::SMG
+            ? Vec3(.12f, 1.20f, -.23f) : Vec3(.08f, 1.22f, -.22f));
+        // Solve each arm to its grip, keeping the existing upper-arm and forearm lengths.
+        const auto arm = [&](int upper, Vec3 hand, float side) {
+            const Vec3 shoulder = pose[1].position + pose[1].rotation * (parts[upper].pivot - parts[1].center);
+            Vec3 wrist = hand + rotation * Vec3(0, .09f, 0);
+            const Vec3 direction = (wrist - shoulder).NormalizedOr(Vec3(0, 0, -1));
+            const float length = std::clamp((wrist - shoulder).Length(), .03f, .655f);
+            wrist = shoulder + direction * length;
+            Vec3 pole = Quat::sRotation(Vec3::sAxisY(), yaw_) * Vec3(side, -.55f, .25f);
+            pole = (pole - direction * pole.Dot(direction)).NormalizedOr(Vec3::sAxisX());
+            const float along = (.34f * .34f - .32f * .32f + length * length) / (2 * length);
+            const Vec3 elbow = shoulder + direction * along + pole * std::sqrt(std::max(0.f, .34f * .34f - along * along));
+            pose[upper] = {(shoulder + elbow) / 2, Quat::sFromTo(-Vec3::sAxisY(), (elbow - shoulder).Normalized()), parts[upper].size};
+            pose[upper + 1] = {(elbow + wrist) / 2, Quat::sFromTo(-Vec3::sAxisY(), (wrist - elbow).Normalized()), parts[upper + 1].size};
+            pose[upper + 2] = {wrist - rotation * Vec3(0, .09f, 0), rotation, parts[upper + 2].size};
+        };
+        arm(6, grip, 1);
+        arm(3, pose[8].position + rotation * gun.support_grip, -1);
+    }
     return pose;
+}
+
+BodyPartPose Character::held_weapon() const {
+    const auto hand = body_parts()[int(BodyPart::RightHand)];
+    const auto& gun = weapon_data(impl_->weapon);
+    const Quat rotation = gun.two_handed || impl_->aim_direction.LengthSq() > .01f
+        ? weapon_rotation(yaw_, impl_->weapon, impl_->aim_direction, impl_->sprint_amount)
+        : hand.rotation * Quat::sRotation(Vec3::sAxisX(), -1.2f);
+    return {hand.position, rotation, {.1f, .11f, gun.length}};
 }
 
 void Character::ragdoll(const Vec3& inherited_velocity, const Vec3& impulse) {
@@ -605,6 +735,7 @@ void Character::ragdoll(const Vec3& inherited_velocity, const Vec3& impulse) {
     if (!impl_->rig) throw std::runtime_error("Jolt could not allocate humanoid ragdoll");
     impl_->rig->AddToPhysicsSystem(JPH::EActivation::Activate);
     impl_->rig->SetLinearAndAngularVelocity(inherited_velocity, Vec3::sZero());
+    impl_->impact_velocity = inherited_velocity;
     physics.AddImpulse(impl_->rig->GetBodyID(1), impulse);
     Vec3 direction = inherited_velocity + impulse * .02f;
     direction.SetY(0);
@@ -640,6 +771,45 @@ void Character::hit_by(const Car& car, float dt) {
     const Vec3 direction = relative.Normalized();
     const Vec3 inherited = walking_velocity + relative * .65f + Vec3(0, std::clamp(speed * .09f, .5f, 3.5f), 0);
     ragdoll(inherited, direction * std::min(speed * 2.0f, 65.0f));
+    take_damage(std::max(0.f, speed - 8) * 3);
+}
+
+void Character::take_damage(float amount, BodyPart part, Vec3 impulse) {
+    if (!impl_->enabled || !std::isfinite(amount) || amount <= 0) return;
+    health_ = std::max(0.f, health_ - amount);
+    if (swimming()) { if (alive()) return; impl_->swimming = false; }
+    if (!ragdolling()) ragdoll(velocity());
+    if (impl_->rig) {
+        const int index = std::clamp(int(part), 0, int(BodyPart::Count) - 1);
+        world_.impl_->system.GetBodyInterface().AddImpulse(impl_->rig->GetBodyID(index), impulse);
+        impl_->settled_time = 0;
+    }
+}
+
+bool Character::raycast(Vec3 origin, Vec3 direction, float& distance, BodyPart& part) const {
+    if (!impl_->enabled || direction.LengthSq() < .00001f || distance <= 0) return false;
+    direction = direction.Normalized();
+    const Vec3 center = position() + Vec3(0, .9f, 0);
+    const float along = std::clamp((center - origin).Dot(direction), 0.f, distance);
+    if ((center - origin - direction * along).LengthSq() > 4) return false;
+    bool hit = false;
+    const auto poses = body_parts();
+    for (std::size_t i = 0; i < poses.size(); ++i) {
+        const auto& pose = poses[i];
+        const Quat inverse = pose.rotation.Conjugated();
+        const Vec3 local = inverse * (origin - pose.position), ray = inverse * direction, half = pose.size / 2;
+        float near = 0, far = distance;
+        bool intersects = true;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (std::abs(ray[axis]) < .00001f) { if (std::abs(local[axis]) > half[axis]) intersects = false; }
+            else {
+                const float a = (-half[axis] - local[axis]) / ray[axis], b = (half[axis] - local[axis]) / ray[axis];
+                near = std::max(near, std::min(a, b)); far = std::min(far, std::max(a, b));
+            }
+        }
+        if (intersects && near <= far && near < distance) { distance = near; part = BodyPart(i); hit = true; }
+    }
+    return hit;
 }
 
 void Character::reset(const Vec3& feet, float yaw) {
@@ -648,6 +818,9 @@ void Character::reset(const Vec3& feet, float yaw) {
     impl_->enabled = true;
     yaw_ = yaw; gait_ = 0;
     impl_->desired_velocity = Vec3::sZero();
+    impl_->aim_direction = Vec3::sZero();
+    impl_->sprint_amount = 0;
+    impl_->weapon = WeaponType::Unarmed;
     impl_->character->SetPosition(feet);
     impl_->character->SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw));
     impl_->character->SetLinearVelocity(Vec3::sZero());
@@ -669,7 +842,7 @@ bool Character::can_stand_at(const Vec3& feet) const {
 void Character::step(FootInput input, float dt) {
     if (!impl_->enabled) return;
     impl_->hit_cooldown = std::max(0.0f, impl_->hit_cooldown - dt);
-    if (impl_->environment) {
+    if (impl_->environment && alive()) {
         const Vec3 feet = position();
         const float ground = impl_->environment->terrain_height(feet.GetX(), feet.GetZ());
         const float chest = impl_->rig ? body_parts()[static_cast<std::size_t>(BodyPart::Torso)].position.GetY() : feet.GetY() + .95f;
@@ -681,7 +854,11 @@ void Character::step(FootInput input, float dt) {
     if (impl_->rig) {
         auto& physics = world_.impl_->system.GetBodyInterface();
         impl_->ragdoll_time += dt;
-        const bool brace = impl_->ragdoll_time < .9f;
+        const bool brace = alive() && impl_->ragdoll_time < .9f;
+        const Vec3 current_velocity = velocity();
+        if (alive() && impl_->impact_velocity.GetY() < -8 && current_velocity.GetY() - impl_->impact_velocity.GetY() > 5)
+            take_damage((-impl_->impact_velocity.GetY() - 7) * 5);
+        impl_->impact_velocity = current_velocity;
         bool settled = true;
         for (std::size_t i = 1; i < body_part_count; ++i) {
             auto* constraint = impl_->rig->GetConstraint(static_cast<int>(i - 1));
@@ -703,7 +880,7 @@ void Character::step(FootInput input, float dt) {
         for (const auto& body : impl_->rig->GetBodyIDs())
             settled &= physics.GetLinearVelocity(body).LengthSq() < .5f && physics.GetAngularVelocity(body).LengthSq() < 1.0f;
         impl_->settled_time = settled && grounded() ? impl_->settled_time + dt : 0;
-        if (impl_->ragdoll_time > 2.8f && impl_->settled_time > .7f) {
+        if (alive() && impl_->ragdoll_time > 2.8f && impl_->settled_time > .7f) {
             const Vec3 pelvis = physics.GetPosition(impl_->rig->GetBodyID(0));
             const Vec3 facing = physics.GetRotation(impl_->rig->GetBodyID(1)) * Vec3(0, 0, -1);
             const float yaw = std::hypot(facing.GetX(), facing.GetZ()) > .1f ? std::atan2(-facing.GetX(), -facing.GetZ()) : yaw_;
@@ -721,9 +898,13 @@ void Character::step(FootInput input, float dt) {
         return;
     }
     auto& character = *impl_->character;
+    impl_->aim_direction = input.aim_direction.NormalizedOr(Vec3::sZero());
+    impl_->weapon = input.weapon;
     input.direction.SetY(0);
     if (input.direction.LengthSq() > 1) input.direction = input.direction.Normalized();
-    const Vec3 desired = input.direction * (swimming() ? (input.sprint ? 3.4f : 1.8f) : (input.sprint ? 6.5f : 3.2f));
+    const float run_target = input.sprint && !swimming() && input.direction.LengthSq() > .1f && grounded() ? 1.f : 0.f;
+    impl_->sprint_amount += (run_target - impl_->sprint_amount) * (1 - std::exp(-10 * dt));
+    const Vec3 desired = input.direction * (swimming() ? (input.sprint ? 3.4f : 1.8f) : (input.sprint ? 7.3f : 3.2f));
     const float acceleration = swimming() ? 4.0f : character.IsSupported() ? 18.0f : 4.0f;
     impl_->desired_velocity += (desired - impl_->desired_velocity) * (1 - std::exp(-acceleration * dt));
     character.UpdateGroundVelocity();
@@ -747,14 +928,15 @@ void Character::step(FootInput input, float dt) {
         ragdoll(impl_->desired_velocity + Vec3(0, vertical_speed, 0));
         return;
     }
-    if (input.direction.LengthSq() > 0.01f) {
-        const float target = std::atan2(-input.direction.GetX(), -input.direction.GetZ());
+    if (impl_->aim_direction.LengthSq() > .01f || input.direction.LengthSq() > 0.01f) {
+        const Vec3 facing = impl_->aim_direction.LengthSq() > .01f ? impl_->aim_direction : input.direction;
+        const float target = std::atan2(-facing.GetX(), -facing.GetZ());
         yaw_ += std::clamp(std::remainder(target - yaw_, 6.28318530718f), -12 * dt, 12 * dt);
         character.SetRotation(Quat::sRotation(Vec3::sAxisY(), yaw_));
     }
     const auto speed = velocity();
     if (swimming()) gait_ += dt * (2.0f + std::hypot(speed.GetX(), speed.GetZ()) * 1.7f);
-    else if (grounded()) gait_ += std::hypot(speed.GetX(), speed.GetZ()) * dt * 2.3f;
+    else if (grounded()) gait_ += std::hypot(speed.GetX(), speed.GetZ()) * dt * (2.3f - impl_->sprint_amount * .5f);
 }
 
 Vec3 Car::position() const { return world_.impl_->system.GetBodyInterface().GetCenterOfMassPosition(body_); }

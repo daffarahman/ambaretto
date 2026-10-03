@@ -12,8 +12,8 @@ struct Airport {
     static constexpr float elevation = 4;
     static constexpr float runway_half_length = 168;
     static constexpr float runway_half_width = 12;
-    float grounds_half_length() const { return international ? 575 : 215; }
-    float runway_length() const { return international ? 1100 : runway_half_length * 2; }
+    float grounds_half_length() const { return international ? 575 : 385; }
+    float runway_length() const { return international ? 1100 : 720; }
     float runway_width() const { return international ? 44 : runway_half_width * 2; }
     int runway_count() const { return 1; }
     AirportPoint direction(int = 0) const { return {0, departure}; }
@@ -21,7 +21,7 @@ struct Airport {
         const auto d = direction(runway);
         return {center_x + d.x * along - d.z * across, runway_z + d.z * along + d.x * across};
     }
-    float plane_along() const { return international ? -runway_length() / 2 + 40 : -140; }
+    float plane_along() const { return -runway_length() / 2 + 40; }
     float plane_x() const { return point(plane_along()).x; }
     float plane_z() const { return point(plane_along()).z; }
     float apron_x() const { return center_x + 42; }
@@ -34,9 +34,13 @@ struct Airport {
     }
     float yaw(int runway = 0) const { const auto d = direction(runway); return std::atan2(-d.x, -d.z); }
     bool contains(float x, float z) const {
-        return std::abs(x - center_x) <= grounds_half_width && std::abs(z - runway_z) <= grounds_half_length();
+        return (std::abs(x - center_x) <= grounds_half_width && std::abs(z - runway_z) <= grounds_half_length())
+            || (x >= center_x - 115 && x <= center_x - 38 && std::abs(z - runway_z + 30) <= 190);
     }
     bool pavement(float x, float z) const {
+        // Aircraft stands on the west apron leave the runway and public access clear.
+        if (x >= center_x - 115 && x <= center_x - 38 && std::abs(z - runway_z + 30) <= 190) return true;
+        if (x >= center_x - 78 && x <= center_x && std::abs(z - runway_z + 200) <= 8) return true;
         if (international) {
             if (std::abs(x - apron_x()) <= 15 && std::abs(z - apron_z()) <= 60) return true;
             const auto near_segment = [&](AirportPoint a, AirportPoint b, float width) {
@@ -57,8 +61,8 @@ struct Airport {
             return false;
         }
         const float along = departure * (z - runway_z);
-        return (std::abs(x - center_x) <= runway_half_width && std::abs(z - runway_z) <= runway_half_length)
-            || (std::abs(x - apron_x()) <= 15 && along >= -140 && along <= 156)
+        return (std::abs(x - center_x) <= runway_half_width && std::abs(z - runway_z) <= runway_length() / 2)
+            || (std::abs(x - apron_x()) <= 15 && along >= plane_along() && along <= runway_length() / 2 - 12)
             || (x >= center_x && x <= apron_x() && std::abs(z - plane_z()) <= 5);
     }
     bool flight_path(float x, float z) const {
@@ -73,7 +77,7 @@ struct Airport {
             return false;
         }
         const float along = departure * (z - runway_z);
-        return std::abs(x - center_x) <= 30 && along >= -200 && along <= 600;
+        return std::abs(x - center_x) <= 38 && along >= -runway_length() / 2 - 80 && along <= runway_length() / 2 + 600;
     }
 };
 inline constexpr std::array<Airport, 2> airports{{

@@ -1,7 +1,16 @@
 #pragma once
 #include "vehicle.hpp"
+#include <algorithm>
+#include <vector>
 
 namespace forza {
+enum class PlaneType { Trainer, F18, Boeing747 };
+struct PlaneSpecs {
+    const char* name;
+    float span, length, mass, wing_area, thrust, reference_speed;
+    float body_radius, gear_mount, gear_rest, wheel_radius;
+};
+const PlaneSpecs& plane_specs(PlaneType type);
 struct FlightInput {
     float throttle = 0; // Rate: positive increases the retained throttle.
     float pitch = 0;    // Positive pulls the nose up.
@@ -15,7 +24,7 @@ struct FlightInput {
 // A dynamic Jolt rigid body with aerodynamic forces and three raycast struts.
 class Plane {
 public:
-    explicit Plane(PhysicsWorld& world);
+    explicit Plane(PhysicsWorld& world, PlaneType type = PlaneType::Trainer);
     void reset(const Vec3& center, float yaw = 0,
                const Vec3& velocity = Vec3::sZero(), float throttle = 0);
     void step(FlightInput input, float dt = fixed_step);
@@ -25,6 +34,12 @@ public:
     Vec3 rotate(const Vec3& local) const { return rotation() * local; }
     Vec3 forward() const { return rotate(Vec3(0, 0, -1)); }
     JPH::BodyID body_id() const { return body_; }
+    PlaneType type() const { return type_; }
+    const PlaneSpecs& specs() const { return plane_specs(type_); }
+    float parking_height() const { return specs().gear_mount + specs().gear_rest + specs().wheel_radius - .08f; }
+    float camera_scale() const { return std::max(1.0f, specs().length / 10); }
+    Vec3 boarding_position() const;
+    std::array<Vec3, 5> exit_offsets() const;
     float throttle() const { return throttle_; }
     float airspeed() const { return airspeed_; }
     float angle_of_attack() const { return alpha_; }
@@ -38,10 +53,12 @@ public:
 private:
     void refresh_gear();
     PhysicsWorld& world_;
+    PlaneType type_;
     JPH::BodyID body_;
     std::array<Wheel, 3> wheels_{};
     Vec3 previous_velocity_{0, 0, 0};
     float throttle_ = 0, airspeed_ = 0, alpha_ = 0, propeller_angle_ = 0;
     bool stalled_ = false, damaged_ = false;
 };
+std::vector<std::unique_ptr<Plane>> parked_aircraft(PhysicsWorld& world, const Environment& environment);
 } // namespace forza

@@ -52,6 +52,7 @@ public:
     PhysicsWorld& operator=(const PhysicsWorld&) = delete;
     bool cast_ground(const Vec3& origin, const Vec3& direction,
                      float distance, GroundHit& hit) const;
+    bool cast_ray(const Vec3& origin, const Vec3& direction, float distance, GroundHit& hit) const;
     void step(float dt = fixed_step);
     float camera_fraction(const Vec3& origin, const Vec3& offset, JPH::BodyID ignore = {}) const;
 private:

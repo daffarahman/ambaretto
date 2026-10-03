@@ -2,6 +2,7 @@
 #include "environment.hpp"
 #include "plane.hpp"
 #include "player.hpp"
+#include "third_person_camera.hpp"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -201,10 +202,80 @@ void entry_exit_and_recovery() {
     player.reset();
     require(player.driving() && !player.flying(), "full reset did not restore driving mode");
 }
+void parked_fleet_and_types() {
+    Environment map;
+    PhysicsWorld world(map);
+    Car car(world);
+    Plane starter(world);
+    auto fleet = parked_aircraft(world, map);
+    Player player(world, car, map, &starter, nullptr, nullptr, &fleet);
+    require(fleet.size() == 11, "airports did not receive additional aircraft");
+    for (int i = 0; i < 240; ++i) player.step({}, {});
+    for (const auto& airport : airports) {
+        int trainers = 0, fighters = 0, airliners = 0;
+        for (const auto& plane : fleet) if (airport.contains(plane->position().GetX(), plane->position().GetZ())) {
+            require(plane->grounded() && plane->velocity().Length() < .2f && !plane->damaged(),
+                "parked aircraft collided, fell through apron or rolled away");
+            require(airport.pavement(plane->position().GetX(), plane->position().GetZ()), "aircraft is not parked on pavement");
+            trainers += plane->type() == PlaneType::Trainer;
+            fighters += plane->type() == PlaneType::F18;
+            airliners += plane->type() == PlaneType::Boeing747;
+        }
+        require(trainers >= 2 && fighters == 2 && airliners == 1, "airport is missing one of the aircraft types");
+    }
+    require(player.interact() == Interaction::Exited, "could not exit car for fleet boarding");
+    for (const auto& plane : fleet) {
+        player.character().reset(plane->boarding_position());
+        require(player.interact() == Interaction::Entered && player.flying() && &player.plane() == plane.get(),
+            "could not board selected parked aircraft");
+        require(player.interact() == Interaction::Exited && player.character().can_stand_at(player.position()),
+            "aircraft exit was blocked or overlaps its collision body");
+    }
+    for (const auto type : {PlaneType::F18, PlaneType::Boeing747}) {
+        auto& plane = **std::find_if(fleet.begin(), fleet.end(), [&](const auto& p) { return p->type() == type; });
+        const auto parked = plane.position();
+        player.character().reset(plane.boarding_position());
+        require(player.interact() == Interaction::Entered && &player.plane() == &plane, "boarding lost chosen plane type");
+        for (const auto& airport : airports) {
+            const float along = airport.plane_along() + 90;
+            const auto p = airport.point(along);
+            plane.reset(Vec3(p.x, Airport::elevation + plane.parking_height(), p.z), airport.yaw());
+            float takeoff = -1;
+            const Vec3 start = plane.position(), departure = plane.forward();
+            for (int i = 0; i < 3600; ++i) {
+                FlightInput input; input.throttle = 1; input.flaps = true;
+                input.pitch = plane.airspeed() > plane.specs().reference_speed * .8f ? .5f : 0;
+                player.step({}, {}, fixed_step, input);
+                if (takeoff < 0 && !plane.grounded() && plane.position().GetY() > Airport::elevation + plane.parking_height() + 2)
+                    takeoff = (plane.position() - start).Dot(departure);
+                if (plane.position().GetY() > 55) break;
+            }
+            std::cout << plane.specs().name << " at " << airport.name << ": takeoff " << takeoff << ", height " << plane.position().GetY()
+                << ", speed " << plane.airspeed() << '\n';
+            require(player.flying() && takeoff > 0 && takeoff < airport.runway_length() - 130
+                && plane.position().GetY() > 20 && !plane.damaged(), "new aircraft cannot take off and climb from airport");
+        }
+        const Vec3 inherited = plane.velocity();
+        require(player.interact() == Interaction::Exited && player.character().ragdolling()
+            && (player.character().velocity() - inherited).Length() < 3.3f, "new aircraft airborne bailout lost momentum");
+        plane.reset(parked, airports[0].yaw());
+        player.character().reset(plane.boarding_position());
+        require(player.interact() == Interaction::Entered, "could not reboard new aircraft");
+        plane.reset(Vec3(2500, -.1f, 1800));
+        player.step({}, {});
+        require(player.on_foot() && player.character().swimming(), "new aircraft entering water did not eject swimmer");
+        player.recover_plane();
+        require(plane.type() == type && !plane.damaged() && plane.velocity().Length() < .01f, "recovery lost aircraft type or state");
+    }
+    ThirdPersonCamera camera;
+    require((camera.desired_position(Vec3::sZero(), false, true, 7) - Vec3::sZero()).Length() > 100,
+        "airliner flight camera does not frame larger aircraft");
+    std::cout << "Aircraft fleet: all types at both airports, boarding, exits, takeoff, water and recovery passed\n";
+}
 }
 int main() {
     try {
-        airport_and_takeoff(); flight_controls_and_gravity(); landing_brakes_and_collisions(); entry_exit_and_recovery();
+        airport_and_takeoff(); flight_controls_and_gravity(); landing_brakes_and_collisions(); entry_exit_and_recovery(); parked_fleet_and_types();
         std::cout << "All airport and flight checks passed.\n";
         return 0;
     } catch (const std::exception& e) {

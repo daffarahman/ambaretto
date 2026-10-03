@@ -1,6 +1,7 @@
 #pragma once
 #include "vehicle.hpp"
 #include "plane.hpp"
+#include "weapons.hpp"
 
 namespace forza {
 class Traffic;
@@ -9,6 +10,8 @@ struct FootInput {
     Vec3 direction{0, 0, 0};
     bool sprint = false;
     bool jump = false;
+    Vec3 aim_direction{0, 0, 0};
+    WeaponType weapon = WeaponType::Unarmed;
 };
 
 enum class BodyPart {
@@ -40,10 +43,16 @@ public:
     void ragdoll(const Vec3& inherited_velocity, const Vec3& impulse = Vec3::sZero());
     void hit_by(const Car& car, float dt = fixed_step);
     std::array<BodyPartPose, static_cast<std::size_t>(BodyPart::Count)> body_parts() const;
+    BodyPartPose held_weapon() const;
     bool can_stand_at(const Vec3& feet) const;
     Vec3 position() const;
     Vec3 velocity() const;
     bool grounded() const;
+    float health() const { return health_; }
+    bool alive() const { return health_ > 0; }
+    void revive() { health_ = 100; }
+    void take_damage(float amount, BodyPart part = BodyPart::Torso, Vec3 impulse = Vec3::sZero());
+    bool raycast(Vec3 origin, Vec3 direction, float& distance, BodyPart& part) const;
     float yaw() const { return yaw_; }
     float gait() const { return gait_; }
     Vec3 forward() const { return Quat::sRotation(Vec3::sAxisY(), yaw_) * Vec3(0, 0, -1); }
@@ -52,6 +61,7 @@ private:
     PhysicsWorld& world_;
     std::unique_ptr<Impl> impl_;
     float yaw_ = 0, gait_ = 0;
+    float health_ = 100;
 };
 
 enum class Interaction { Entered, Exited, TooFast, TooFar, Blocked };
@@ -59,8 +69,9 @@ enum class EntryVehicle { None, Car, Plane };
 class Player {
 public:
     Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane = nullptr, Traffic* traffic = nullptr,
-        Pedestrians* pedestrians = nullptr);
+        Pedestrians* pedestrians = nullptr, const std::vector<std::unique_ptr<Plane>>* aircraft = nullptr);
     void reset();
+    void respawn_on_foot(Vec3 feet, float yaw = 0);
     void recover_plane();
     Interaction interact();
     void step(Input driving, FootInput walking, float dt = fixed_step, FlightInput flight = {});
@@ -73,19 +84,28 @@ public:
     bool can_enter() const;
     Car& car() { return *car_; }
     const Car& car() const { return *car_; }
+    Plane& plane() { return *plane_; }
+    const Plane& plane() const { return *plane_; }
     Vec3 position() const { return driving_ ? car_->position() : flying_ ? plane_->position() : character_.position(); }
     Vec3 forward() const { return driving_ ? car_->forward() : flying_ ? plane_->forward() : character_.forward(); }
     Character& character() { return character_; }
     const Character& character() const { return character_; }
+    Weapons& weapons() { return weapons_; }
+    const Weapons& weapons() const { return weapons_; }
+    bool can_shoot() const { return on_foot() && character_.alive() && !character_.ragdolling() && !character_.swimming(); }
+    Shot shoot(Vec3 origin, Vec3 direction, bool held, bool pressed, bool aiming);
 private:
     PhysicsWorld& world_;
-    struct EntryTarget { EntryVehicle kind = EntryVehicle::None; Car* car = nullptr; };
+    struct EntryTarget { EntryVehicle kind = EntryVehicle::None; Car* car = nullptr; Plane* plane = nullptr; };
     EntryTarget entry_target() const;
     Car& starter_car_;
     Car* car_;
     const Environment& environment_;
     Character character_;
+    Weapons weapons_;
     Plane* plane_ = nullptr;
+    Plane* starter_plane_ = nullptr;
+    const std::vector<std::unique_ptr<Plane>>* aircraft_ = nullptr;
     Traffic* traffic_ = nullptr;
     Pedestrians* pedestrians_ = nullptr;
     bool driving_ = true;

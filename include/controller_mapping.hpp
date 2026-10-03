@@ -9,11 +9,12 @@ namespace forza {
 enum class Action {
     Forward, Backward, Left, Right, Brake, Interact, Sprint, Jump,
     ThrottleUp, ThrottleDown, RudderLeft, RudderRight, Flaps, Recover,
-    Map, Tuning, Pause, LookLeft, LookRight, LookUp, LookDown, ZoomIn, ZoomOut, Horn, Count
+    Map, Tuning, Pause, LookLeft, LookRight, LookUp, LookDown, ZoomIn, ZoomOut, Horn,
+    WeaponWheel, Fire, Aim, Reload, Count
 };
 constexpr int action_count = int(Action::Count);
 extern const std::array<const char*, action_count> action_labels;
-enum class BindingKind { Key, Button, Axis, JoystickButton, JoystickAxis, JoystickHat };
+enum class BindingKind { Key, Button, Axis, JoystickButton, JoystickAxis, JoystickHat, Mouse };
 struct Binding {
     BindingKind kind;
     int code;
@@ -23,6 +24,7 @@ struct Binding {
 // Include GLFW's raw USB joysticks, which may have no standardized gamepad mapping.
 struct ControllerState {
     std::array<bool, 512> keys{};
+    std::array<bool, 8> mouse{};
     struct Pad {
         bool connected = false, raw = false;
         std::string name;

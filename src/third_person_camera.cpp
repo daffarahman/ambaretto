@@ -5,9 +5,12 @@
 
 namespace forza {
 constexpr float two_pi = 6.28318530718f;
+void ThirdPersonCamera::recoil(float amount) {
+    pitch_ = std::clamp(pitch_ - amount, -.95f, 1.12f);
+}
 void ThirdPersonCamera::look(float mouse_x, float mouse_y, float wheel, bool driving, Vec3 car_forward, float speed, float dt, bool flying) {
     yaw_ = std::remainder(yaw_ - mouse_x * 0.003f, two_pi);
-    pitch_ = std::clamp(pitch_ + mouse_y * 0.003f, -0.12f, 1.12f);
+    pitch_ = std::clamp(pitch_ + mouse_y * 0.003f, driving || flying ? -0.12f : -.95f, 1.12f);
     float& distance = flying ? plane_distance_ : driving ? car_distance_ : foot_distance_;
     distance = std::clamp(distance - wheel * (flying ? 1.5f : .7f), flying ? 12.0f : driving ? 5.0f : 2.5f,
         flying ? 35.0f : driving ? 14.0f : 7.0f);
@@ -24,8 +27,8 @@ Vec3 ThirdPersonCamera::move_direction(float forward_input, float right_input) c
     Vec3 direction = f * forward_input + f.Cross(Vec3::sAxisY()) * right_input;
     return direction.LengthSq() > 1 ? direction.Normalized() : direction;
 }
-Vec3 ThirdPersonCamera::desired_position(const Vec3& focus, bool driving, bool flying) const {
-    const float distance = flying ? plane_distance_ : driving ? car_distance_ : foot_distance_;
+Vec3 ThirdPersonCamera::desired_position(const Vec3& focus, bool driving, bool flying, float plane_scale, bool aiming) const {
+    const float distance = aiming && !driving && !flying ? .85f : flying ? plane_distance_ * plane_scale : driving ? car_distance_ : foot_distance_;
     return above_water(focus - forward() * (distance * std::cos(pitch_)) + Vec3(0, distance * std::sin(pitch_), 0));
 }
 Vec3 ThirdPersonCamera::above_water(Vec3 position) {

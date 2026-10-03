@@ -6,9 +6,10 @@
 #include <cmath>
 
 namespace forza {
-Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane, Traffic* traffic, Pedestrians* pedestrians)
+Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane, Traffic* traffic, Pedestrians* pedestrians,
+    const std::vector<std::unique_ptr<Plane>>* aircraft)
     : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world, &environment), plane_(plane), traffic_(traffic),
-      pedestrians_(pedestrians) { reset(); }
+      pedestrians_(pedestrians) { starter_plane_ = plane; aircraft_ = aircraft; reset(); }
 
 void Player::reset() {
     Vec3 spawn = environment_.spawn();
@@ -31,11 +32,20 @@ void Player::reset() {
     car_->set_simulated(true);
     car_->reset(spawn);
     character_.reset(spawn - Vec3(0, 0.5f, 0));
+    character_.revive();
+    weapons_.reset();
     character_.set_enabled(false);
     driving_ = true;
     flying_ = false;
     coasting_ = false;
     recover_plane();
+}
+
+void Player::respawn_on_foot(Vec3 feet, float yaw) {
+    driving_ = flying_ = coasting_ = false;
+    character_.reset(feet, yaw);
+    character_.revive();
+    weapons_.reset();
 }
 
 void Player::recover_plane() {
@@ -44,8 +54,19 @@ void Player::recover_plane() {
     for (const auto& airport : airports)
         if (std::hypot(plane_->position().GetX() - airport.center_x, plane_->position().GetZ() - airport.runway_z)
             < std::hypot(plane_->position().GetX() - nearest->center_x, plane_->position().GetZ() - nearest->runway_z)) nearest = &airport;
-    plane_->reset(Vec3(nearest->plane_x(), environment_.height(nearest->plane_x(), nearest->plane_z())
-        + Plane::parked_height, nearest->plane_z()), nearest->yaw());
+    for (int i = 0; i < 20; ++i) {
+        const auto p = nearest->point(nearest->plane_along() + i * (plane_->specs().length + 15));
+        const float radius = std::max(plane_->specs().length, plane_->specs().span) / 2 + 2;
+        const auto occupied = [&](const Plane* other) {
+            return other && other != plane_ && std::hypot(other->position().GetX() - p.x, other->position().GetZ() - p.z)
+                < radius + std::max(other->specs().length, other->specs().span) / 2;
+        };
+        bool blocked = occupied(starter_plane_);
+        if (aircraft_) for (const auto& other : *aircraft_) blocked |= occupied(other.get());
+        if (blocked) continue;
+        plane_->reset(Vec3(p.x, environment_.height(p.x, p.z) + plane_->parking_height(), p.z), nearest->yaw());
+        return;
+    }
 }
 
 Player::EntryTarget Player::entry_target() const {
@@ -54,7 +75,7 @@ Player::EntryTarget Player::entry_target() const {
     float nearest = 100;
     EntryTarget result;
     const auto consider = [&](EntryVehicle kind, Vec3 position, Vec3 velocity, JPH::BodyID body,
-                              float range, bool allowed, Car* car = nullptr) {
+                              float range, bool allowed, Car* car = nullptr, Plane* plane = nullptr) {
         const Vec3 difference = feet - position;
         const float distance = difference.Length();
         if (!allowed || (position.GetY() < Environment::water_level + .1f
@@ -62,14 +83,19 @@ Player::EntryTarget Player::entry_target() const {
             || velocity.Length() > 2.5f || distance > range || distance >= nearest
             || std::abs(difference.GetY()) > 1.8f) return;
         if (world_.camera_fraction(eye, position + Vec3(0, .7f, 0) - eye, body) < .98f) return;
-        result = {kind, car}; nearest = distance;
+        result = {kind, car, plane}; nearest = distance;
     };
     consider(EntryVehicle::Car, starter_car_.position(), starter_car_.velocity(), starter_car_.body_id(), 3.3f, true, &starter_car_);
     if (traffic_) for (const auto& vehicle : traffic_->cars()) {
         auto* car = vehicle.car.get();
         consider(EntryVehicle::Car, car->position(), car->velocity(), car->body_id(), 3.3f, car->simulated(), car);
     }
-    if (plane_) consider(EntryVehicle::Plane, plane_->position(), plane_->velocity(), plane_->body_id(), 4.5f, plane_->grounded());
+    const auto consider_plane = [&](Plane* plane) {
+        if (plane) consider(EntryVehicle::Plane, plane->boarding_position(), plane->velocity(), plane->body_id(), 2.5f,
+            plane->grounded() && plane->position().GetY() > Environment::water_level + .1f, nullptr, plane);
+    };
+    consider_plane(starter_plane_);
+    if (aircraft_) for (const auto& plane : *aircraft_) consider_plane(plane.get());
     return result;
 }
 EntryVehicle Player::entry_vehicle() const { return entry_target().kind; }
@@ -78,6 +104,7 @@ bool Player::can_steal() const { return traffic_ && traffic_->is_npc(entry_car()
 bool Player::can_enter() const { return entry_vehicle() != EntryVehicle::None; }
 
 Interaction Player::interact() {
+    if (!character_.alive() || (on_foot() && character_.ragdolling())) return Interaction::Blocked;
     if (on_foot()) {
         const auto vehicle = entry_target();
         if (vehicle.kind == EntryVehicle::None) return Interaction::TooFar;
@@ -85,6 +112,7 @@ Interaction Player::interact() {
             car_ = vehicle.car;
             if (traffic_) traffic_->steal(*car_);
         }
+        if (vehicle.plane) plane_ = vehicle.plane;
         driving_ = vehicle.kind == EntryVehicle::Car;
         flying_ = vehicle.kind == EntryVehicle::Plane;
         coasting_ = false;
@@ -99,9 +127,7 @@ Interaction Player::interact() {
     // Water exits also search around submerged wrecks for free surface space.
     const Vec3 car_exits[] = {Vec3(-2, 0, 0.35f), Vec3(2, 0, 0.35f),
         Vec3(-2.8f, 0, 0.35f), Vec3(2.8f, 0, 0.35f), Vec3(0, 0, 3.4f)};
-    const Vec3 plane_exits[] = {Vec3(-1.9f, 0, -1.8f), Vec3(1.9f, 0, -1.8f),
-        Vec3(-6.3f, 0, 0), Vec3(6.3f, 0, 0), Vec3(0, 0, 4.2f)};
-    const auto& exits = flying_ ? plane_exits : car_exits;
+    const auto plane_exits = plane_ ? plane_->exit_offsets() : std::array<Vec3, 5>{};
     const Vec3 vehicle_position = position();
     const Vec3 heading = forward();
     const float yaw = std::atan2(-heading.GetX(), -heading.GetZ());
@@ -109,7 +135,7 @@ Interaction Player::interact() {
     const JPH::BodyID body = flying_ ? plane_->body_id() : car_->body_id();
     for (int i = 0; i < (water_exit ? 37 : 5); ++i) {
         const float angle = (i - 5) * .78539816f, radius = 3 + ((i - 5) / 8) * 2;
-        const Vec3 local = i < 5 ? exits[i] : Vec3(std::cos(angle) * radius, 0, std::sin(angle) * radius);
+        const Vec3 local = i < 5 ? (flying_ ? plane_exits[i] : car_exits[i]) : Vec3(std::cos(angle) * radius, 0, std::sin(angle) * radius);
         const Vec3 candidate = vehicle_position + rotation * local;
         Vec3 feet = candidate - Vec3(0, .25f, 0);
         if (water_exit) {
@@ -117,7 +143,7 @@ Interaction Player::interact() {
             feet.SetY(Environment::water_level - 1.25f);
         } else if (!bailout) {
             GroundHit hit;
-            if (!world_.cast_ground(candidate + Vec3(0, 3, 0), Vec3(0, -1, 0), 7, hit)
+            if (!world_.cast_ground(candidate + Vec3(0, 3, 0), Vec3(0, -1, 0), flying_ ? plane_->parking_height() + 4 : 7, hit)
                 || hit.normal.GetY() < 0.65f || hit.point.GetY() < Environment::water_level + 0.1f) continue;
             feet = hit.point + Vec3(0, 0.08f, 0);
         }
@@ -137,6 +163,7 @@ Interaction Player::interact() {
 }
 
 void Player::step(Input driving, FootInput walking, float dt, FlightInput flight) {
+    weapons_.step(dt);
     if (coasting_ && car_->velocity().Length() < .5f) coasting_ = false;
     if (!driving_) driving = {0, 0, false, !coasting_};
     driving.player_controlled = driving_ || coasting_;
@@ -146,6 +173,9 @@ void Player::step(Input driving, FootInput walking, float dt, FlightInput flight
         if (!flying_) flight = {0, 0, 0, 0, false, false, true};
         plane_->step(flight, dt);
     }
+    if (starter_plane_ && starter_plane_ != plane_) starter_plane_->step({0, 0, 0, 0, false, false, true}, dt);
+    if (aircraft_) for (const auto& plane : *aircraft_) if (plane.get() != plane_)
+        plane->step({0, 0, 0, 0, false, false, true}, dt);
     if (traffic_) {
         const Vec3 feet = character_.position();
         traffic_->step(driving_ || coasting_ ? car_ : nullptr, starter_car_, plane_, on_foot() ? &feet : nullptr, position(), dt);
@@ -159,7 +189,15 @@ void Player::step(Input driving, FootInput walking, float dt, FlightInput flight
     if (!on_foot() && position().GetY() < Environment::water_level + .1f
         && environment_.terrain_height(position().GetX(), position().GetZ()) < Environment::water_level - 1)
         interact();
-    if (on_foot()) character_.step(walking, dt);
+    if (on_foot()) {
+        walking.weapon = weapons_.selected();
+        character_.step(walking, dt);
+    }
     if (pedestrians_) pedestrians_->step(starter_car_, traffic_, position(), dt);
+}
+
+Shot Player::shoot(Vec3 origin, Vec3 direction, bool held, bool pressed, bool aiming) {
+    if (!can_shoot()) return {};
+    return weapons_.fire(world_, pedestrians_, origin, direction, held, pressed, aiming);
 }
 } // namespace forza

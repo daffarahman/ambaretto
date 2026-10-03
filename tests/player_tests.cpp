@@ -195,6 +195,24 @@ void mouse_camera() {
         "low swimming orbit put camera underwater");
     require(forza::ThirdPersonCamera::above_water(forza::Vec3(0, -4, 0)).GetY() >= .3f,
         "smoothed/collision-adjusted camera can sink below water");
+    for (bool flying : {false, true}) {
+        constexpr float frame = 1.0f / 60;
+        camera.reset();
+        camera.look(400, 0, 0, !flying, forza::Vec3(0, 0, -1), 12, frame, flying);
+        const float manual_yaw = camera.yaw();
+        const auto idle_frame = [&]() {
+            camera.recoil(0);
+            camera.look(0, 0, 0, !flying, forza::Vec3(0, 0, -1), 12, frame, flying);
+        };
+        for (int i = 0; i < 90; ++i) idle_frame();
+        require(std::abs(camera.yaw() - manual_yaw) < .001f, "vehicle camera recentered before the look delay");
+        for (int i = 0; i < 150; ++i) idle_frame();
+        require(std::abs(camera.yaw()) < .03f, "recoil update prevented vehicle camera recentering");
+        camera.look(200, 0, 0, !flying, forza::Vec3(0, 0, -1), 12, frame, flying);
+        const float renewed_yaw = camera.yaw();
+        for (int i = 0; i < 90; ++i) idle_frame();
+        require(std::abs(camera.yaw() - renewed_yaw) < .001f, "manual look did not restart vehicle recenter delay");
+    }
 }
 
 void surface_swimming() {
