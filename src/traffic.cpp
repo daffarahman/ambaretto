@@ -171,9 +171,36 @@ bool Traffic::is_npc(const Car* car) const {
     for (const auto& vehicle : cars_) if (vehicle.car.get() == car) return vehicle.npc;
     return false;
 }
-void Traffic::steal(Car& car) {
+bool Traffic::steal(Car& car) {
+    if (car.destroyed()) return false;
+    for (auto& vehicle : cars_) if (vehicle.car.get() == &car && vehicle.npc) {
+        if (car.simulated()) {
+            auto driver = std::make_unique<Character>(world_, &environment_);
+            if (!driver->pull_from(car)) return false;
+            vehicle.driver = std::move(driver);
+        }
+        vehicle.npc = false;
+        clear_driver(vehicle);
+    }
     car.set_simulated(true);
-    for (auto& vehicle : cars_) if (vehicle.car.get() == &car) { vehicle.npc = false; clear_driver(vehicle); }
+    return true;
+}
+void Traffic::finish(Vec3 player_position, float dt) {
+    for (auto& vehicle : cars_) {
+        if (vehicle.npc && vehicle.car->destroyed()) {
+            vehicle.npc = false;
+            clear_driver(vehicle);
+            vehicle.driver = std::make_unique<Character>(world_, &environment_);
+            if (!vehicle.driver->pull_from(*vehicle.car)) vehicle.driver->reset(vehicle.car->position() + Vec3(0, 2, 0));
+            vehicle.driver->take_damage(100);
+        }
+        if (!vehicle.driver) continue;
+        auto& driver = *vehicle.driver;
+        if ((driver.position() - player_position).LengthSq() > 330 * 330) { vehicle.driver.reset(); continue; }
+        driver.hit_by(*vehicle.car, dt);
+        const Vec3 away = flat(driver.position() - player_position).NormalizedOr(Vec3::sAxisX());
+        driver.step({away, true}, dt);
+    }
 }
 Traffic::RouteLocation Traffic::locate(const std::vector<Vec3>& route, Vec3 position) const {
     RouteLocation nearest{0, route.front(), std::numeric_limits<float>::max()};
@@ -205,7 +232,7 @@ Vec3 Traffic::ahead(const std::vector<Vec3>& route, RouteLocation location, floa
 }
 void Traffic::stream(Vec3 player_position, const Car* starter, const Plane* plane) {
     std::vector<std::pair<float, std::size_t>> nearby;
-    for (std::size_t i = 0; i < cars_.size(); ++i) if (cars_[i].npc) {
+    for (std::size_t i = 0; i < cars_.size(); ++i) if (cars_[i].npc && !cars_[i].car->destroyed()) {
         const float distance = flat(cars_[i].car->position() - player_position).LengthSq();
         if (distance < 700 * 700) nearby.push_back({distance, i});
     }
@@ -214,7 +241,7 @@ void Traffic::stream(Vec3 player_position, const Car* starter, const Plane* plan
     for (std::size_t i = 0; i < std::min<std::size_t>(48, nearby.size()); ++i) selected[nearby[i].second] = true;
     for (std::size_t i = 0; i < cars_.size(); ++i) {
         auto& vehicle = cars_[i]; Car& car = *vehicle.car;
-        if (!vehicle.npc || selected[i] == car.simulated()) continue;
+        if (!vehicle.npc || car.destroyed() || selected[i] == car.simulated()) continue;
         if (selected[i]) {
             const Vec3 position = car.position();
             // Never create a chassis inside an occupied lane or pedestrian.
@@ -247,6 +274,11 @@ bool Traffic::space_available(Vec3 position, const Car& ignore, const Car& start
 void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
                    const Vec3* pedestrian, Vec3 player_position, float dt, const Police* police) {
     police_ = police;
+    for (const auto& vehicle : cars_) if (vehicle.driver && !vehicle.driver->ragdolling()) {
+        vehicle.driver->hit_by(starter_car, dt);
+        for (const auto& other : cars_) vehicle.driver->hit_by(*other.car, dt);
+        if (police_) for (const auto& unit : police_->units()) if (unit.active) vehicle.driver->hit_by(*unit.car, dt);
+    }
     stream_time_ -= dt;
     const bool sync = stream_time_ <= 0;
     if (sync) { stream(player_position, &starter_car, plane); stream_time_ = .5f; }
@@ -256,6 +288,7 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         vehicle.horn_cooldown = std::max(0.0f, vehicle.horn_cooldown - dt);
         vehicle.pass_retry = std::max(0.0f, vehicle.pass_retry - dt);
         if (&car == controlled) continue;
+        if (car.destroyed()) { if (car.simulated()) car.step({}, dt); continue; }
         if (!vehicle.npc) { if (car.simulated()) car.step({0, 0, false, true}, dt); continue; }
         const auto& route = routes_[vehicle.route];
         if (!car.simulated()) {

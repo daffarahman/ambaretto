@@ -37,6 +37,8 @@ public:
     void reset(const Vec3& feet, float yaw = 0);
     void step(FootInput input, float dt = fixed_step);
     void set_enabled(bool enabled);
+    bool enabled() const;
+    bool pull_from(const Car& car, float side = -1);
     bool ragdolling() const;
     bool swimming() const;
     void start_swimming(const Vec3& surface, float yaw = 0);
@@ -75,6 +77,7 @@ public:
         Pedestrians* pedestrians = nullptr, const std::vector<std::unique_ptr<Plane>>* aircraft = nullptr, Police* police = nullptr);
     void reset();
     void respawn_on_foot(Vec3 feet, float yaw = 0);
+    void respawn_near(Vec3 origin);
     void recover_plane();
     Interaction interact();
     void step(Input driving, FootInput walking, float dt = fixed_step, FlightInput flight = {});

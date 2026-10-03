@@ -163,7 +163,7 @@ void landing_brakes_and_collisions() {
     collision_plane.reset(b.center + Vec3(0, 0, b.size.GetZ() / 2 + 20), 0, Vec3(0, 0, -35));
     tick(city, collision_plane, {}, 160);
     require(collision_plane.position().GetZ() > b.center.GetZ(), "plane passed through building");
-    require(collision_plane.damaged(), "severe impact did not damage aircraft");
+    require(collision_plane.health() < 100, "severe impact did not damage aircraft");
 }
 void entry_exit_and_recovery() {
     Environment map;

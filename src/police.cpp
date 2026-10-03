@@ -15,6 +15,7 @@ Vec3 flat(Vec3 p) { p.SetY(0); return p; }
 float cross(Vec3 a, Vec3 b) { return a.GetX() * b.GetZ() - a.GetZ() * b.GetX(); }
 float yaw(Vec3 p) { return std::atan2(-p.GetX(), -p.GetZ()); }
 constexpr int thresholds[] = {0, 1, 4, 9, 17, 28, 42};
+constexpr float vehicle_fire_range = 30, vehicle_return_range = 40, dismount_range = 20;
 }
 const CrimeData& crime_data(Crime crime) {
     static const std::array<CrimeData, int(Crime::Count)> data{{
@@ -150,9 +151,12 @@ std::vector<Vec3> Police::road_path(Vec3 from, Vec3 to) const {
     std::reverse(path.begin(), path.end());
     return path;
 }
-bool Police::visible(Vec3 eye, Vec3 target, float range, JPH::BodyID ignore) const {
+bool Police::visible(Vec3 eye, Vec3 target, float range, JPH::BodyID ignore, JPH::BodyID target_body) const {
     const Vec3 delta = target - eye;
-    return delta.LengthSq() < range * range && world_.camera_fraction(eye, delta, ignore) > .96f;
+    if (delta.LengthSq() >= range * range) return false;
+    if (target_body.IsInvalid()) return world_.camera_fraction(eye, delta, ignore) > .96f;
+    GroundHit hit;
+    return !world_.cast_ray(eye, delta, delta.Length(), hit, ignore) || hit.body == target_body;
 }
 bool Police::camera_visible(Vec3 position) const {
     if (!view_set_) return false;
@@ -205,7 +209,7 @@ bool Police::spawn(PoliceUnit& unit, const Player& player, std::size_t index) {
         for (const auto& other : units_) if (&other != &unit && other.active) blocked |= occupied(*other.car);
         if (blocked || !unit.officers.front().character->can_stand_at(position - Vec3(0, .48f, 0))
             || world_.camera_fraction(position + Vec3(0, .8f, 0), direction * 5) < .96f) continue;
-        unit.car->set_simulated(true); unit.car->reset(position, yaw(direction));
+        unit.car->set_simulated(true); unit.car->reset(position, yaw(direction)); unit.car->repair();
         unit.active = true; unit.claimed = false; unit.route.clear(); unit.waypoint = 0;
         unit.plan_time = unit.pit_time = unit.stuck_time = 0;
         unit.pit_cooldown = 4.f + index; unit.pit_attempts = 0;
@@ -240,7 +244,7 @@ void Police::drive(PoliceUnit& unit, Player& player, std::size_t index, float dt
     if (unit.claimed) { if (&player.car() != &car) car.step({0, 0, false, true}, dt); return; }
     const bool crew = std::any_of(unit.officers.begin(), unit.officers.end(), [](const PoliceOfficer& officer) { return officer.seated && officer.character->alive(); });
     const bool boarding = std::any_of(unit.officers.begin(), unit.officers.end(), [](const PoliceOfficer& officer) { return !officer.seated && officer.character->alive(); });
-    if (!crew || boarding || !wanted_.stars() || arrested() || !player.character().alive()) {
+    if (car.destroyed() || !crew || boarding || !wanted_.stars() || arrested() || !player.character().alive()) {
         car.step({0, 0, false, true}, dt); return;
     }
     const auto& response = police_response(wanted_.stars());
@@ -282,6 +286,9 @@ void Police::drive(PoliceUnit& unit, Player& player, std::size_t index, float dt
     if (player.driving() && player_speed > 2 && distance < 14 && unit.pit_time <= 0)
         desired = std::min(desired, std::max(0.f, distance - 6) * 2 + player_speed * .95f);
     if (distance < 11 && (!player.driving() || player_speed < 2)) desired = std::min(desired, std::max(0.f, (distance - 7) * 1.5f));
+    if (player.driving() && player_speed < 4 && !wanted_.searching() && distance < dismount_range
+        && visible(position + Vec3(0, 1.2f, 0), player.position() + player.car().rotate(Vec3(0, chassis_offset, 0)),
+            dismount_range + 2, car.body_id(), player.car().body_id())) desired = 0;
     if (unit.route.empty() || (wanted_.searching() && distance < 9)) desired = 0;
     const auto avoid = [&](const Car& other) {
         if (&other == &car || (player.driving() && &other == &player.car() && unit.pit_time > 0) || !other.simulated()) return;
@@ -310,7 +317,7 @@ void Police::walk(PoliceUnit& unit, PoliceOfficer& officer, Player& player, std:
     officer.fire_time = std::max(0.f, officer.fire_time - dt); officer.flash = std::max(0.f, officer.flash - dt);
     if (character.ragdolling() || !character.alive()) { character.step({}, dt); return; }
     const Vec3 position = character.position();
-    const bool returning = !unit.claimed && ((player.driving() && player.car().velocity().Length() > 3)
+    const bool returning = wanted_.stars() && !unit.claimed && !unit.car->destroyed() && ((player.driving() && flat(player.position() - position).Length() > vehicle_return_range)
         || (wanted_.searching() && flat(unit.destination - position).Length() > 45));
     Vec3 target = returning ? unit.car->position() + unit.car->rotate(Vec3(index % 2 ? 2.f : -2.f, 0, .35f)) : unit.destination;
     if (!wanted_.stars()) target = unit.car->position() + unit.car->rotate(Vec3(3.5f, 0, index % 2 ? 3.f : -3.f));
@@ -320,9 +327,12 @@ void Police::walk(PoliceUnit& unit, PoliceOfficer& officer, Player& player, std:
     }
     Vec3 direction = flat(target - position).NormalizedOr(Vec3::sZero());
     const float distance = flat(target - position).Length();
-    const bool aiming = wanted_.stars() >= 2 && !returning && !wanted_.searching() && distance < 45
-        && player.on_foot() && player.character().alive()
-        && visible(position + Vec3(0, 1.5f, 0), player.position() + Vec3(0, 1, 0), 50);
+    const Vec3 aim_point = player.driving() ? player.position() + player.car().rotate(Vec3(0, chassis_offset, 0))
+        : player.position() + Vec3(0, .95f, 0);
+    const bool aiming = wanted_.stars() >= 2 && !returning && !wanted_.searching()
+        && (player.on_foot() || player.driving()) && player.character().alive()
+        && visible(position + Vec3(0, 1.5f, 0), aim_point, player.driving() ? vehicle_fire_range : 45,
+            {}, player.driving() ? player.car().body_id() : JPH::BodyID{});
     if (distance < (aiming ? 12.f : wanted_.stars() ? 1.4f : 1.f)) direction = Vec3::sZero();
     if (direction.LengthSq() > .1f && world_.camera_fraction(position + Vec3(0, .9f, 0), direction * 2.5f, unit.car->body_id()) < .8f) {
         const Vec3 side = direction.Cross(Vec3::sAxisY());
@@ -330,21 +340,22 @@ void Police::walk(PoliceUnit& unit, PoliceOfficer& officer, Player& player, std:
             > world_.camera_fraction(position + Vec3(0, .9f, 0), -side * 2, unit.car->body_id()) ? side : -side;
     }
     character.step({direction, wanted_.stars() > 0 && !aiming, false,
-        aiming ? (player.position() + Vec3(0, 1.1f, 0) - position - Vec3(0, 1.4f, 0)).NormalizedOr(direction) : Vec3::sZero(), wanted_.stars() ? WeaponType::Pistol : WeaponType::Unarmed}, dt);
+        aiming ? (aim_point - position - Vec3(0, 1.4f, 0)).NormalizedOr(direction) : Vec3::sZero(), wanted_.stars() ? WeaponType::Pistol : WeaponType::Unarmed}, dt);
     if (aiming && officer.fire_time <= 0 && !arrested()) {
         const auto gun = character.held_weapon();
         const Vec3 origin = gun.position + gun.rotation * Vec3(0, .06f, 0);
         const float miss = (7 - wanted_.stars()) * .16f;
         const float phase = float(index) * 2.4f + spawn_sequence_ * .71f + officer.shots_fired * .77f;
-        const Vec3 aim = player.position() + Vec3(std::sin(phase) * miss, .95f + std::cos(phase) * miss, std::cos(phase * 1.7f) * miss);
+        const Vec3 aim = aim_point + Vec3(std::sin(phase) * miss, std::cos(phase) * miss * (player.driving() ? .15f : 1.f), std::cos(phase * 1.7f) * miss);
         const Vec3 ray = (aim - origin).NormalizedOr(direction);
         const auto obstruction = trace_shot(world_, pedestrians_, origin, ray, 55, this, &character);
-        float range = obstruction.distance;
-        BodyPart part;
-        if (player.character().raycast(origin, ray, range, part))
-            player.character().take_damage(12, part, ray * 16);
+        if (obstruction.character == &player.character())
+            player.character().take_damage(12, BodyPart(obstruction.part), ray * 16);
         else if (obstruction.character) { officer.fire_time = .3f; return; }
+        else if (obstruction.car) obstruction.car->take_damage(12 * VehicleDamage::gunfire_multiplier);
+        else if (obstruction.plane) obstruction.plane->take_damage(12 * VehicleDamage::gunfire_multiplier);
         ++officer.shots_fired;
+        world_.emit_sound(SoundEffect::Pistol, origin);
         officer.fire_time = police_response(wanted_.stars()).fire_interval; officer.flash = .065f;
     }
 }
@@ -363,8 +374,10 @@ void Police::prepare(Player& player, float dt) {
         for (auto& unit : units_) if (unit.active) {
             for (auto& officer : unit.officers) if (officer.character->alive() && !officer.character->ragdolling() && !(unit.claimed && officer.seated)) {
                 const Vec3 eye = officer.seated ? unit.car->position() + Vec3(0, 1.2f, 0) : officer.character->position() + Vec3(0, 1.5f, 0);
-                seen |= visible(eye, player.position() + Vec3(0, player.on_foot() ? 1.f : 1.7f, 0), police_response(wanted_.stars()).sight_range,
-                    officer.seated ? unit.car->body_id() : JPH::BodyID{});
+                const Vec3 target = player.driving() ? player.position() + player.car().rotate(Vec3(0, chassis_offset, 0))
+                    : player.position() + Vec3(0, player.on_foot() ? 1.f : 1.7f, 0);
+                seen |= visible(eye, target, police_response(wanted_.stars()).sight_range,
+                    officer.seated ? unit.car->body_id() : JPH::BodyID{}, player.driving() ? player.car().body_id() : JPH::BodyID{});
             }
         }
         wanted_.step(player.position(), seen, elapsed);
@@ -385,7 +398,7 @@ void Police::prepare(Player& player, float dt) {
         if ((!unit.claimed || abandoned) && distance > (!living ? 80.f : wanted_.stars() ? 650.f : 260.f) && hidden) {
             unit.active = unit.claimed = false; unit.car->set_simulated(false);
             for (auto& officer : unit.officers) { officer.character->set_enabled(false); officer.seated = true; }
-        } else if (living && !unit.claimed) ++active;
+        } else if (living && !unit.claimed && !unit.car->destroyed()) ++active;
     }
     const int desired = wanted_.stars() ? police_response(wanted_.stars()).cars : 1;
     if (active < desired && dispatch_time_ <= 0 && !arrested() && player.character().alive()) {
@@ -396,8 +409,11 @@ void Police::prepare(Player& player, float dt) {
         auto& unit = units_[i]; if (!unit.active) continue;
         unit.destination = wanted_.stars() ? wanted_.last_seen() : unit.car->position();
         const float distance = flat(player.position() - unit.car->position()).Length();
-        if (wanted_.stars() && !wanted_.searching() && distance < 20
-            && (!player.driving() || player.car().velocity().Length() < 2))
+        if (wanted_.stars() && !wanted_.searching() && distance < dismount_range
+            && (!player.driving() || player.car().velocity().Length() < 4)
+            && visible(unit.car->position() + Vec3(0, 1.2f, 0),
+                player.driving() ? player.position() + player.car().rotate(Vec3(0, chassis_offset, 0)) : player.position() + Vec3(0, 1, 0),
+                dismount_range + 2, unit.car->body_id(), player.driving() ? player.car().body_id() : JPH::BodyID{}))
             for (std::size_t side = 0; side < unit.officers.size(); ++side) exit(unit, unit.officers[side], side);
         drive(unit, player, i, dt);
         for (auto& officer : unit.officers) if (!officer.seated) {
@@ -414,6 +430,12 @@ void Police::finish(Player& player, float dt) {
         auto& unit = units_[i]; if (!unit.active) continue;
         for (std::size_t j = 0; j < unit.officers.size(); ++j) {
             auto& officer = unit.officers[j];
+            if (officer.seated && unit.car->destroyed()) {
+                if (!officer.character->pull_from(*unit.car, j ? 1 : -1))
+                    officer.character->reset(unit.car->position() + Vec3(0, 2 + float(j), 0));
+                officer.seated = false;
+                officer.character->take_damage(100);
+            } else if (officer.seated && unit.claimed) exit(unit, officer, j);
             const float health = officer.character->health();
             if (health < officer.previous_health && (officer.character->last_vehicle_hit() == &player.car()
                 || (player.driving() && officer.character->touching(player.car()))))
@@ -438,15 +460,24 @@ void Police::finish(Player& player, float dt) {
         civilian_health_[i] = health; civilian_ragdoll_[i] = person.character->ragdolling();
     }
 }
-void Police::steal(Car& car) {
+bool Police::steal(Car& car) {
+    if (car.destroyed()) return false;
     for (auto& unit : units_) if (unit.car.get() == &car) {
-        if (unit.claimed) return;
+        if (unit.claimed) return true;
+        auto& driver = unit.officers.front();
+        if (driver.seated && driver.character->alive()) {
+            if (!driver.character->pull_from(car)) return false;
+            driver.seated = false;
+        }
+        exit(unit, unit.officers[1], 1);
         unit.claimed = true; unit.pit_time = 0;
         Character* observer = nullptr;
         for (const auto& officer : unit.officers) if (!officer.seated && officer.character->alive()
             && visible(officer.character->position() + Vec3(0, 1.5f, 0), car.position() + Vec3(0, 1.7f, 0), 40, car.body_id())) observer = officer.character.get();
         crime(Crime::PoliceVehicleTheft, car.position(), observer);
+        return true;
     }
+    return false;
 }
 void Police::raycast(Vec3 origin, Vec3 direction, ShotHit& hit, const Character* ignore) const {
     for (const auto& unit : units_) if (unit.active) for (const auto& officer : unit.officers) if (!officer.seated && officer.character.get() != ignore) {

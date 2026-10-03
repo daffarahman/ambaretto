@@ -33,6 +33,7 @@ void Player::reset() {
     }
     car_->set_simulated(true);
     car_->reset(spawn);
+    car_->repair();
     character_.reset(spawn - Vec3(0, 0.5f, 0));
     character_.revive();
     weapons_.reset();
@@ -48,6 +49,39 @@ void Player::respawn_on_foot(Vec3 feet, float yaw) {
     character_.reset(feet, yaw);
     character_.revive();
     weapons_.reset();
+}
+
+void Player::respawn_near(Vec3 origin) {
+    if (!std::isfinite(origin.GetX()) || !std::isfinite(origin.GetY()) || !std::isfinite(origin.GetZ())) origin = environment_.spawn();
+    const auto try_ground = [&](Vec3 point) {
+        if (std::abs(point.GetX()) > Environment::extent - 40 || std::abs(point.GetZ()) > Environment::extent - 40) return false;
+        point.SetY(environment_.surface_height(point));
+        if (point.GetY() <= Environment::water_level + .1f) return false;
+        GroundHit ground;
+        if (!world_.cast_ground(point + Vec3(0, 3, 0), Vec3(0, -1, 0), 6, ground)
+            || ground.normal.GetY() < .65f || ground.point.GetY() <= Environment::water_level + .1f) return false;
+        const Vec3 feet = ground.point + Vec3(0, .08f, 0);
+        if (!character_.can_stand_at(feet)) return false;
+        respawn_on_foot(feet, character_.yaw());
+        return true;
+    };
+    for (float radius : {18.f, 28.f, 40.f, 60.f, 90.f, 140.f, 220.f}) for (int i = 0; i < 16; ++i) {
+        const float angle = i * .39269908f;
+        if (try_ground(origin + Vec3(std::cos(angle) * radius, 0, std::sin(angle) * radius))) return;
+    }
+    // Offshore deaths use the closest safe road, including bridge decks.
+    std::vector<Vec3> roads;
+    for (const auto& road : environment_.roads()) {
+        Vec3 direction = road.b - road.a; direction.SetY(0);
+        const float t = std::clamp((origin - road.a).Dot(direction) / std::max(.001f, direction.LengthSq()), 0.f, 1.f);
+        Vec3 point = road.a + direction * t;
+        point.SetY(environment_.road_height(road, point.GetX(), point.GetZ()));
+        roads.push_back(point);
+    }
+    const auto distance = [&](Vec3 point) { return std::hypot(point.GetX() - origin.GetX(), point.GetZ() - origin.GetZ()); };
+    std::sort(roads.begin(), roads.end(), [&](Vec3 a, Vec3 b) { return distance(a) < distance(b); });
+    for (auto point : roads) if (try_ground(point)) return;
+    respawn_on_foot(environment_.spawn() - Vec3(0, .48f, 0));
 }
 
 void Player::recover_plane() {
@@ -67,6 +101,7 @@ void Player::recover_plane() {
         if (aircraft_) for (const auto& other : *aircraft_) blocked |= occupied(other.get());
         if (blocked) continue;
         plane_->reset(Vec3(p.x, environment_.height(p.x, p.z) + plane_->parking_height(), p.z), nearest->yaw());
+        plane_->repair();
         return;
     }
 }
@@ -87,18 +122,17 @@ Player::EntryTarget Player::entry_target() const {
         if (world_.camera_fraction(eye, position + Vec3(0, .7f, 0) - eye, body) < .98f) return;
         result = {kind, car, plane}; nearest = distance;
     };
-    consider(EntryVehicle::Car, starter_car_.position(), starter_car_.velocity(), starter_car_.body_id(), 3.3f, true, &starter_car_);
+    consider(EntryVehicle::Car, starter_car_.position(), starter_car_.velocity(), starter_car_.body_id(), 3.3f, !starter_car_.destroyed(), &starter_car_);
     if (traffic_) for (const auto& vehicle : traffic_->cars()) {
         auto* car = vehicle.car.get();
-        consider(EntryVehicle::Car, car->position(), car->velocity(), car->body_id(), 3.3f, car->simulated(), car);
+        consider(EntryVehicle::Car, car->position(), car->velocity(), car->body_id(), 3.3f, car->simulated() && !car->destroyed(), car);
     }
     if (police_) for (const auto& unit : police_->units()) if (unit.active) {
-        const bool empty = unit.claimed || std::none_of(unit.officers.begin(), unit.officers.end(), [](const PoliceOfficer& officer) { return officer.seated && officer.character->alive(); });
-        consider(EntryVehicle::Car, unit.car->position(), unit.car->velocity(), unit.car->body_id(), 3.3f, empty, unit.car.get());
+        consider(EntryVehicle::Car, unit.car->position(), unit.car->velocity(), unit.car->body_id(), 3.3f, !unit.car->destroyed(), unit.car.get());
     }
     const auto consider_plane = [&](Plane* plane) {
         if (plane) consider(EntryVehicle::Plane, plane->boarding_position(), plane->velocity(), plane->body_id(), 2.5f,
-            plane->grounded() && plane->position().GetY() > Environment::water_level + .1f, nullptr, plane);
+            !plane->destroyed() && plane->grounded() && plane->position().GetY() > Environment::water_level + .1f, nullptr, plane);
     };
     consider_plane(starter_plane_);
     if (aircraft_) for (const auto& plane : *aircraft_) consider_plane(plane.get());
@@ -116,13 +150,13 @@ Interaction Player::interact() {
         const auto vehicle = entry_target();
         if (vehicle.kind == EntryVehicle::None) return Interaction::TooFar;
         if (vehicle.car) {
-            car_ = vehicle.car;
-            const bool stolen = traffic_ && traffic_->is_npc(car_);
-            if (traffic_) traffic_->steal(*car_);
+            const bool stolen = traffic_ && traffic_->is_npc(vehicle.car);
+            if (traffic_ && !traffic_->steal(*vehicle.car)) return Interaction::Blocked;
             if (police_) {
-                if (car_->type() == CarType::Police) police_->steal(*car_);
+                if (vehicle.car->type() == CarType::Police) { if (!police_->steal(*vehicle.car)) return Interaction::Blocked; }
                 else if (stolen) police_->crime(Crime::VehicleTheft, character_.position());
             }
+            car_ = vehicle.car;
         }
         if (vehicle.plane) plane_ = vehicle.plane;
         driving_ = vehicle.kind == EntryVehicle::Car;
@@ -203,6 +237,17 @@ void Player::step(Input driving, FootInput walking, float dt, FlightInput flight
         if (on_foot()) for (const auto& unit : police_->units()) if (unit.active) character_.hit_by(*unit.car, dt);
     }
     world_.step(dt);
+    if (driving_ && car_->destroyed()) {
+        if (!character_.pull_from(*car_)) character_.reset(car_->position() + Vec3(0, 2, 0));
+        driving_ = coasting_ = false;
+        character_.take_damage(100);
+    }
+    if (flying_ && plane_->destroyed()) {
+        character_.reset(plane_->position() + plane_->rotate(plane_->exit_offsets()[0]));
+        character_.ragdoll(plane_->velocity());
+        flying_ = false;
+        character_.take_damage(100);
+    }
     if (!on_foot() && position().GetY() < Environment::water_level + .1f
         && environment_.terrain_height(position().GetX(), position().GetZ()) < Environment::water_level - 1)
         interact();
@@ -211,6 +256,7 @@ void Player::step(Input driving, FootInput walking, float dt, FlightInput flight
         character_.step(walking, dt);
     }
     if (pedestrians_) pedestrians_->step(starter_car_, traffic_, position(), dt);
+    if (traffic_) traffic_->finish(position(), dt);
     if (police_) police_->finish(*this, dt);
 }
 
@@ -219,7 +265,7 @@ bool Player::can_shoot() const {
 }
 Shot Player::shoot(Vec3 origin, Vec3 direction, bool held, bool pressed, bool aiming) {
     if (!can_shoot()) return {};
-    const auto shot = weapons_.fire(world_, pedestrians_, origin, direction, held, pressed, aiming, police_);
+    const auto shot = weapons_.fire(world_, pedestrians_, origin, direction, held, pressed, aiming, police_, &character_);
     if (police_ && shot.fired) {
         police_->crime(Crime::Gunfire, position());
         if (shot.injured) police_->crime(police_->is_officer(shot.victim)

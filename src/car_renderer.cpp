@@ -229,7 +229,7 @@ bool CarRenderer::draw_body(const Car& car, const Camera3D& camera, Color paint,
     const auto p = car.position();
     const Matrix transform = MatrixMultiply(QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()}),
         MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
-    draw_model(body_, transform, camera, paint, override_shader);
+    draw_model(body_, transform, camera, paint, override_shader, !car.destroyed());
     return true;
 }
 
@@ -245,11 +245,11 @@ bool CarRenderer::draw_wheel(const Car& car, const Wheel& wheel, const Camera3D&
     const float size = car.tuning().wheel_radius / wheel_radius;
     const Matrix transform = MatrixMultiply(MatrixMultiply(MatrixScale(size, size, size),
         QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()})), MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
-    draw_model(wheel_, transform, camera, BLANK, override_shader);
+    draw_model(wheel_, transform, camera, BLANK, override_shader, !car.destroyed());
     return true;
 }
 
-void CarRenderer::draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Color paint, Shader override_shader) const {
+void CarRenderer::draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Color paint, Shader override_shader, bool intact) const {
     if (!override_shader.id) SetShaderValue(shader_, camera_location_, &camera.position, SHADER_UNIFORM_VEC3);
     // Both source GLBs mark every material as double-sided.
     rlDrawRenderBatchActive();
@@ -259,8 +259,9 @@ void CarRenderer::draw_model(const Model& model, const Matrix& transform, const 
         const Shader original_shader = material.shader;
         if (override_shader.id) material.shader = override_shader;
         const Color original = material.maps[MATERIAL_MAP_DIFFUSE].color;
-        if (i == 0 && paint.a != 0) material.maps[MATERIAL_MAP_DIFFUSE].color = paint;
-        const auto color = material.maps[MATERIAL_MAP_EMISSION].color;
+        if (!intact) material.maps[MATERIAL_MAP_DIFFUSE].color = {18, 18, 18, 255};
+        else if (i == 0 && paint.a != 0) material.maps[MATERIAL_MAP_DIFFUSE].color = paint;
+        const auto color = intact ? material.maps[MATERIAL_MAP_EMISSION].color : BLANK;
         const Vector3 emission{color.r / 255.0f, color.g / 255.0f, color.b / 255.0f};
         if (!override_shader.id) SetShaderValue(shader_, emission_location_, &emission, SHADER_UNIFORM_VEC3);
         DrawMesh(model.meshes[i], material, transform);

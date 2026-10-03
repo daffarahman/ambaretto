@@ -1,6 +1,7 @@
 #include "player.hpp"
 #include "environment.hpp"
 #include "third_person_camera.hpp"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -349,6 +350,41 @@ void surface_swimming() {
         "plane entering water did not eject player clear of aircraft into swimming");
     std::cout << "Swimming: car/plane exits, falling, strokes, controls, surface buoyancy, bridge and shore passed\n";
 }
+void nearby_respawns() {
+    using namespace forza;
+    Environment map;
+    PhysicsWorld world(map);
+    Car car(world);
+    Player player(world, car, map);
+    const auto check = [&](Vec3 death, float maximum_distance) {
+        player.respawn_on_foot(death);
+        player.character().take_damage(100);
+        player.respawn_near(death);
+        const auto feet = player.position();
+        require(player.on_foot() && player.character().alive() && !player.character().ragdolling(), "respawn did not revive on foot");
+        require(std::hypot(feet.GetX() - death.GetX(), feet.GetZ() - death.GetZ()) <= maximum_distance, "respawn was too far from death");
+        require(feet.GetY() > Environment::water_level && player.character().can_stand_at(feet), "respawn overlaps obstacle or is underwater");
+        GroundHit hit;
+        require(world.cast_ground(feet + Vec3(0, .5f, 0), Vec3(0, -1, 0), 1, hit) && hit.normal.GetY() > .65f,
+            "respawn has no safe ground");
+        for (int i = 0; i < 120; ++i) player.step({}, {});
+        require(player.character().alive() && !player.character().swimming(), "respawn immediately killed player or entered water");
+    };
+    check(Vec3(0, map.height(0, 300) + .08f, 300), 40);
+    check(Vec3(-2190, 120, 4290), 40); // An airborne death above the Keys airport.
+    const auto& building = map.buildings().front();
+    check(building.center, 220);
+    // Deep ocean: the nearest bridge or road replaces the distant fixed spawn.
+    const Vec3 sea(2500, -2, 1800);
+    float nearest_road = 1e9f;
+    for (const auto& road : map.roads()) {
+        Vec3 direction = road.b - road.a; direction.SetY(0);
+        const float t = std::clamp((sea - road.a).Dot(direction) / std::max(.001f, direction.LengthSq()), 0.f, 1.f);
+        const Vec3 point = road.a + direction * t;
+        nearest_road = std::min(nearest_road, std::hypot(point.GetX() - sea.GetX(), point.GetZ() - sea.GetZ()));
+    }
+    check(sea, nearest_road + 40);
+}
 void model_tree_collisions() {
     const forza::Environment map;
     forza::PhysicsWorld world(map);
@@ -374,7 +410,7 @@ void model_tree_collisions() {
 }
 int main() {
     try {
-        character_movement(); articulated_ragdoll(); city_collisions_and_interaction(); ragdoll_impact_damage(); car_coasting_and_direction_changes(); mouse_camera(); surface_swimming(); model_tree_collisions();
+        character_movement(); articulated_ragdoll(); city_collisions_and_interaction(); ragdoll_impact_damage(); car_coasting_and_direction_changes(); mouse_camera(); surface_swimming(); nearby_respawns(); model_tree_collisions();
         std::cout << "All player checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

@@ -17,7 +17,7 @@ public:
 private:
     void load_body();
     void load_wheel();
-    void draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Color paint = BLANK, Shader override_shader = {}) const;
+    void draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Color paint = BLANK, Shader override_shader = {}, bool intact = true) const;
     Model body_{}, wheel_{};
     Shader shader_{};
     int camera_location_ = -1, emission_location_ = -1;

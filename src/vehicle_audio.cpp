@@ -13,10 +13,13 @@ namespace {
 void write_integer(std::vector<unsigned char>& bytes, unsigned offset, std::uint32_t value, unsigned size) {
     for (unsigned i = 0; i < size; ++i) bytes[offset + i] = static_cast<unsigned char>(value >> (i * 8));
 }
-VehicleAudioLoop load_loop(const char* filename) {
+std::string sound_path(const char* filename) {
     const std::string relative = std::string("assets/sounds/") + filename;
     const std::string bundled = std::string(GetApplicationDirectory()) + relative;
-    const Wave wave = LoadWave(FileExists(bundled.c_str()) ? bundled.c_str() : relative.c_str());
+    return FileExists(bundled.c_str()) ? bundled : relative;
+}
+VehicleAudioLoop load_loop(const char* filename) {
+    const Wave wave = LoadWave(sound_path(filename).c_str());
     auto loop = make_vehicle_audio_loop(wave);
     if (IsWaveValid(wave)) UnloadWave(wave);
     return loop;
@@ -104,15 +107,18 @@ VehicleAudio::VehicleAudio() {
     auto engine = load_loop("car-engine.wav"), horn = load_loop("car-horn.wav");
     engine_data_ = std::move(engine.wav); horn_data_ = std::move(horn.wav);
     SetAudioStreamBufferSizeDefault(8192);
-    std::vector<float> samples(44100); float phase = 0;
-    for (std::size_t i = 0; i < samples.size(); ++i) {
-        const float time = float(i) / 22050;
-        phase += 6.2831853f * (700 + 220 * std::sin(time * 6.2831853f)) / 22050;
-        samples[i] = std::sin(phase) * .3f * std::min({1.f, time * 40, (2 - time) * 40});
-    }
-    siren_data_ = make_vehicle_audio_loop({44100, 22050, 32, 1, samples.data()}).wav;
-    if (!siren_data_.empty()) siren_ = LoadMusicStreamFromMemory(".wav", siren_data_.data(), int(siren_data_.size()));
+    siren_ = LoadMusicStream(sound_path("siren.wav").c_str());
     if (IsMusicValid(siren_)) { siren_.looping = true; SetMusicVolume(siren_, 0); }
+    const char* files[] = {"9mm.wav", "smg.wav", "ak47.wav", "explosion.wav"};
+    for (std::size_t i = 0; i < effects_.size(); ++i) {
+        effects_[i] = LoadSound(sound_path(files[i]).c_str());
+        if (!IsSoundValid(effects_[i])) { TraceLog(LOG_WARNING, "AUDIO: %s unavailable", files[i]); continue; }
+        // ponytail: eight overlapping voices per clip; increase if dense fire cuts off tails.
+        for (auto& voice : effect_aliases_[i]) voice = LoadSoundAlias(effects_[i]);
+        TraceLog(LOG_INFO, "AUDIO: %s effect ready (%i voices)", files[i], effect_voices);
+    }
+    if (IsMusicValid(siren_)) TraceLog(LOG_INFO, "AUDIO: Police siren ready (siren.wav)");
+    else TraceLog(LOG_WARNING, "AUDIO: Police siren unavailable");
     const auto load = [&](Voice& voice) {
         if (!engine_data_.empty()) voice.engine = LoadMusicStreamFromMemory(".wav", engine_data_.data(), int(engine_data_.size()));
         if (!horn_data_.empty()) voice.horn = LoadMusicStreamFromMemory(".wav", horn_data_.data(), int(horn_data_.size()));
@@ -128,6 +134,8 @@ VehicleAudio::VehicleAudio() {
 }
 
 VehicleAudio::~VehicleAudio() {
+    for (auto& voices : effect_aliases_) for (auto voice : voices) if (IsSoundValid(voice)) UnloadSoundAlias(voice);
+    for (auto sound : effects_) if (IsSoundValid(sound)) UnloadSound(sound);
     if (IsMusicValid(siren_)) UnloadMusicStream(siren_);
     const auto unload = [](Voice& voice) {
         if (IsMusicValid(voice.engine)) UnloadMusicStream(voice.engine);
@@ -140,15 +148,36 @@ VehicleAudio::~VehicleAudio() {
 void VehicleAudio::update_police(const Police& police, Vec3 listener, Vec3 listener_right, bool running) {
     if (!IsMusicValid(siren_)) return;
     const Car* nearest = nullptr; float distance = 200 * 200;
-    if (running && police.wanted().stars()) for (const auto& unit : police.units()) if (unit.active && !unit.claimed) {
+    if (running && police.wanted().stars()) for (const auto& unit : police.units()) if (unit.active && !unit.claimed && !unit.car->destroyed()) {
         const float candidate = (unit.car->position() - listener).LengthSq();
         if (candidate < distance) { distance = candidate; nearest = unit.car.get(); }
     }
     if (!nearest) { StopMusicStream(siren_); return; }
     const auto placement = vehicle_audio_placement(nearest->position(), listener, listener_right, 200);
-    SetMusicVolume(siren_, placement.volume * .65f); SetMusicPan(siren_, .5f + placement.pan * .5f);
+    SetMusicVolume(siren_, placement.volume * .65f); SetMusicPan(siren_, placement.pan);
     if (!IsMusicStreamPlaying(siren_)) PlayMusicStream(siren_);
     UpdateMusicStream(siren_);
+}
+void VehicleAudio::update_effects(PhysicsWorld& world, Vec3 listener, Vec3 listener_right, bool running) {
+    const auto events = world.take_sound_events();
+    if (!running) {
+        for (auto& voices : effect_aliases_) for (auto voice : voices) if (IsSoundValid(voice)) StopSound(voice);
+        return;
+    }
+    if (!IsAudioDeviceReady()) return;
+    for (const auto& event : events) {
+        const int kind = int(event.effect);
+        if (kind < 0 || kind >= int(effects_.size())) continue;
+        const bool explosion = event.effect == SoundEffect::Explosion;
+        const auto placement = vehicle_audio_placement(event.position, listener, listener_right, explosion ? 200 : 120);
+        if (placement.volume <= 0) continue;
+        auto& voice = effect_aliases_[kind][next_effect_voice_[kind]++ % effect_voices];
+        if (!IsSoundValid(voice)) continue;
+        StopSound(voice);
+        SetSoundVolume(voice, placement.volume * (explosion ? .9f : .6f));
+        SetSoundPan(voice, placement.pan);
+        PlaySound(voice);
+    }
 }
 void VehicleAudio::clear_voice(Voice& voice) {
     if (IsMusicValid(voice.engine)) StopMusicStream(voice.engine);
@@ -190,7 +219,7 @@ void VehicleAudio::update(const Traffic& traffic, const Car& player_car, Vec3 li
         selected_.fill(nullptr);
         // ponytail: six nearby vehicles at 10 Hz; raise the cap only if dense traffic audibly loses voices.
         for (const auto& vehicle : traffic.cars()) {
-            if (!vehicle.npc || !vehicle.car->simulated() || vehicle.car.get() == &player_car) continue;
+            if (!vehicle.npc || !vehicle.car->simulated() || vehicle.car->destroyed() || vehicle.car.get() == &player_car) continue;
             const float distance = (vehicle.car->position() - listener).LengthSq();
             const float range = vehicle.horn_time > 0 ? 120.0f : 70.0f;
             if (distance >= range * range) continue;
@@ -204,18 +233,18 @@ void VehicleAudio::update(const Traffic& traffic, const Car& player_car, Vec3 li
     }
     const float revs = engine_revs(player_car), throttle = engine_throttle(player_car, player_throttle);
     const auto placement = vehicle_audio_placement(player_car.position(), listener, listener_right, 70);
-    update_voice(player_, running && player_driving ? placement.volume * (.22f + .18f * revs + .25f * throttle) : 0,
-                 running && player_driving && horn_held ? placement.volume * .70f : 0,
+    update_voice(player_, running && player_driving && !player_car.destroyed() ? placement.volume * (.22f + .18f * revs + .25f * throttle) : 0,
+                 running && player_driving && !player_car.destroyed() && horn_held ? placement.volume * .70f : 0,
                  .7f + 1.5f * revs + .2f * throttle, placement.pan, dt);
     for (auto& voice : npcs_) {
         if (voice.vehicle && voice.vehicle->car.get() == &player_car) clear_voice(voice); // Stealing must not duplicate the player's engine.
         if (!voice.vehicle) for (const auto* candidate : selected_) {
-            if (!candidate || !candidate->npc || candidate->car.get() == &player_car) continue;
+            if (!candidate || !candidate->npc || candidate->car->destroyed() || candidate->car.get() == &player_car) continue;
             bool used = false;
             for (const auto& other : npcs_) if (other.vehicle == candidate) { used = true; break; }
             if (!used) { voice.vehicle = candidate; break; }
         }
-        bool selected = voice.vehicle && voice.vehicle->npc && voice.vehicle->car->simulated();
+        bool selected = voice.vehicle && voice.vehicle->npc && voice.vehicle->car->simulated() && !voice.vehicle->car->destroyed();
         if (selected) selected = std::find(selected_.begin(), selected_.end(), voice.vehicle) != selected_.end();
         float engine_volume = 0, horn_volume = 0, pitch = voice.pitch, pan = voice.pan;
         if (selected && running) {

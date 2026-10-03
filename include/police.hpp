@@ -51,7 +51,7 @@ public:
     void prepare(Player& player, float dt = fixed_step);
     void finish(Player& player, float dt = fixed_step);
     void clear();
-    void steal(Car& car);
+    bool steal(Car& car);
     bool is_officer(const Character* character) const;
     void raycast(Vec3 origin, Vec3 direction, ShotHit& hit, const Character* ignore = nullptr) const;
     void set_view(Vec3 position, Vec3 direction) { camera_ = position; camera_forward_ = direction.NormalizedOr(Vec3(0, 0, -1)); view_set_ = true; }
@@ -63,7 +63,7 @@ private:
     struct RoadNode { Vec3 point; std::vector<std::pair<int, float>> edges; float width = 9; int component = -1; };
     void build_roads();
     int nearest_node(Vec3 position) const;
-    bool visible(Vec3 eye, Vec3 target, float range, JPH::BodyID ignore = {}) const;
+    bool visible(Vec3 eye, Vec3 target, float range, JPH::BodyID ignore = {}, JPH::BodyID target_body = {}) const;
     bool camera_visible(Vec3 position) const;
     bool spawn(PoliceUnit& unit, const Player& player, std::size_t index);
     bool exit(PoliceUnit& unit, PoliceOfficer& officer, std::size_t side);

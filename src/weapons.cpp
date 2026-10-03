@@ -19,22 +19,17 @@ WeaponType wheel_selection(float x, float y, WeaponType current) {
     const float angle = std::atan2(x, -y);
     return WeaponType((int(std::floor(angle / 1.57079633f + .5f)) + 4) % 4);
 }
-ShotHit trace_shot(const PhysicsWorld& world, const Pedestrians* pedestrians, Vec3 origin, Vec3 direction, float range, const Police* police, const Character* ignore) {
+ShotHit trace_shot(const PhysicsWorld& world, const Pedestrians*, Vec3 origin, Vec3 direction, float range, const Police*, const Character* ignore) {
     direction = direction.NormalizedOr(Vec3(0, 0, -1));
     ShotHit result{nullptr, 0, origin + direction * range, range};
     GroundHit obstacle;
     if (world.cast_ray(origin, direction, range, obstacle)) {
         result.point = obstacle.point;
         result.distance = obstacle.distance;
+        result.car = obstacle.car;
+        result.plane = obstacle.plane;
     }
-    // ponytail: scan the bounded 64-person pool; use a spatial query if that cap grows.
-    if (pedestrians) for (const auto& person : pedestrians->people()) if (person.enabled && person.character.get() != ignore) {
-        BodyPart part;
-        float distance = result.distance;
-        if (person.character->raycast(origin, direction, distance, part))
-            result = {person.character.get(), int(part), origin + direction * distance, distance};
-    }
-    if (police) police->raycast(origin, direction, result, ignore);
+    world.raycast_characters(origin, direction, result, ignore);
     return result;
 }
 void Weapons::reset() {
@@ -63,8 +58,8 @@ void Weapons::step(float dt) {
     ammo_[int(selected_)] += amount;
     reserve_[int(selected_)] -= amount;
 }
-Shot Weapons::fire(const PhysicsWorld& world, const Pedestrians* pedestrians, Vec3 origin, Vec3 direction,
-    bool held, bool pressed, bool aiming, const Police* police) {
+Shot Weapons::fire(PhysicsWorld& world, const Pedestrians* pedestrians, Vec3 origin, Vec3 direction,
+    bool held, bool pressed, bool aiming, const Police* police, const Character* ignore) {
     if (selected_ == WeaponType::Unarmed || !held || (!data().automatic && !pressed) || reloading() || cooldown_ > 0) return {};
     if (ammo() == 0) { reload(); return {}; }
     direction = direction.NormalizedOr(Vec3(0, 0, -1));
@@ -72,16 +67,24 @@ Shot Weapons::fire(const PhysicsWorld& world, const Pedestrians* pedestrians, Ve
     const Vec3 up = right.Cross(direction);
     std::uniform_real_distribution<float> spread(-data().spread, data().spread);
     direction = (direction + (right * spread(random_) + up * spread(random_)) * (aiming ? 1.f : 3.f)).Normalized();
-    const auto hit = trace_shot(world, pedestrians, origin, direction, data().range, police);
+    const auto hit = trace_shot(world, pedestrians, origin, direction, data().range, police, ignore);
     const bool alive = hit.character && hit.character->alive();
     if (hit.character) {
         const auto part = BodyPart(hit.part);
         const float multiplier = part == BodyPart::Head ? 3.f : hit.part >= int(BodyPart::LeftUpperArm) ? .65f : 1.f;
         hit.character->take_damage(data().damage * multiplier, part, direction * data().impulse);
     }
+    if (hit.car) hit.car->take_damage(data().damage * VehicleDamage::gunfire_multiplier);
+    if (hit.plane) hit.plane->take_damage(data().damage * VehicleDamage::gunfire_multiplier);
+    switch (selected_) {
+        case WeaponType::Pistol: world.emit_sound(SoundEffect::Pistol, origin); break;
+        case WeaponType::SMG: world.emit_sound(SoundEffect::SMG, origin); break;
+        case WeaponType::AK47: world.emit_sound(SoundEffect::AK47, origin); break;
+        default: break;
+    }
     --ammo_[int(selected_)];
     cooldown_ = data().interval;
-    return {true, hit.character != nullptr, origin, hit.point, data().recoil, hit.character,
+    return {true, hit.character != nullptr || hit.car != nullptr || hit.plane != nullptr, origin, hit.point, data().recoil, hit.character,
         alive && !hit.character->alive(), alive};
 }
 } // namespace forza

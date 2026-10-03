@@ -24,6 +24,8 @@ struct ShotHit {
     int part = 0;
     Vec3 point{0, 0, 0};
     float distance = 0;
+    Car* car = nullptr;
+    Plane* plane = nullptr;
 };
 ShotHit trace_shot(const PhysicsWorld& world, const Pedestrians* pedestrians,
     Vec3 origin, Vec3 direction, float range, const Police* police = nullptr, const Character* ignore = nullptr);
@@ -46,8 +48,8 @@ public:
     bool reloading() const { return reload_time_ > 0; }
     void reload();
     void step(float dt);
-    Shot fire(const PhysicsWorld& world, const Pedestrians* pedestrians, Vec3 origin, Vec3 direction,
-        bool held, bool pressed, bool aiming, const Police* police = nullptr);
+    Shot fire(PhysicsWorld& world, const Pedestrians* pedestrians, Vec3 origin, Vec3 direction,
+        bool held, bool pressed, bool aiming, const Police* police = nullptr, const Character* ignore = nullptr);
 private:
     WeaponType selected_ = WeaponType::Unarmed;
     std::array<int, int(WeaponType::Count)> ammo_{}, reserve_{};

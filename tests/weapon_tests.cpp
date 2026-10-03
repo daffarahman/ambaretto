@@ -76,6 +76,10 @@ int main() {
         require(weapons.reloading() && !weapons.fire(flat, nullptr, origin, direction, true, true, true).fired, "reloading allowed shots");
         weapons.step(1);
         require(weapons.ammo() == 12 && weapons.reserve() == 119, "reload ammo transfer incorrect");
+        const auto pistol_audio = flat.take_sound_events();
+        require(pistol_audio.size() == 1 && pistol_audio[0].effect == SoundEffect::Pistol
+            && (pistol_audio[0].position - origin).Length() < .001f && flat.take_sound_events().empty(),
+            "pistol sound missing, duplicated by blocked fire, or not consumed once");
         for (const auto type : {WeaponType::SMG, WeaponType::AK47}) {
             weapons.select(type);
             require(weapons.fire(flat, nullptr, origin, direction, true, false, true).fired, "automatic weapon failed while held");
@@ -83,6 +87,10 @@ int main() {
             require(weapons.fire(flat, nullptr, origin, direction, true, false, true).fired, "automatic fire did not repeat");
             weapons.step(.5f);
         }
+        const auto automatic_audio = flat.take_sound_events();
+        require(automatic_audio.size() == 4 && automatic_audio[0].effect == SoundEffect::SMG
+            && automatic_audio[1].effect == SoundEffect::SMG && automatic_audio[2].effect == SoundEffect::AK47
+            && automatic_audio[3].effect == SoundEffect::AK47, "automatic gunfire did not emit one matching sound per shot");
         weapons.select(WeaponType::SMG);
         require(weapons.ammo() == 28, "weapon switching lost its ammo state");
         weapons.reload(); weapons.select(WeaponType::Pistol); weapons.step(3);

@@ -1,5 +1,5 @@
 #pragma once
-#include "vehicle.hpp"
+#include "player.hpp"
 #include <vector>
 
 namespace forza {
@@ -9,6 +9,7 @@ struct Road;
 
 struct TrafficCar {
     std::unique_ptr<Car> car;
+    std::unique_ptr<Character> driver; // Created when the hidden occupant leaves the car.
     bool npc = true;
     std::size_t route = 0;
     const char* route_name = "";
@@ -33,7 +34,8 @@ public:
     Traffic(PhysicsWorld& world, const Environment& environment);
     const std::vector<TrafficCar>& cars() const { return cars_; }
     bool is_npc(const Car* car) const;
-    void steal(Car& car);
+    bool steal(Car& car);
+    void finish(Vec3 player_position, float dt = fixed_step);
     void step(Car* controlled, const Car& starter_car, const Plane* plane,
               const Vec3* pedestrian, Vec3 player_position, float dt = fixed_step, const Police* police = nullptr);
 private:

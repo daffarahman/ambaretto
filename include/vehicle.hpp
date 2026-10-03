@@ -6,14 +6,28 @@
 #include <Jolt/Math/Quat.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <array>
+#include <atomic>
 #include <memory>
+#include <vector>
 
 namespace forza {
 class Environment;
 class Character;
 class Plane;
+class Car;
+struct ShotHit;
 using Vec3 = JPH::Vec3;
 using Quat = JPH::Quat;
+struct VehicleDamage {
+    static constexpr float max_health = 100;
+    static constexpr float gunfire_multiplier = .35f;
+    float health = max_health, crash_cooldown = 0, explosion_time = 10;
+    std::atomic<float> impact_speed{0};
+    Vec3 explosion_position{0, 0, 0};
+    bool explosion_pending = false;
+    void take_damage(float amount, Vec3 position);
+    void repair();
+};
 inline constexpr float fixed_step = 1.0f / 120.0f;
 inline constexpr float wheel_radius = CarTuning{}.wheel_radius;
 inline constexpr float chassis_offset = 0.5f;
@@ -41,7 +55,12 @@ struct GroundHit {
     Vec3 point{0, 0, 0};
     Vec3 normal{0, 1, 0};
     float distance = 0;
+    Car* car = nullptr;
+    Plane* plane = nullptr;
+    JPH::BodyID body;
 };
+enum class SoundEffect { Pistol, SMG, AK47, Explosion, Count };
+struct SoundEvent { SoundEffect effect; Vec3 position; };
 
 class PhysicsWorld {
 public:
@@ -52,8 +71,11 @@ public:
     PhysicsWorld& operator=(const PhysicsWorld&) = delete;
     bool cast_ground(const Vec3& origin, const Vec3& direction,
                      float distance, GroundHit& hit) const;
-    bool cast_ray(const Vec3& origin, const Vec3& direction, float distance, GroundHit& hit) const;
+    bool cast_ray(const Vec3& origin, const Vec3& direction, float distance, GroundHit& hit, JPH::BodyID ignore = {}) const;
+    void raycast_characters(Vec3 origin, Vec3 direction, ShotHit& hit, const Character* ignore = nullptr) const;
     void step(float dt = fixed_step);
+    void emit_sound(SoundEffect effect, Vec3 position);
+    std::vector<SoundEvent> take_sound_events();
     float camera_fraction(const Vec3& origin, const Vec3& offset, JPH::BodyID ignore = {}) const;
 private:
     friend class Car;
@@ -68,6 +90,7 @@ enum class CarType { Civilian, Police };
 class Car {
 public:
     explicit Car(PhysicsWorld& world, CarType type = CarType::Civilian);
+    ~Car();
     CarType type() const { return type_; }
     void step(Input input, float dt = fixed_step);
     void reset(const Vec3& center_of_mass, float yaw = 0);
@@ -87,7 +110,15 @@ public:
     void set_tuning(CarTuning tuning);
     void set_simulated(bool simulated);
     bool simulated() const { return simulated_; }
+    static constexpr float max_health = VehicleDamage::max_health;
+    float health() const { return damage_.health; }
+    bool destroyed() const { return health() <= 0; }
+    void take_damage(float amount);
+    void repair();
+    float explosion_time() const { return damage_.explosion_time; }
+    Vec3 explosion_position() const { return damage_.explosion_position; }
 private:
+    friend class PhysicsWorld;
     void update_wheel_mounts();
     void refresh_wheel_contacts();
     PhysicsWorld& world_;
@@ -99,5 +130,6 @@ private:
     CarTuning tuning_{};
     CarType type_;
     bool simulated_ = true;
+    VehicleDamage damage_;
 };
 } // namespace forza

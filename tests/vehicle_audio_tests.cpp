@@ -14,6 +14,47 @@ namespace {
 void require(bool condition, const char* message) {
     if (!condition) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
 }
+void check_effect_clips(bool playback) {
+    if (playback) { InitAudioDevice(); require(IsAudioDeviceReady(), "Audio device required for native effect check"); SetMasterVolume(0); }
+    for (const char* file : {"siren.wav", "9mm.wav", "smg.wav", "ak47.wav", "explosion.wav"}) {
+        const auto path = std::string(VEHICLE_AUDIO_ASSETS) + file;
+        Wave wave = LoadWave(path.c_str());
+        require(IsWaveValid(wave) && wave.frameCount > 0, "The supplied siren/gunfire/explosion WAV must decode");
+        float* samples = LoadWaveSamples(wave);
+        require(samples, "Effect WAV has no decoded samples");
+        float peak = 0;
+        for (unsigned i = 0; i < wave.frameCount * wave.channels; ++i) peak = std::max(peak, std::abs(samples[i]));
+        require(peak > .01f, "Effect recording is silent");
+        std::printf("%s: %.3f s, %u channels, peak %.3f\n", file, float(wave.frameCount) / wave.sampleRate, wave.channels, peak);
+        UnloadWaveSamples(samples); UnloadWave(wave);
+        if (playback) {
+            Sound source = LoadSound(path.c_str());
+            require(IsSoundValid(source), "Effect clip failed to load as native sound");
+            Sound first = LoadSoundAlias(source), second = LoadSoundAlias(source);
+            require(IsSoundValid(first) && IsSoundValid(second), "Effect aliases failed to share clip data");
+            PlaySound(first); PlaySound(second);
+            require(IsSoundPlaying(first) && IsSoundPlaying(second), "Rapid shots cannot overlap");
+            StopSound(first);
+            require(!IsSoundPlaying(first) && IsSoundPlaying(second), "Stopping one effect voice stopped another");
+            UnloadSoundAlias(first); UnloadSoundAlias(second); UnloadSound(source);
+        }
+    }
+    if (playback) {
+        {
+            forza::VehicleAudio audio;
+            forza::PhysicsWorld world(false);
+            for (const auto effect : {forza::SoundEffect::Pistol, forza::SoundEffect::SMG, forza::SoundEffect::AK47, forza::SoundEffect::Explosion})
+                world.emit_sound(effect, forza::Vec3::sZero());
+            audio.update_effects(world, forza::Vec3::sZero(), forza::Vec3::sAxisX(), true);
+            require(world.take_sound_events().empty(), "Audio update did not consume gameplay sounds");
+            world.emit_sound(forza::SoundEffect::Explosion, forza::Vec3::sZero());
+            audio.update_effects(world, forza::Vec3::sZero(), forza::Vec3::sAxisX(), false);
+            require(world.take_sound_events().empty(), "Paused audio retained a delayed sound");
+        }
+        CloseAudioDevice();
+        std::puts("Native effect loading, overlapping aliases, gameplay consumption and pause checks passed");
+    }
+}
 void check_loop(const char* filename, bool horn, bool playback) {
     const Wave original = LoadWave((std::string(VEHICLE_AUDIO_ASSETS) + filename).c_str());
     require(IsWaveValid(original), "The supplied vehicle WAV must decode");
@@ -69,6 +110,7 @@ int main(int argc, char** argv) {
     SetTraceLogLevel(LOG_WARNING);
     const bool playback = argc > 1 && std::string(argv[1]) == "--playback";
     check_loop("car-horn.wav", true, playback); check_loop("car-engine.wav", false, false);
+    check_effect_clips(playback);
     const auto origin = forza::Vec3::sZero(), right = forza::Vec3::sAxisX();
     const auto near = forza::vehicle_audio_placement(origin, origin, right, 100);
     require(near.volume == 1 && near.pan == 0, "A car beside the listener must be centered and audible");

@@ -49,9 +49,10 @@ class CameraLayers final : public JPH::ObjectLayerFilter {
     bool ShouldCollide(JPH::ObjectLayer layer) const override { return layer != character_layer; }
 };
 
-class RagdollContacts final : public JPH::ContactListener {
+class ImpactContacts final : public JPH::ContactListener {
     static void record(const JPH::Body& body, const JPH::Body& other, float speed) {
-        if (body.GetObjectLayer() != character_layer || !body.GetUserData()
+        if ((body.GetObjectLayer() != character_layer && body.GetObjectLayer() != vehicle_layer) || !body.GetUserData()
+            || (body.GetObjectLayer() == vehicle_layer && other.GetObjectLayer() == character_layer)
             || body.GetUserData() == other.GetUserData() || speed <= 6) return;
         auto& impact = *reinterpret_cast<std::atomic<float>*>(body.GetUserData());
         float previous = impact.load(std::memory_order_relaxed);
@@ -65,7 +66,8 @@ class RagdollContacts final : public JPH::ContactListener {
         // A fast landing also scrapes the road even when most motion is sideways.
         if (added && speed > 1.5f && (a.GetObjectLayer() == ground_layer || b.GetObjectLayer() == ground_layer)
             && relative.LengthSq() > 64) speed = std::max(speed, relative.Length());
-        record(a, b, speed); record(b, a, speed);
+        record(a, b, a.GetObjectLayer() == character_layer ? speed : relative.Dot(manifold.mWorldSpaceNormal));
+        record(b, a, b.GetObjectLayer() == character_layer ? speed : relative.Dot(manifold.mWorldSpaceNormal));
     }
     void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold, JPH::ContactSettings&) override {
         contact(a, b, manifold, true);
@@ -104,9 +106,13 @@ struct PhysicsWorld::Impl {
     std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> broad_phase_filter;
     JPH::TempAllocatorImpl allocator{64 * 1024 * 1024};
     JPH::JobSystemThreadPool jobs{JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, 2};
-    RagdollContacts contacts;
+    ImpactContacts contacts;
     JPH::PhysicsSystem system;
     std::vector<JPH::BodyID> bodies;
+    std::vector<Car*> cars;
+    std::vector<Plane*> planes;
+    std::vector<Character*> characters;
+    std::vector<SoundEvent> sounds;
     JPH::CollisionGroup::GroupID next_character_group = 1;
 
     Impl() {
@@ -267,16 +273,87 @@ bool PhysicsWorld::cast_ground(const Vec3& origin, const Vec3& direction,
 void PhysicsWorld::step(float dt) {
     if (impl_->system.Update(dt, 1, &impl_->allocator, &impl_->jobs) != JPH::EPhysicsUpdateError::None)
         throw std::runtime_error("Jolt physics capacity exceeded");
+    const auto advance_damage = [dt](auto* vehicle, bool simulated) {
+        auto& damage = vehicle->damage_;
+        damage.explosion_time = std::min(10.f, damage.explosion_time + dt);
+        damage.crash_cooldown = std::max(0.f, damage.crash_cooldown - dt);
+        const float impact = damage.impact_speed.exchange(0, std::memory_order_relaxed);
+        if (simulated && impact > 6 && damage.crash_cooldown <= 0) {
+            vehicle->take_damage((impact - 6) * 3);
+            damage.crash_cooldown = .45f;
+        }
+    };
+    for (auto* car : impl_->cars) advance_damage(car, car->simulated());
+    for (auto* plane : impl_->planes) advance_damage(plane, true);
+    // Consume each blast once, including vehicles destroyed by another blast.
+    bool exploded;
+    do {
+        exploded = false;
+        const auto explode = [&](auto* vehicle, float vehicle_mass, float radius, bool simulated) {
+            if (!vehicle->damage_.explosion_pending) return;
+            vehicle->damage_.explosion_pending = false;
+            exploded = true;
+            emit_sound(SoundEffect::Explosion, vehicle->explosion_position());
+            const Vec3 origin = vehicle->explosion_position() + Vec3(0, .5f, 0);
+            if (simulated) impl_->system.GetBodyInterface().AddImpulse(vehicle->body_id(), Vec3(0, vehicle_mass * 3, 0));
+            const auto damage_vehicle = [&](auto* other, float other_mass) {
+                if (other->body_id() == vehicle->body_id() || other->destroyed()) return;
+                const Vec3 delta = other->position() + Vec3(0, .5f, 0) - origin;
+                const float distance = delta.Length(), strength = 1 - distance / radius;
+                GroundHit cover;
+                if (strength <= 0 || (cast_ray(origin, delta, distance, cover, vehicle->body_id()) && cover.body != other->body_id())) return;
+                other->take_damage(150 * strength);
+                impl_->system.GetBodyInterface().AddImpulse(other->body_id(),
+                    (delta.NormalizedOr(Vec3::sAxisY()) + Vec3(0, .4f, 0)) * (other_mass * 8 * strength));
+            };
+            for (auto* car : impl_->cars) if (car->simulated()) damage_vehicle(car, mass);
+            for (auto* plane : impl_->planes) damage_vehicle(plane, plane->specs().mass);
+            for (auto* character : impl_->characters) if (character->enabled()) {
+                const Vec3 delta = character->position() + Vec3(0, .8f, 0) - origin;
+                const float distance = delta.Length(), strength = 1 - distance / radius;
+                GroundHit cover;
+                if (strength <= 0 || cast_ray(origin, delta, distance, cover, vehicle->body_id())) continue;
+                character->take_damage(140 * strength, BodyPart::Torso,
+                    (delta.NormalizedOr(Vec3::sAxisY()) + Vec3(0, .5f, 0)) * (220 * strength));
+            }
+        };
+        for (auto* car : impl_->cars) explode(car, mass, 10, car->simulated());
+        for (auto* plane : impl_->planes) explode(plane, plane->specs().mass, plane->explosion_radius(), true);
+    } while (exploded);
 }
 
-bool PhysicsWorld::cast_ray(const Vec3& origin, const Vec3& direction, float distance, GroundHit& hit) const {
+void PhysicsWorld::emit_sound(SoundEffect effect, Vec3 position) {
+    // ponytail: 64 sounds between audio updates; raise if very large chains lose audible blasts.
+    if (impl_->sounds.size() < 64) impl_->sounds.push_back({effect, position});
+}
+std::vector<SoundEvent> PhysicsWorld::take_sound_events() {
+    std::vector<SoundEvent> result;
+    result.swap(impl_->sounds);
+    return result;
+}
+
+bool PhysicsWorld::cast_ray(const Vec3& origin, const Vec3& direction, float distance, GroundHit& hit, JPH::BodyID ignore) const {
     if (distance <= 0 || !std::isfinite(distance) || direction.LengthSq() < .00001f) return false;
     const JPH::RRayCast ray(origin, direction.Normalized() * distance);
     JPH::RayCastResult result;
-    if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, result, {}, CameraLayers{})) return false;
+    if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, result, {}, CameraLayers{}, JPH::IgnoreSingleBodyFilter(ignore))) return false;
     hit.point = ray.GetPointOnRay(result.mFraction);
     hit.distance = distance * result.mFraction;
+    hit.car = nullptr;
+    hit.plane = nullptr;
+    hit.body = result.mBodyID;
+    for (auto* car : impl_->cars) if (car->body_id() == result.mBodyID) { hit.car = car; break; }
+    for (auto* plane : impl_->planes) if (plane->body_id() == result.mBodyID) { hit.plane = plane; break; }
     return true;
+}
+
+void PhysicsWorld::raycast_characters(Vec3 origin, Vec3 direction, ShotHit& hit, const Character* ignore) const {
+    for (auto* character : impl_->characters) if (character != ignore) {
+        BodyPart part;
+        float distance = hit.distance;
+        if (character->raycast(origin, direction, distance, part))
+            hit = {character, int(part), origin + direction.NormalizedOr(Vec3(0, 0, -1)) * distance, distance};
+    }
 }
 
 float PhysicsWorld::camera_fraction(const Vec3& origin, const Vec3& offset, JPH::BodyID ignore) const {
@@ -355,7 +432,21 @@ Plane::Plane(PhysicsWorld& world, PlaneType type) : world_(world), type_(type) {
     }
     wheels_[2].front = true;
     reset(Vec3(0, parking_height(), 0), 0);
+    world_.impl_->system.GetBodyInterface().SetUserData(body_, reinterpret_cast<JPH::uint64>(&damage_.impact_speed));
+    world_.impl_->planes.push_back(this);
 }
+Plane::~Plane() {
+    auto& physics = world_.impl_->system.GetBodyInterface();
+    physics.SetUserData(body_, 0);
+    physics.RemoveBody(body_);
+    auto& planes = world_.impl_->planes;
+    planes.erase(std::remove(planes.begin(), planes.end(), this), planes.end());
+}
+void Plane::take_damage(float amount) {
+    damage_.take_damage(amount, position());
+    if (destroyed()) throttle_ = 0;
+}
+void Plane::repair() { damage_.repair(); }
 std::array<Vec3, 5> Plane::exit_offsets() const {
     if (type_ == PlaneType::Trainer) return {Vec3(-1.9f, 0, -1.8f), Vec3(1.9f, 0, -1.8f), Vec3(-6.3f, 0, 0), Vec3(6.3f, 0, 0), Vec3(0, 0, 4.2f)};
     const float side = specs().body_radius + 1, nose = -specs().length * .30f;
@@ -392,9 +483,10 @@ void Plane::reset(const Vec3& center, float yaw, const Vec3& speed, float thrott
     auto& physics = world_.impl_->system.GetBodyInterface();
     physics.SetPositionAndRotation(body_, center, Quat::sRotation(Vec3::sAxisY(), yaw), JPH::EActivation::Activate);
     physics.SetLinearAndAngularVelocity(body_, speed, Vec3::sZero());
-    throttle_ = clamp(throttle, 0, 1);
+    throttle_ = destroyed() ? 0 : clamp(throttle, 0, 1);
     airspeed_ = speed.Length(); alpha_ = 0; propeller_angle_ = 0;
-    previous_velocity_ = speed; stalled_ = damaged_ = false;
+    stalled_ = false;
+    damage_.impact_speed.store(0, std::memory_order_relaxed);
     for (auto& wheel : wheels_) wheel.spin = 0;
     refresh_gear();
 }
@@ -419,11 +511,8 @@ void Plane::step(FlightInput input, float dt) {
     const float mass_scale = spec.mass / 850;
     auto& physics = world_.impl_->system.GetBodyInterface();
     const Vec3 v = velocity(), center = position();
-    // Large collision decelerations disable the engine. Ordinary gear
-    // touchdowns and aerodynamic acceleration stay well below this threshold.
-    if ((v - previous_velocity_).Length() > 10) damaged_ = true;
-    previous_velocity_ = v;
-    throttle_ = input.parking_brake || damaged_ ? 0 : clamp(throttle_ + input.throttle * .4f * dt, 0, 1);
+    if (destroyed()) input = {0, 0, 0, 0, true, false, true};
+    throttle_ = input.parking_brake ? 0 : clamp(throttle_ + input.throttle * .4f * dt, 0, 1);
     propeller_angle_ = std::remainder(propeller_angle_ + throttle_ * 180 * dt, 6.2831853f);
     const auto basis = rotation();
     const Vec3 right = basis * Vec3::sAxisX(), up = basis * Vec3::sAxisY(), fwd = forward();
@@ -552,8 +641,32 @@ Character::Character(PhysicsWorld& world, const Environment* environment) : worl
     settings.mEnhancedInternalEdgeRemoval = true;
     settings.mMaxStrength = 100;
     impl_->character = new JPH::CharacterVirtual(&settings, Vec3(0, 2, 0), Quat::sIdentity(), &world_.impl_->system);
+    world_.impl_->characters.push_back(this);
 }
-Character::~Character() = default;
+Character::~Character() {
+    auto& characters = world_.impl_->characters;
+    characters.erase(std::remove(characters.begin(), characters.end(), this), characters.end());
+}
+bool Character::enabled() const { return impl_->enabled; }
+bool Character::pull_from(const Car& car, float side) {
+    const Vec3 heading = car.forward();
+    const float yaw = std::atan2(-heading.GetX(), -heading.GetZ());
+    const Quat rotation = Quat::sRotation(Vec3::sAxisY(), yaw);
+    for (const Vec3 offset : {Vec3(side * 2.1f, 0, .35f), Vec3(side * 2.8f, 0, .35f),
+        Vec3(-side * 2.1f, 0, .35f), Vec3(0, 0, 3.4f)}) {
+        Vec3 feet = car.position() + rotation * offset;
+        GroundHit ground;
+        if (!world_.cast_ground(feet + Vec3(0, 3, 0), -Vec3::sAxisY(), 7, ground) || ground.normal.GetY() < .65f) continue;
+        feet = ground.point + Vec3(0, .08f, 0);
+        if (!can_stand_at(feet) || world_.camera_fraction(car.position() + Vec3(0, 1, 0),
+            feet + Vec3(0, 1, 0) - car.position() - Vec3(0, 1, 0), car.body_id()) < .98f) continue;
+        reset(feet, yaw);
+        const Vec3 outward = (rotation * offset).Normalized();
+        ragdoll(car.velocity() + outward, outward * 85 + Vec3(0, 20, 0));
+        return true;
+    }
+    return false;
+}
 bool Character::ragdolling() const { return impl_->rig != nullptr; }
 bool Character::swimming() const { return impl_->swimming; }
 void Character::start_swimming(const Vec3& surface, float yaw) {
@@ -991,7 +1104,35 @@ Car::Car(PhysicsWorld& world, CarType type) : world_(world), body_(world.create_
     update_wheel_mounts();
     for (auto& wheel : wheels_)
         wheel.center = position() + rotate(wheel.mount - Vec3(0, tuning_.rest_length, 0));
+    world_.impl_->system.GetBodyInterface().SetUserData(body_, reinterpret_cast<JPH::uint64>(&damage_.impact_speed));
+    world_.impl_->cars.push_back(this);
 }
+
+Car::~Car() {
+    set_simulated(false);
+    world_.impl_->system.GetBodyInterface().SetUserData(body_, 0);
+    auto& cars = world_.impl_->cars;
+    cars.erase(std::remove(cars.begin(), cars.end(), this), cars.end());
+}
+
+void VehicleDamage::take_damage(float amount, Vec3 position) {
+    if (health <= 0 || !std::isfinite(amount) || amount <= 0) return;
+    health = std::max(0.f, health - amount);
+    if (health > 0) return;
+    explosion_position = position;
+    explosion_time = 0;
+    explosion_pending = true;
+}
+
+void VehicleDamage::repair() {
+    health = max_health;
+    crash_cooldown = 0;
+    impact_speed.store(0, std::memory_order_relaxed);
+    explosion_time = 10;
+    explosion_pending = false;
+}
+void Car::take_damage(float amount) { damage_.take_damage(amount, position()); }
+void Car::repair() { damage_.repair(); }
 
 void Car::update_wheel_mounts() {
     const float half_track = tuning_.track_width / 2, half_wheelbase = tuning_.wheelbase / 2;
@@ -1012,6 +1153,7 @@ void Car::reset(const Vec3& center_of_mass, float yaw) {
     steer_ = 0;
     drive_direction_ = 0;
     direction_change_time_ = 0;
+    damage_.impact_speed.store(0, std::memory_order_relaxed);
     for (auto& wheel : wheels_) {
         wheel.grounded = wheel.skidding = false;
         wheel.spin = wheel.compression = wheel.normal_force = 0;
@@ -1064,6 +1206,7 @@ void Car::refresh_wheel_contacts() {
 }
 
 void Car::step(Input input, float dt) {
+    if (destroyed()) input = {0, 0, false, true};
     auto& physics = world_.impl_->system.GetBodyInterface();
     input.throttle = clamp(input.throttle, -1, 1);
     input.steer = clamp(input.steer, -1, 1);
