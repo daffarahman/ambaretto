@@ -1001,7 +1001,7 @@ int main(int argc, char** argv) {
             const auto target = focus();
             const auto desired = orbit.desired_position(target, tuning_open || scene->player.driving(), !tuning_open && scene->player.flying(),
                 scene->player.plane().camera_scale(), aiming && scene->player.can_shoot());
-            const float follow = 1 - std::exp(-12 * frame);
+            const float follow = scene->player.driving() && !tuning_open ? 1.f : 1 - std::exp(-12 * frame);
             const bool aim_view = aiming && scene->player.can_shoot();
             camera.target = aim_view ? render_vector(target) : lerp(camera.target, render_vector(target), follow);
             auto smoothed = forza::Vec3(camera.position.x, camera.position.y, camera.position.z);
