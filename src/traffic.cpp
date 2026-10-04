@@ -127,37 +127,6 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment) : world_(w
     for (bool reverse : {false, true})
         add_route({{0, 0, 240}, {660, 0, 240}, {1260, 0, 240}, {1260, 0, -240}, {0, 0, -240}},
             "CITY CAUSEWAYS", 12, 11, reverse);
-    // The Overseas Highway goes through every Key and every connecting deck.
-    // Both ends turn around on connected village/city blocks.
-    std::vector<Vec3> spine{{-360, Environment::road_level, -240}};
-    for (const auto& road : environment.highways()) if (std::string_view(road.name) == "US 1 GRAND BOULEVARD")
-        for (const auto& p : road.corners) if (p.GetZ() >= -240) spine.push_back(p);
-    for (const auto& road : environment.highways()) if (std::string_view(road.name) == "KEYS EXIT RAMP")
-        for (const auto& p : road.corners) if ((spine.back() - p).LengthSq() > .001f) spine.push_back(p);
-    const auto first_key = std::min_element(environment.islands().begin(), environment.islands().end(),
-        [&](const Island& a, const Island& b) { return flat(a.center - spine.back()).LengthSq() < flat(b.center - spine.back()).LengthSq(); });
-    spine.push_back(first_key->center);
-    for (const auto& bridge : environment.bridges()) {
-        if (bridge.a.GetZ() < 900 || bridge.b.GetZ() <= bridge.a.GetZ()) continue;
-        if (bridge.a.GetY() > 0) continue;
-        const auto nearest = std::min_element(environment.islands().begin(), environment.islands().end(),
-            [&](const Island& a, const Island& b) { return flat(a.center - bridge.b).LengthSq() < flat(b.center - bridge.b).LengthSq(); });
-        const int samples = std::max(1, int((bridge.b - bridge.a).Length() / 8));
-        for (int i = 0; i <= samples; ++i) {
-            const Vec3 p = bridge.point(float(i) / samples);
-            if ((spine.back() - p).LengthSq() > .001f) spine.push_back(p);
-        }
-        spine.push_back(nearest->center);
-    }
-    auto highway = spine;
-    highway.insert(highway.end(), {{-2100, 0, 4470}, {-2010, 0, 4470}, {-2010, 0, 4380}, {-2100, 0, 4380}});
-    for (std::size_t i = spine.size() - 1; i-- > 0;) highway.push_back(spine[i]);
-    for (const auto& loop : environment.street_loops()) if (std::string_view(loop.name) == "DESIGN DISTRICT") {
-        highway.insert(highway.end(), loop.corners.begin(), loop.corners.end());
-        highway.push_back(loop.corners.front());
-        break;
-    }
-    add_route(std::move(highway), "OVERSEAS HIGHWAY", 72, 11);
     for (const auto& road : environment.highways()) {
         if (road.closed) for (bool reverse : {false, true})
             add_route(road.corners, road.name, (road.traffic_count + (reverse ? 0 : 1)) / 2,

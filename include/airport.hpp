@@ -82,6 +82,6 @@ struct Airport {
 };
 inline constexpr std::array<Airport, 2> airports{{
     {-1040, 0, -1, 75, "MIAMI INTERNATIONAL AIRPORT", true},
-    {-2280, 4380, 1, 75, "KEY WEST AIRFIELD"}
+    {-2160, 4380, 1, 75, "KEY WEST AIRFIELD"}
 }};
 } // namespace forza

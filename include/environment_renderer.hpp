@@ -18,12 +18,12 @@ public:
     void draw_shadow(Shader shader, const Vector3& focus, float distance);
     const std::vector<SceneLight>& lights() const { return local_lights_; }
     Shader object_shader() const { return land_shader_; }
-    void minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police = nullptr) const;
+    void minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police = nullptr, bool in_vehicle = false) const;
     void world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police = nullptr) const;
 private:
     void load_trees(const Environment& environment);
     void load_map(const Environment& environment);
-    void draw_map(Vector2 center, Vector2 anchor, float scale, float rotation = 0, Shader shader = {}) const;
+    void draw_map(Matrix transform, Shader shader = {}) const;
     struct Chunk { Model model{}; Vector3 center{}; float radius = 0; };
     static Chunk chunk(Model model);
     static bool nearby(const Chunk& chunk, const Vector3& focus, float distance);

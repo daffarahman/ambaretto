@@ -430,6 +430,29 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         city.quad(raised(a - side), raised(a + side), raised(b + side), raised(b - side), color);
     };
     for (const auto& road : env.roads()) {
+        if (road.bridge >= 0 && env.bridges()[road.bridge].has_curve()) {
+            const auto& bridge = env.bridges()[road.bridge];
+            const float length = (bridge.b - bridge.a).Length();
+            const auto stripe = [&](float begin, float end, float offset, float width, Color color) {
+                const int count = std::max(1, int(std::ceil((end - begin) / 2)));
+                for (int i = 0; i < count; ++i) {
+                    const float from = (begin + (end - begin) * float(i) / count) / length;
+                    const float to = (begin + (end - begin) * float(i + 1) / count) / length;
+                    deck_strip(road, bridge.point(from) + bridge.side(from) * offset,
+                        bridge.point(to) + bridge.side(to) * offset, width, color);
+                }
+            };
+            for (float along = 0; along < length; along += 16) {
+                stripe(along, std::min(along + 6, length), 0, .24f, {244, 207, 99, 255});
+                for (float sign : {-1.0f, 1.0f})
+                    stripe(along, std::min(along + 6, length), sign * road.width / 6, .18f, RAYWHITE);
+            }
+            for (float sign : {-1.0f, 1.0f}) {
+                stripe(0, length, sign * road.width / 3, .18f, RAYWHITE);
+                stripe(0, length, sign * (road.width / 2 - 1), .18f, RAYWHITE);
+            }
+            continue;
+        }
         const Vec3 direction = (road.b - road.a).Normalized();
         const Vec3 side = direction.Cross(Vec3::sAxisY());
         const float length = (road.b - road.a).Length();
@@ -441,6 +464,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
                 bool covered = false;
                 for (const auto& other : env.roads()) {
                     if (&other == &road) continue;
+                    if (std::string_view(road.name) == "OVERSEAS HIGHWAY" && std::string_view(other.name) == road.name) continue;
                     Vec3 delta = other.b - other.a; delta.SetY(0);
                     const float t = std::clamp((middle - other.a).Dot(delta) / delta.LengthSq(), 0.0f, 1.0f);
                     Vec3 distance = middle - other.a - delta * t; distance.SetY(0);
@@ -457,7 +481,10 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             }
         };
         if (road.bridge < 0) {
-            city.ribbon(env, road.a, road.b, road.width + 3, {172, 181, 175, 255}, .03f);
+            for (float sign : {-1.0f, 1.0f}) {
+                const Vec3 verge = side * (sign * (road.width / 2 + .75f));
+                city.ribbon(env, road.a + verge, road.b + verge, 1.5f, {172, 181, 175, 255}, .03f);
+            }
             roads.ribbon(env, road.a, road.b, road.width, asphalt, .055f);
         }
         for (float along = 0; along < length; along += 16) {
@@ -646,8 +673,9 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     }
     for (std::size_t bridge_index = 0; bridge_index < env.bridges().size(); ++bridge_index) {
         const auto& bridge = env.bridges()[bridge_index];
-        const bool curved = bridge.a.GetY() > 0;
-        const Vec3 direction = (bridge.b - bridge.a).Normalized(), side = direction.Cross(Vec3::sAxisY());
+        const bool segmented = bridge.a.GetY() > 0;
+        const bool curved = segmented || bridge.has_curve();
+        const Vec3 direction = (bridge.b - bridge.a).Normalized();
         const float length = (bridge.b - bridge.a).Length(), heading = std::atan2(-direction.GetX(), -direction.GetZ());
         const int rows = int(length / 8) + 1;
         for (int row = 0; row < rows; ++row) {
@@ -663,7 +691,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             }
         }
         const float fixtures = bridge_index % 3 == 0 ? length / 2 : length;
-        for (float d = curved ? fixtures : 40; d < length - (curved ? 0 : 20); d += 64) {
+        for (float d = segmented ? fixtures : 40; d < length - (segmented ? 0 : 20); d += 64) {
             const Vec3 p = bridge.point(d / length);
             if (!curved) {
                 city.box(Vec3(p.GetX(), (p.GetY() - 8) / 2, p.GetZ()), Vec3(bridge.width - 5, p.GetY() + 6, 2.2f), concrete, heading);
@@ -671,7 +699,8 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             }
             for (float sign : {-1.0f, 1.0f}) {
                 const Vec3 column = p + bridge.side(d / length) * (sign * bridge.width * .32f);
-                const float base = env.ground_height(column.GetX(), column.GetZ());
+                const float base = !segmented || bridge.clearance <= Airport::elevation
+                    ? env.terrain_height(column.GetX(), column.GetZ()) : env.ground_height(column.GetX(), column.GetZ());
                 if (p.GetY() - base < 4) continue;
                 bool street = false;
                 for (const auto& road : env.roads()) if (road.bridge < 0) {
@@ -684,7 +713,9 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
                     Vec3(1.2f, p.GetY() - base, 1.2f), concrete);
             }
         }
-        for (float d = curved ? fixtures : 35; d < length - (curved ? 0 : 10); d += 96) for (float sign : {-1.0f, 1.0f}) {
+        for (float d = segmented ? fixtures : 35; d < length - (segmented ? 0 : 10); d += 96) for (float sign : {-1.0f, 1.0f}) {
+            const Vec3 side = bridge.side(d / length).Normalized();
+            const float heading = std::atan2(-side.GetZ(), side.GetX());
             const Vec3 p = bridge.point(d / length) + side * (sign * (bridge.width / 2 - .8f));
             city.box(p + Vec3(0, 4, 0), Vec3(.18f, 8, .18f), {86, 111, 121, 255});
             city.box(p + Vec3(0, 8, 0) - side * sign, Vec3(2.5f, .2f, .6f), {252, 236, 170, 255}, heading);
@@ -695,18 +726,19 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     }
     for (const auto& port : env.ports()) {
         const Vec3 direction = port.east ? Vec3::sAxisX() : Vec3::sAxisZ(), side = direction.Cross(Vec3::sAxisY());
-        const Vec3 deck = port.center + direction * 109 - Vec3(0, .6f, 0);
-        city.box(deck, port.east ? Vec3(222, 1.2f, 8) : Vec3(8, 1.2f, 222), {149, 116, 80, 255});
-        signs.sign(port.center + Vec3(0, 4, 0), Vec3::sAxisX(), 14, 3, 5);
+        city.box(port.solid_center(), port.solid_size(), {149, 116, 80, 255});
+        signs.sign(port.center + Vec3(0, 4, 0), Vec3::sAxisX(), std::min(14.0f, port.length / 8), 3, 5);
         city.box(port.center + Vec3(0, 2, 0), Vec3(.3f, 4, .3f), concrete);
-        for (float d = 10; d < 220; d += 25) {
+        for (float d = 10; d < port.length; d += 25) {
             const Vec3 p = port.center + direction * d;
+            const Vec3 lamp = p + side * (port.width / 2 - 1);
             city.box(p - Vec3(0, 3, 0), Vec3(.7f, 6, .7f), {91, 84, 64, 255});
-            city.box(p + side * 3 + Vec3(0, 1.5f, 0), Vec3(.12f, 3, .12f), concrete);
-            lights.box(p + side * 3 + Vec3(0, 3.1f, 0), Vec3(.3f, .2f, .3f), {131, 223, 255, 255});
-            add_light(p + side * 3 + Vec3(0, 3.1f, 0), {131, 223, 255, 255}, 12);
+            city.box(lamp + Vec3(0, 1.5f, 0), Vec3(.12f, 3, .12f), concrete);
+            lights.box(lamp + Vec3(0, 3.1f, 0), Vec3(.3f, .2f, .3f), {131, 223, 255, 255});
+            add_light(lamp + Vec3(0, 3.1f, 0), {131, 223, 255, 255}, 12);
             if (d < 30) continue;
             const Vec3 boat = p + side * 14;
+            if (env.terrain_height(boat.GetX(), boat.GetZ()) >= 0) continue;
             city.box(Vec3(boat.GetX(), .65f, boat.GetZ()), Vec3(5, 1.3f, 13), RAYWHITE);
             city.box(Vec3(boat.GetX(), 1.5f, boat.GetZ() + 1), Vec3(3.5f, 1, 5), glass);
         }
@@ -864,7 +896,19 @@ void EnvironmentRenderer::load_map(const Environment& env) {
         const Vec3 side = Vec3(-(b - a).GetZ(), 0, (b - a).GetX()).NormalizedOr(Vec3::sAxisX()) * (width / 2);
         map.quad(point(a - side), point(a + side), point(b + side), point(b - side), pavement);
     };
-    for (const auto& road : env.roads()) line(road.a, road.b, road.width);
+    for (const auto& road : env.roads()) {
+        if (road.bridge < 0 || !env.bridges()[road.bridge].has_curve()) { line(road.a, road.b, road.width); continue; }
+        const auto& bridge = env.bridges()[road.bridge];
+        const int rows = int((bridge.b - bridge.a).Length() / 8) + 1;
+        for (int row = 0; row < rows; ++row) {
+            const float from = float(row) / rows, to = float(row + 1) / rows;
+            const Vec3 a = bridge.point(from), b = bridge.point(to);
+            map.quad(point(a - bridge.side(from) * (bridge.width / 2)), point(a + bridge.side(from) * (bridge.width / 2)),
+                point(b + bridge.side(to) * (bridge.width / 2)), point(b - bridge.side(to) * (bridge.width / 2)), pavement);
+        }
+    }
+    for (const auto& port : env.ports())
+        line(port.center, port.center + (port.east ? Vec3::sAxisX() : Vec3::sAxisZ()) * port.length, port.width);
     for (const auto& airport : airports) {
         rectangle(airport.center_x - 115, airport.runway_z - 220, 77, 380, pavement);
         const auto airport_line = [&](AirportPoint a, AirportPoint b, float width) {
@@ -895,11 +939,7 @@ void EnvironmentRenderer::load_map(const Environment& env) {
     map_ = map.upload();
     minimap_shader_ = LoadShaderFromMemory(nullptr, minimap_fragment);
 }
-void EnvironmentRenderer::draw_map(Vector2 center, Vector2 anchor, float scale, float rotation, Shader shader) const {
-    Matrix transform = MatrixTranslate(-center.x, -center.y, 0);
-    transform = MatrixMultiply(transform, MatrixScale(scale, scale, 1));
-    transform = MatrixMultiply(transform, MatrixRotateZ(rotation * DEG2RAD));
-    transform = MatrixMultiply(transform, MatrixTranslate(anchor.x, anchor.y, 0));
+void EnvironmentRenderer::draw_map(Matrix transform, Shader shader) const {
     rlDrawRenderBatchActive();
     rlDisableBackfaceCulling();
     Material material = map_.materials[0];
@@ -1004,8 +1044,19 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Dayligh
     DrawModel(terrain_, {0, 0, 0}, 1, WHITE);
     DrawModel(grass_, {0, 0, 0}, 1, WHITE);
     DrawModel(sand_, {0, 0, 0}, 1, WHITE);
+    // Native depth bias keeps thin pavement and markings clear of the terrain at long distances.
+    static const auto enable = reinterpret_cast<void (*)(unsigned int)>(rlGetProcAddress("glEnable"));
+    static const auto disable = reinterpret_cast<void (*)(unsigned int)>(rlGetProcAddress("glDisable"));
+    static const auto offset = reinterpret_cast<void (*)(float, float)>(rlGetProcAddress("glPolygonOffset"));
+    constexpr unsigned int polygon_offset_fill = 0x8037;
+    const bool depth_bias = enable && disable && offset;
+    rlDrawRenderBatchActive();
+    if (depth_bias) { enable(polygon_offset_fill); offset(-1, -1); }
     DrawModel(roads_, {0, 0, 0}, 1, WHITE);
+    if (depth_bias) offset(-1, -2);
     for (const auto& part : city_chunks_) if (nearby(part, camera.position, settings.view_distance)) DrawModel(part.model, {0, 0, 0}, 1, WHITE);
+    rlDrawRenderBatchActive();
+    if (depth_bias) disable(polygon_offset_fill);
     SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     const float sign_emission = light.night * .8f;
     SetShaderValue(tree_shader_, sign_emission_, &sign_emission, SHADER_UNIFORM_FLOAT);
@@ -1047,19 +1098,27 @@ void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
 }
-void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police) const {
-    const MinimapView map(GetScreenHeight(), player_position, player_forward, camera);
+void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police, bool in_vehicle) const {
+    const MinimapView map(GetScreenHeight(), player_position, player_forward, camera, in_vehicle);
     const auto bounds = map.bounds;
     const Vector4 clip{bounds.x, float(GetRenderHeight()) - bounds.y - bounds.height, bounds.width, bounds.height};
     SetShaderValue(minimap_shader_, GetShaderLocation(minimap_shader_, "clipBounds"), &clip, SHADER_UNIFORM_VEC4);
     BeginScissorMode(int(bounds.x), int(bounds.y), int(bounds.width), int(bounds.height));
     BeginShaderMode(minimap_shader_);
     DrawRectangleRec(bounds, map_water);
-    draw_map({player_position.GetX(), player_position.GetZ()}, map.anchor, map.scale, map.rotation(), minimap_shader_);
+    const Matrix transform = map.transform();
+    draw_map(transform, minimap_shader_);
     if (police && police->wanted().stars()) {
-        const auto p = map.project(police->wanted().last_seen());
-        const float radius = police->wanted().radius() * map.scale;
-        DrawCircleV(p, radius, Fade(int(GetTime() * 2) % 2 ? BLUE : RED, .18f));
+        // The search area lies on the same plane; markers stay readable in screen space.
+        const Vec3 center = police->wanted().last_seen();
+        rlDrawRenderBatchActive();
+        const Matrix previous_view = rlGetMatrixModelview();
+        Matrix plane = transform;
+        plane.m10 = 0; // Circle batches carry a UI depth; keep the search area on the map plane.
+        rlSetMatrixModelview(MatrixMultiply(plane, previous_view));
+        DrawCircleV({center.GetX(), center.GetZ()}, police->wanted().radius(), Fade(int(GetTime() * 2) % 2 ? BLUE : RED, .18f));
+        rlDrawRenderBatchActive();
+        rlSetMatrixModelview(previous_view);
     }
     if (police && police->wanted().stars()) for (const auto& unit : police->units()) if (unit.active) {
         const auto p = map.project(unit.car->position());
@@ -1073,8 +1132,9 @@ void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, con
     }
     Vec3 heading(player_forward.GetX(), 0, player_forward.GetZ());
     heading = heading.LengthSq() > 1e-8f ? heading.Normalized() : map.forward;
-    const auto tip = map.project(player_position + heading * (9.6f / map.scale));
-    const Vector2 delta{tip.x - map.anchor.x, tip.y - map.anchor.y};
+    const auto direction = map.project(player_position + heading);
+    const Vector2 delta = Vector2Scale(Vector2Normalize(Vector2Subtract(direction, map.anchor)), 9.6f);
+    const Vector2 tip = Vector2Add(map.anchor, delta);
     const Vector2 a{map.anchor.x - delta.x * .5f - delta.y * .55f, map.anchor.y - delta.y * .5f + delta.x * .55f};
     const Vector2 b{map.anchor.x - delta.x * .5f + delta.y * .55f, map.anchor.y - delta.y * .5f - delta.x * .55f};
     DrawCircleV(map.anchor, 8, {19, 28, 45, 230});
@@ -1085,7 +1145,10 @@ void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, con
 void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police) const {
     BeginScissorMode(int(viewport.x), int(viewport.y), int(viewport.width), int(viewport.height));
     DrawRectangleRec(viewport, map_water);
-    draw_map(view.center, {viewport.x + viewport.width / 2, viewport.y + viewport.height / 2}, view.scale);
+    Matrix transform = MatrixTranslate(-view.center.x, -view.center.y, 0);
+    transform = MatrixMultiply(transform, MatrixScale(view.scale, view.scale, 1));
+    transform = MatrixMultiply(transform, MatrixTranslate(viewport.x + viewport.width / 2, viewport.y + viewport.height / 2, 0));
+    draw_map(transform);
     const auto inside = [&](Vector2 p) { return p.x >= viewport.x + 8 && p.x <= viewport.x + viewport.width - 8
         && p.y >= viewport.y + 8 && p.y <= viewport.y + viewport.height - 8; };
     if (police && police->wanted().stars()) {

@@ -20,8 +20,8 @@ int main() {
         for (Vec3 direction : {Vec3(0, 0, -1), Vec3(1, 0, 0), Vec3(0, 0, 1), Vec3(-1, 0, 0), Vec3(1, 0, -1).Normalized()}) {
             const forza::MinimapView map(720, player, Vec3(0, 0, -1), looking(direction));
             require(near(map.project(player), map.anchor), "player moved away from map anchor");
-            require(near(map.project(player + direction * 50), {map.anchor.x, map.anchor.y - 80}), "camera forward must point up");
-            require(near(map.project(player + direction.Cross(Vec3::sAxisY()) * 50), {map.anchor.x + 80, map.anchor.y}), "camera right must point right");
+            require(near(map.project(player + direction * 50), {map.anchor.x, map.anchor.y - 50 * map.scale}), "camera forward must point up");
+            require(near(map.project(player + direction.Cross(Vec3::sAxisY()) * 50), {map.anchor.x + 50 * map.scale, map.anchor.y}), "camera right must point right");
             // Raylib rotates the complete texture about the player's scaled texel.
             const Vector2 origin{(player.GetX() + extent) * map.scale, (player.GetZ() + extent) * map.scale};
             const float radians = map.rotation() * .01745329252f;
@@ -32,9 +32,28 @@ int main() {
                     map.anchor.y + x * std::sin(radians) + y * std::cos(radians)};
                 require(near(texel, map.project(point)), "rotated texture and markers disagree");
             }
+            const forza::MinimapView driving(720, player, direction, looking(direction), true);
+            const Vec3 right = direction.Cross(Vec3::sAxisY());
+            require(near(driving.project(player), driving.anchor), "vehicle perspective moved the player from its anchor");
+            const auto ahead = driving.project(player + direction * 100);
+            require(ahead.y < driving.anchor.y && ahead.y > map.project(player + direction * 100).y,
+                "vehicle map did not foreshorten the road ahead");
+            const float near_width = driving.project(player + right * 50).x - driving.anchor.x;
+            const float far_width = driving.project(player + direction * 100 + right * 50).x - ahead.x;
+            require(far_width > 0 && far_width < near_width, "distant roads did not narrow in vehicle perspective");
+            const Matrix matrix = driving.transform();
+            for (Vec3 point : {player, player + direction * 100 + right * 25, player - direction * 50 + right * 25}) {
+                const auto projected = Vector3Transform({point.GetX(), point.GetZ(), 0}, matrix);
+                const float depth = matrix.m3 * point.GetX() + matrix.m7 * point.GetZ() + matrix.m15;
+                require(near({projected.x / depth, projected.y / depth}, driving.project(point)),
+                    "vehicle map geometry and screen markers disagree");
+                require(near(driving.project(point), driving.project(point + Vec3(0, 1000, 0))),
+                    "vehicle map extruded a point above its flat plane");
+            }
+            require(!driving.contains(driving.project(player - direction * 300)), "marker behind the minimap camera became visible");
         }
         const forza::MinimapView pitched(720, player, Vec3(0, 0, 1), looking(Vec3(0, -100, -10)));
-        require(near(pitched.forward.GetZ(), -1) && near(pitched.project(player + Vec3(0, 500, -50)).y, pitched.anchor.y - 80), "pitch/height changed map scale");
+        require(near(pitched.forward.GetZ(), -1) && near(pitched.project(player + Vec3(0, 500, -50)).y, pitched.anchor.y - 50 * pitched.scale), "pitch/height changed map scale");
         const forza::MinimapView vertical(720, player, Vec3(1, 7, 0), looking(Vec3(0, -10, 0)));
         require(near(vertical.forward.GetX(), 1), "vertical camera lost player-heading fallback");
         const forza::MinimapView zero(720, player, Vec3::sZero(), looking(Vec3::sZero()));
@@ -42,7 +61,7 @@ int main() {
         for (int height : {720, 600}) {
             const forza::MinimapView map(height, player, Vec3(0, 0, -1), looking(Vec3(0, 0, -1)));
             require(near(map.bounds.x, 14) && near(map.bounds.y + map.bounds.height, float(height - 14)), "map lost bottom-left margin");
-            require(near(map.bounds.width, 320) && near(map.bounds.height, 180) && near(map.scale, 1.6f), "map lost its 200m zoom");
+            require(near(map.bounds.width, 320) && near(map.bounds.height, 180) && near(map.scale, 320.0f / 120), "map lost its 120m zoom");
             require(near(map.anchor.x, 174) && near(map.anchor.y, float(height - 77)), "look-ahead player anchor changed");
             require(map.contains(map.anchor) && map.contains({map.bounds.x + 6, map.bounds.y + 6}), "visible markers rejected");
             require(!map.contains({map.bounds.x + 5, map.bounds.y + 6}) && !map.contains({map.bounds.x + 314, map.bounds.y + 175}), "markers escaped clipped bounds");

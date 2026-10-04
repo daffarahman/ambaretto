@@ -212,11 +212,9 @@ PhysicsWorld::PhysicsWorld(const Environment& environment) {
         impl_->add_body(settings);
     }
     for (const auto& port : environment.ports()) {
-        const Vec3 direction = port.east ? Vec3::sAxisX() : Vec3::sAxisZ();
         // Overlap the access road so the deck's vertical edge is outside the junction.
-        const Vec3 half = port.east ? Vec3(111, .6f, 4) : Vec3(4, .6f, 111);
-        JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(half, .02f);
-        JPH::BodyCreationSettings settings(shape, port.center + direction * 109 - Vec3(0, .6f, 0),
+        JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(port.solid_size() / 2, .02f);
+        JPH::BodyCreationSettings settings(shape, port.solid_center(),
             Quat::sIdentity(), JPH::EMotionType::Static, ground_layer);
         impl_->add_body(settings);
     }

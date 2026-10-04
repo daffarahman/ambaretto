@@ -1173,7 +1173,7 @@ int main(int argc, char** argv) {
                 if (kill_flash > 0) DrawRectangle(0, forza::menu_height, GetScreenWidth(), GetScreenHeight() - forza::menu_height,
                     {150, 150, 150, static_cast<unsigned char>(110 * kill_flash / .18f)});
                 draw_resume_prompt(captured || tuning_open || graphics_panel.visible() || !screenshot.empty());
-                if (!tuning_open) scenery.minimap(scene->player.position(), scene->player.forward(), view, &scene->police);
+                if (!tuning_open) scenery.minimap(scene->player.position(), scene->player.forward(), view, &scene->police, !scene->player.on_foot());
                 const auto region = scene->player.position();
                 if (!tuning_open) {
                     const auto bounds = forza::MinimapView(GetScreenHeight(), region, scene->player.forward(), view).bounds;

@@ -25,8 +25,8 @@ void airport_and_takeoff() {
     Car car(world);
     for (const auto& airport : airports) {
         for (int runway = 0; runway < airport.runway_count(); ++runway) {
-            for (float along = -airport.runway_length() / 2 + 8; along <= airport.runway_length() / 2 - 8; along += 8)
-                for (float across : {-airport.runway_width() / 2 + 2, 0.0f, airport.runway_width() / 2 - 2}) {
+            for (float along = -airport.runway_length() / 2; along <= airport.runway_length() / 2; along += 8)
+                for (float across : {-airport.runway_width() / 2, 0.0f, airport.runway_width() / 2}) {
                     const auto p = airport.point(along, across, runway);
                     require(airport.pavement(p.x, p.z) && std::abs(map.height(p.x, p.z) - Airport::elevation) < .001f, "runway is not level or paved");
                     require(world.cast_ground(Vec3(p.x, Airport::elevation + 20, p.z), Vec3(0, -1, 0), 30, hit)
@@ -34,7 +34,7 @@ void airport_and_takeoff() {
                 }
         }
         const Vec3 access(airport.apron_x(), 0, airport.apron_z());
-        Vec3 entrance(-2190, 0, 4290);
+        Vec3 entrance = map.islands().back().center;
         if (airport.international) {
             require(airport.center_x < map.islands().front().center.GetX()
                 && Environment::coast_radius(airport.center_x, airport.runway_z) < .8f,
@@ -62,6 +62,11 @@ void airport_and_takeoff() {
             }
             for (float x = airport.center_x - airport.grounds_half_width + 20; x < airport.center_x + airport.grounds_half_width; x += 80)
                 for (float z = airport.runway_z - airport.grounds_half_length() + 20; z < airport.runway_z + airport.grounds_half_length(); z += 80) {
+                    // Waterfront trims the end margins and west grass; the entire runway is checked above.
+                    if (std::abs(z - airport.runway_z) > airport.runway_length() / 2
+                        || (x < airport.center_x - 35 && z < airport.runway_z - 250)) continue;
+                    if (std::abs(map.terrain_height(x, z) - Airport::elevation) >= .001f)
+                        std::cout << "Airport grass at " << x << ',' << z << ": " << map.terrain_height(x, z) << '\n';
                     require(std::abs(map.terrain_height(x, z) - Airport::elevation) < .001f, "airport grass is not solid level ground");
                     // Sample beneath any flyover: the airport's solid ground is a separate layer.
                     const bool found = world.cast_ground(Vec3(x, Airport::elevation + 5, z), Vec3(0, -1, 0), 10, hit);

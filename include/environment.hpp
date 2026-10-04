@@ -33,6 +33,8 @@ struct Bridge {
     const char* name;
     Vec3 start_side = Vec3::sZero(), end_side = Vec3::sZero();
     bool open_a = true, open_b = true;
+    Vec3 control_a = Vec3::sZero(), control_b = Vec3::sZero();
+    bool has_curve() const { return control_a.LengthSq() > 0; }
     Vec3 point(float t) const;
     Vec3 side(float t) const;
 };
@@ -41,7 +43,12 @@ struct Barrier {
     float yaw, pitch = 0;
     Quat rotation() const { return Quat::sRotation(Vec3::sAxisY(), yaw) * Quat::sRotation(Vec3::sAxisX(), pitch); }
 };
-struct Port { Vec3 center; bool east; const char* name; };
+struct Port {
+    Vec3 center; bool east; const char* name;
+    float length = 220, width = 8;
+    Vec3 solid_size() const { return east ? Vec3(length + 2, 1.2f, width) : Vec3(width, 1.2f, length + 2); }
+    Vec3 solid_center() const { return center + (east ? Vec3::sAxisX() : Vec3::sAxisZ()) * (length / 2 - 1) - Vec3(0, .6f, 0); }
+};
 struct Tree {
     Vec3 base;
     float height;
@@ -59,6 +66,7 @@ public:
     static constexpr float extent = 5120;
     static constexpr float spacing = 20;
     static constexpr float highway_level = 10;
+    static constexpr float highway_width = 24;
     static constexpr int samples = 513;
     static constexpr float road_level = 3.2f;
     static constexpr float water_level = 0;

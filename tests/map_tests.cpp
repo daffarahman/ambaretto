@@ -60,8 +60,39 @@ void coastlines(const Environment& map) {
             const Vec3 p = river[i - 1] + (river[i] - river[i - 1]) * (float(step) / 20);
             require(map.terrain_height(p.GetX(), p.GetZ()) < -1, "western river is blocked before reaching the sea");
         }
-    require(map.terrain_height(-1332, 654) < -1 && map.height(-1332, 654) >= 7.9f,
-        "city-loop highway has no raised bridge over the river");
+    require(map.terrain_height(-1332, 654) < -1 && std::abs(map.ground_height(-1332, 654) - Environment::road_level) < .001f,
+        "western river bridge is raised or missing its level deck");
+    for (Vec3 p : {Vec3(-900, 0, -650), Vec3(-780, 0, -420), Vec3(-800, 0, -1000), Vec3(-200, 0, -860),
+            Vec3(-1170, 0, -600), Vec3(-1290, 0, -490), Vec3(-1115, 0, -420), Vec3(-975, 0, -120)})
+        require(map.terrain_height(p.GetX(), p.GetZ()) < -1 && map.coast_radius(p.GetX(), p.GetZ()) > 1,
+            "marked northern waterfront is still land");
+    for (Vec3 p : {Vec3(-1040, 0, -550), Vec3(-360, 0, -840), Vec3(-540, 0, -460), Vec3(-120, 0, -720)})
+        require(map.terrain_height(p.GetX(), p.GetZ()) >= 2.9f, "northern bay flooded the airport or developed shore");
+    for (Vec3 p : {Vec3(-920, 0, -110), Vec3(-720, 0, 160), Vec3(-730, 0, 360), Vec3(-990, 0, 700),
+            Vec3(-960, 0, 1000), Vec3(-540, 0, 950), Vec3(-250, 0, 990)})
+        require(map.terrain_height(p.GetX(), p.GetZ()) < -1 && map.coast_radius(p.GetX(), p.GetZ()) > 1,
+            "marked southern channel or coastal inlet is still land");
+    for (Vec3 p : {Vec3(-1040, 0, 550), Vec3(-600, 0, 350), Vec3(-1180, 0, 700)})
+        require(map.terrain_height(p.GetX(), p.GetZ()) >= 2.9f, "southern inlets flooded the runway or neighboring land");
+    for (Vec3 p : {Vec3(-930, 0, -110), Vec3(-740, 0, 240), Vec3(-950, 0, 750)})
+        require(map.terrain_height(p.GetX(), p.GetZ()) < -1
+            && std::abs(map.ground_height(p.GetX(), p.GetZ()) - (p.GetZ() < 0 ? Airport::elevation : Environment::road_level)) < .001f,
+            "southern water crossing is filled in or missing its level deck");
+    const auto crossing = std::find_if(map.bridges().begin(), map.bridges().end(), [](const Bridge& bridge) {
+        return std::string_view(bridge.name) == "INTERSTATE CITY LOOP" && std::abs(bridge.a.GetZ() + 690) < .01f;
+    });
+    require(crossing != map.bridges().end(), "northern bay has no highway bridge");
+    for (int step = 0; step <= 100; ++step) {
+        const Vec3 p = crossing->point(float(step) / 100);
+        if (std::abs(map.ground_height(p.GetX(), p.GetZ()) - Environment::road_level) >= .001f)
+            std::cout << "Northern crossing at " << p.GetX() << ',' << p.GetZ()
+                << ": deck " << p.GetY() << ", ground " << map.ground_height(p.GetX(), p.GetZ()) << '\n';
+        require(std::abs(p.GetY() - Environment::road_level) < .001f
+            && std::abs(map.ground_height(p.GetX(), p.GetZ()) - Environment::road_level) < .001f,
+            "northern highway crossing is raised, sloped or missing its deck");
+        if (p.GetX() > -950 && p.GetX() < -500)
+            require(map.terrain_height(p.GetX(), p.GetZ()) < -1, "highway verge fills the northern bay");
+    }
     std::cout << "Irregular island outlines and waterfront inlets checked.\n";
 }
 bool connected(const Environment& map, const Road& a, const Road& b) {
@@ -108,6 +139,10 @@ void map_layout(const Environment& map, PhysicsWorld& world) {
     const float regional_length = map.islands().back().center.GetZ() - map.islands().front().center.GetZ();
     require(regional_length > 3000 && regional_length < 5000, "region did not retain all Keys at the compact scale");
     for (const auto& road : roads) require(road.width >= 6 && road.width <= 24, "street width is outside its intended range");
+    for (const auto& road : roads)
+        if (std::string_view(road.name) == "US 1 GRAND BOULEVARD" || std::string_view(road.name) == "BEACH TO KEYS SKYWAY"
+            || std::string_view(road.name) == "KEYS EXIT RAMP" || (road.a.GetZ() >= 1260 && road.width > 8))
+            require(road.width == Environment::highway_width, "highway narrows between the flyover and the Keys");
     int kinds[int(BuildingKind::Office) + 1]{};
     float tallest = 0, frontage_gap = 0;
     for (const auto& building : map.buildings()) {
@@ -152,6 +187,17 @@ void map_layout(const Environment& map, PhysicsWorld& world) {
         }
     }
     require(airport_connector && airport_main_street, "airport cross connection or widened corridor missing");
+    for (float z = -650; z < 750; z += 40) {
+        int continuations = 0;
+        for (const auto& road : roads) {
+            const std::string_view name(road.name);
+            if (name != "AIRPORT WORKSHOPS" && name != "AIRPORT RESIDENTIAL" && name != "AIRPORT NEIGHBORHOOD LANE") continue;
+            require(std::abs(road.a.GetX() + 1180) < .001f && std::abs(road.b.GetX() + 1180) < .001f
+                && road.width == 7, "airport neighborhood road does not align with its bridge");
+            if (z >= std::min(road.a.GetZ(), road.b.GetZ()) && z < std::max(road.a.GetZ(), road.b.GetZ())) ++continuations;
+        }
+        require(continuations == 1, "airport neighborhood road is doubled or disconnected");
+    }
     int inland_frontage = 0;
     for (const auto& b : map.buildings()) {
         const float left = b.center.GetX() - b.size.GetX() / 2;
@@ -170,17 +216,51 @@ void map_layout(const Environment& map, PhysicsWorld& world) {
         "district landmarks or businesses missing");
     for (std::size_t i = 6; i < map.islands().size(); ++i) {
         const auto& key = map.islands()[i];
+        require(key.radius_x == 150 && key.radius_z == 300, "Key is wider than Ngawish");
         int houses = 0, other_buildings = 0;
         for (const auto& b : map.buildings())
             if (std::hypot((b.center.GetX() - key.center.GetX()) / key.radius_x, (b.center.GetZ() - key.center.GetZ()) / key.radius_z) < 1) {
-                if (b.kind == BuildingKind::House) ++houses;
+                if (b.kind == BuildingKind::House) {
+                    ++houses;
+                    require(b.size.GetX() <= 10 && b.size.GetZ() <= 10 && b.size.GetY() <= 3.5f, "Keys house is too large");
+                    for (const auto& road : roads) if (std::string_view(road.name) == "OVERSEAS HIGHWAY")
+                        require(segment_distance(b.center, road.a, road.b) > 30, "Keys house fronts the main highway");
+                }
                 else {
                     ++other_buildings;
-                    require(b.kind == (i + 1 == map.islands().size() ? BuildingKind::Terminal : BuildingKind::Cafe)
+                    require(b.kind == (i == 6 ? BuildingKind::GasStation : BuildingKind::Terminal)
                         && b.size.GetY() <= 5, "Key contains a tall or unwanted non-house building");
                 }
             }
-        require(other_buildings == 1 && houses >= 35, "Key must have dense houses and only one non-house building");
+        if (i == 6) {
+            require(std::string_view(key.name) == "NGAWISH" && key.radius_x <= 150 && key.radius_z <= 300
+                && map.coast_radius(key.center.GetX() - 280, key.center.GetZ()) > 1,
+                "Ngawish was not renamed or reduced to a smaller island");
+            require(other_buildings == 1 && houses == 0, "Ngawish must contain only its gas station");
+            require(std::none_of(map.street_loops().begin(), map.street_loops().end(), [&](const StreetLoop& loop) {
+                return std::string_view(loop.name) == key.name;
+            }), "Ngawish still contains town streets");
+        } else {
+            require(houses >= 4 && houses <= 8 && other_buildings <= (i == 10 ? 1 : 0), "Key must have a small housing neighborhood");
+            const auto town = std::find_if(map.street_loops().begin(), map.street_loops().end(), [&](const StreetLoop& loop) {
+                return std::string_view(loop.name) == key.name;
+            });
+            require(town != map.street_loops().end() && town->corners.size() == 4, "Keys residential area has no side-road loop");
+            require(std::any_of(roads.begin(), roads.end(), [&](const Road& road) {
+                return std::string_view(road.name) == "KEYS NEIGHBORHOOD ACCESS" && flat(road.a - key.center).Length() < .01f;
+            }), "Keys neighborhood has no turn from the highway");
+            int trees = 0;
+            for (const auto& tree : map.trees()) if (flat(tree.base - key.center).Length() < 300) ++trees;
+            std::cout << key.name << ": " << houses << " small houses, " << trees << " trees.\n";
+            require(trees > houses * 8, "Keys neighborhood lacks woodland around its houses");
+        }
+    }
+    for (int index = 4; index <= 7; ++index) {
+        const auto& bridge = map.bridges()[index];
+        float bend = 0;
+        for (float t : {.25f, .5f, .75f}) bend = std::max(bend, segment_distance(bridge.point(t), bridge.a, bridge.b));
+        require(bridge.has_curve() && bend > 5 && bridge.width == Environment::highway_width,
+            "Keys bridge is straight or narrower than its highway");
     }
     int roadside_trees = 0;
     for (const auto& tree : map.trees()) {
@@ -201,8 +281,12 @@ void map_layout(const Environment& map, PhysicsWorld& world) {
         const Vec3 d = road.b - road.a, side = flat(d).Normalized().Cross(Vec3::sAxisY());
         const int count = int(d.Length() / 8) + 1;
         for (int i = 0; i <= count; ++i) for (float offset : {-road.width * .35f, 0.0f, road.width * .35f}) {
-            const Vec3 p = road.a + d * (float(i) / count) + side * offset;
+            const float t = float(i) / count;
+            const Vec3 p = road.bridge >= 0 && map.bridges()[road.bridge].has_curve()
+                ? map.bridges()[road.bridge].point(t) + map.bridges()[road.bridge].side(t) * offset
+                : road.a + d * t + side * offset;
             const float height = map.road_height(road, p.GetX(), p.GetZ());
+            if (height < 2.9f) std::cout << road.name << " enters water at " << p.GetX() << ',' << p.GetZ() << ": " << height << '\n';
             require(height >= 2.9f, "road or bridge approach enters water");
             // A ray from above the whole city would silently validate the upper
             // deck for a ground street. Start just above this road's own layer.
@@ -221,8 +305,13 @@ void map_layout(const Environment& map, PhysicsWorld& world) {
     }
     for (const auto& port : map.ports()) {
         const Vec3 dir = port.east ? Vec3::sAxisX() : Vec3::sAxisZ();
-        for (float d = 10; d < 220; d += 10)
-            require(world.cast_ground(port.center + dir * d + Vec3(0, 20, 0), Vec3(0, -1, 0), 30, hit)
+        if (std::string_view(port.name) == "NGAWISH")
+            require(port.length == 60 && port.width == 5
+                && map.terrain_height(port.center.GetX() + port.length - 5, port.center.GetZ()) < -1,
+                "Ngawish dock is not small or does not reach the water");
+        const Vec3 side = dir.Cross(Vec3::sAxisY());
+        for (float d = 1; d < port.length; d += 10) for (float offset : {-port.width * .4f, 0.0f, port.width * .4f})
+            require(world.cast_ground(port.center + dir * d + side * offset + Vec3(0, 20, 0), Vec3(0, -1, 0), 30, hit)
                 && std::abs(hit.point.GetY() - port.center.GetY()) < .01f, "marina deck is not solid");
     }
     std::cout << roads.size() << " connected streets, " << samples << " aligned road samples, "
@@ -230,7 +319,7 @@ void map_layout(const Environment& map, PhysicsWorld& world) {
 }
 void drive_bridges(const Environment& map, PhysicsWorld& world, Car& car) {
     for (const auto& bridge : map.bridges()) {
-        if (bridge.a.GetY() > 0) continue; // Explicit-height highways are driven continuously below.
+        if (bridge.a.GetY() > 0 || bridge.has_curve()) continue; // Curved highways are driven continuously below.
         const Vec3 dir = (bridge.b - bridge.a).Normalized(), side = dir.Cross(Vec3::sAxisY());
         const float lane_center = bridge.width * .22f;
         Vec3 start = bridge.a - dir * 20 + side * lane_center;
@@ -278,7 +367,7 @@ void highway_layers(const Environment& map, PhysicsWorld& world) {
             require(std::abs(map.surface_height(p) - p.GetY()) < .02f,
                 "highway path endpoint and physical ramp joint disagree");
         }
-        ring = ring || (highway.closed && highway.width >= 18 && lowest >= 2.9f && highest >= 7.9f && highest <= 8.1f
+        ring = ring || (highway.closed && highway.width >= 18 && lowest >= 2.9f && highest <= Environment::road_level + .01f
             && std::count_if(highway.corners.begin(), highway.corners.end(), [](Vec3 p) { return p.GetY() == 0; })
                 > int(highway.corners.size() / 2));
         arterial = arterial || (highway.width == 24 && lowest <= 3.3f && highest >= Environment::highway_level);
@@ -291,7 +380,7 @@ void highway_layers(const Environment& map, PhysicsWorld& world) {
             require(length < 2500, "beach skyway still takes a long detour");
         }
     }
-    require(ring && arterial && flyover, "city ring with river bridge, six-lane arterial or beach flyover missing");
+    require(ring && arterial && flyover, "level city ring with river bridge, six-lane arterial or beach flyover missing");
     for (const auto& before : map.bridges()) if (before.a.GetY() > 0)
         for (const auto& after : map.bridges()) if (&before != &after && std::string_view(before.name) == after.name
             && (before.b - after.a).Length() < .01f)

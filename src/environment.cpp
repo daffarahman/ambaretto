@@ -24,18 +24,119 @@ float distance_to(Vec3 a, Vec3 b, float x, float z) {
     const float t = std::clamp(segment_fraction(a, b, x, z), 0.0f, 1.0f);
     return std::hypot(x - (a.GetX() + (b.GetX() - a.GetX()) * t), z - (a.GetZ() + (b.GetZ() - a.GetZ()) * t));
 }
+Vec3 cubic(Vec3 a, Vec3 control_a, Vec3 control_b, Vec3 b, float t) {
+    const float u = 1 - t;
+    return a * (u * u * u) + control_a * (3 * u * u * t) + control_b * (3 * u * t * t) + b * (t * t * t);
+}
+template<std::size_t N>
+float inlet_radius(const Vec3 (&shore)[N], float x, float z) {
+    bool inside = false;
+    float distance = 10000;
+    Vec3 a = shore[N - 1];
+    for (Vec3 b : shore) {
+        distance = std::min(distance, distance_to(a, b, x, z));
+        if ((a.GetZ() > z) != (b.GetZ() > z)
+            && x < a.GetX() + (b.GetX() - a.GetX()) * ((z - a.GetZ()) / (b.GetZ() - a.GetZ()))) inside = !inside;
+        a = b;
+    }
+    return 1 + (inside ? distance : -distance) / 100;
+}
+float northern_bay_radius(float x, float z) {
+    if (x < -1450 || x > 550 || z < -1650 || z > -20) return 0;
+    // Follow the northern waterfront around the airport and the US 1 neighborhood.
+    // The outer edge lies offshore so the old inlet opens directly onto the sea.
+    static const Vec3 shore[]{
+        {-1400, 0, -1600}, {500, 0, -1600}, {350, 0, -950}, {-150, 0, -1110},
+        {-230, 0, -1120}, {-320, 0, -1100}, {-310, 0, -1060}, {-320, 0, -1010},
+        {-305, 0, -990}, {-280, 0, -985}, {-240, 0, -1000}, {-195, 0, -1010},
+        {-165, 0, -995}, {-135, 0, -965}, {-65, 0, -945}, {-70, 0, -895},
+        {-30, 0, -825}, {-60, 0, -790}, {-110, 0, -765}, {-205, 0, -765},
+        {-250, 0, -785}, {-255, 0, -825}, {-260, 0, -865}, {-280, 0, -890},
+        {-370, 0, -890}, {-430, 0, -875}, {-470, 0, -830}, {-485, 0, -785},
+        {-455, 0, -695}, {-445, 0, -640}, {-465, 0, -615}, {-530, 0, -580},
+        {-600, 0, -575}, {-665, 0, -520}, {-690, 0, -480}, {-685, 0, -435},
+        {-710, 0, -365}, {-755, 0, -330}, {-815, 0, -305}, {-875, 0, -310},
+        {-900, 0, -293}, {-930, 0, -265}, {-947, 0, -243}, {-958, 0, -191},
+        {-956, 0, -151}, {-960, 0, -103}, {-958, 0, -65}, {-970, 0, -48},
+        {-980, 0, -52}, {-980, 0, -75}, {-980, 0, -119}, {-980, 0, -159},
+        {-978, 0, -196}, {-978, 0, -235}, {-980, 0, -263}, {-980, 0, -301},
+        {-980, 0, -349}, {-980, 0, -379}, {-980, 0, -460}, {-980, 0, -545},
+        {-1004, 0, -590}, {-1030, 0, -590}, {-1065, 0, -590}, {-1095, 0, -558},
+        {-1095, 0, -520}, {-1100, 0, -480}, {-1100, 0, -444}, {-1100, 0, -397},
+        {-1100, 0, -347}, {-1105, 0, -312}, {-1116, 0, -294}, {-1129, 0, -311},
+        {-1135, 0, -341}, {-1135, 0, -378}, {-1135, 0, -423}, {-1131, 0, -459},
+        {-1141, 0, -505}, {-1154, 0, -560}, {-1198, 0, -560}, {-1229, 0, -551},
+        {-1253, 0, -522}, {-1269, 0, -486}, {-1276, 0, -440}, {-1297, 0, -458},
+        {-1328, 0, -471}, {-1290, 0, -530}, {-1251, 0, -589}, {-1213, 0, -621},
+        {-1185, 0, -638}, {-1156, 0, -650}, {-1129, 0, -650}, {-1091, 0, -660},
+        {-1053, 0, -654}, {-1008, 0, -655}, {-983, 0, -676}, {-964, 0, -715},
+        {-990, 0, -750}, {-1060, 0, -780}, {-1140, 0, -785},
+        {-1280, 0, -1050}
+    };
+    return inlet_radius(shore, x, z);
+}
+float southern_inlets_radius(float x, float z) {
+    if (x < -1250 || x > -100 || z < -210 || z > 1230) return 0;
+    // The marked channel runs east of the runway, through the city loop and out to sea.
+    static const Vec3 airport_shore[]{
+        {-966, 0, -149}, {-903, 0, -149}, {-854, 0, -123}, {-828, 0, -60},
+        {-810, 0, -30}, {-776, 0, -7}, {-731, 0, 7}, {-668, 0, 15},
+        {-657, 0, 41}, {-668, 0, 82}, {-664, 0, 131}, {-672, 0, 187},
+        {-668, 0, 239}, {-657, 0, 287}, {-657, 0, 336}, {-672, 0, 388},
+        {-713, 0, 433}, {-769, 0, 481}, {-806, 0, 522}, {-821, 0, 548},
+        {-817, 0, 582}, {-784, 0, 627}, {-757, 0, 679}, {-750, 0, 742},
+        {-735, 0, 787}, {-746, 0, 840}, {-743, 0, 925}, {-731, 0, 989},
+        {-728, 0, 1022}, {-730, 0, 1180}, {-1195, 0, 1180}, {-1194, 0, 1022},
+        {-1194, 0, 989}, {-1157, 0, 922}, {-1172, 0, 892}, {-1190, 0, 862},
+        {-1183, 0, 836}, {-1142, 0, 821}, {-1097, 0, 813}, {-1045, 0, 817},
+        {-1041, 0, 791}, {-1067, 0, 735}, {-1067, 0, 687}, {-1071, 0, 634},
+        {-1052, 0, 604}, {-1004, 0, 571}, {-963, 0, 545}, {-959, 0, 507},
+        {-944, 0, 466}, {-910, 0, 433}, {-866, 0, 403}, {-832, 0, 358},
+        {-813, 0, 317}, {-802, 0, 265}, {-795, 0, 228}, {-791, 0, 205},
+        {-810, 0, 183}, {-832, 0, 175}, {-843, 0, 149}, {-840, 0, 101},
+        {-821, 0, 63}, {-828, 0, -4}, {-836, 0, -45}, {-858, 0, -75},
+        {-888, 0, -86}, {-929, 0, -71}, {-963, 0, -71}, {-970, 0, -86},
+        {-966, 0, -119}
+    };
+    static const Vec3 coastal_shore[]{
+        {-633, 0, 1037}, {-611, 0, 978}, {-588, 0, 870}, {-551, 0, 821},
+        {-528, 0, 821}, {-494, 0, 884}, {-450, 0, 925}, {-398, 0, 929},
+        {-357, 0, 951}, {-301, 0, 933}, {-241, 0, 918}, {-200, 0, 940},
+        {-159, 0, 993}, {-166, 0, 1015}, {-170, 0, 1150}, {-650, 0, 1150}
+    };
+    return std::max(inlet_radius(airport_shore, x, z), inlet_radius(coastal_shore, x, z));
+}
+bool city_loop_crossing(Vec3 a, Vec3 b) {
+    return (std::abs(a.GetZ() + 690) < .01f || std::abs(a.GetZ() - 750) < .01f)
+        && std::abs(a.GetZ() - b.GetZ()) < .01f
+        && std::min(a.GetX(), b.GetX()) >= -1120.01f && std::max(a.GetX(), b.GetX()) <= -359.99f;
+}
+bool southern_water_crossing(Vec3 a, Vec3 b) {
+    const Vec3 middle = (a + b) / 2;
+    return std::max({southern_inlets_radius(a.GetX(), a.GetZ()), southern_inlets_radius(b.GetX(), b.GetZ()),
+        southern_inlets_radius(middle.GetX(), middle.GetZ())}) >= .6f;
+}
+bool level_bridge_covers(Vec3 a, Vec3 b, float width) {
+    for (const auto& bridge : Environment::bridges())
+        if (bridge.clearance <= Airport::elevation && bridge.width >= width
+            && distance_to(bridge.a, bridge.b, a.GetX(), a.GetZ()) < .01f
+            && distance_to(bridge.a, bridge.b, b.GetX(), b.GetZ()) < .01f) return true;
+    return false;
+}
 float deck_height(const Bridge& bridge, float x, float z) {
     const float t = segment_fraction(bridge.a, bridge.b, x, z);
     float result = -std::numeric_limits<float>::infinity();
     const int rows = int((bridge.b - bridge.a).Length() / 8) + 1;
-    if (bridge.a.GetY() <= 0) {
+    if (bridge.a.GetY() <= 0 && !bridge.has_curve()) {
         if (t < 0 || t > 1 || distance_to(bridge.a, bridge.b, x, z) > bridge.width / 2 + .0001f) return result;
         const float row = t * rows;
         const int i = std::min(int(row), rows - 1);
         return bridge.point(float(i) / rows).GetY()
             + (bridge.point(float(i + 1) / rows).GetY() - bridge.point(float(i) / rows).GetY()) * (row - i);
     }
-    if (t < -.05f || t > 1.05f || distance_to(bridge.a, bridge.b, x, z) > bridge.width / 2 + 1) return result;
+    const float bow = bridge.has_curve() ? std::max(distance_to(bridge.a, bridge.b, bridge.control_a.GetX(), bridge.control_a.GetZ()),
+        distance_to(bridge.a, bridge.b, bridge.control_b.GetX(), bridge.control_b.GetZ())) : 0;
+    if (t < -.05f || t > 1.05f || distance_to(bridge.a, bridge.b, x, z) > bridge.width / 2 + bow + 1) return result;
     const auto sample = [&](Vec3 a, Vec3 b, Vec3 c) {
         const auto cross = [](Vec3 u, Vec3 v) { return u.GetX() * v.GetZ() - u.GetZ() * v.GetX(); };
         const Vec3 p(x - a.GetX(), 0, z - a.GetZ()), u = b - a, v = c - a;
@@ -53,16 +154,32 @@ float deck_height(const Bridge& bridge, float x, float z) {
     }
     return result;
 }
-struct KeyLayout { Vec3 entry, center, exit; float rx, rz; const char* name; };
+struct KeyLayout {
+    Vec3 entry, center, exit; float rx, rz; const char* name;
+    Vec3 forward() const { return (exit - entry).Normalized(); }
+    Vec3 right() const { return Vec3::sAxisY().Cross(forward()); }
+    Vec3 local(float across, float along) const { return center + right() * across + forward() * along; }
+    Vec3 dock() const { return local(std::string_view(name) == "NGAWISH" ? rx * .84f : 95, 0); }
+};
 const std::vector<KeyLayout>& keys() {
     static const std::vector<KeyLayout> layout{
-        {{-360, 0, 1260}, {-360, 0, 1500}, {-360, 0, 1740}, 390, 360, "KEY LARGO"},
-        {{-540, 0, 2040}, {-780, 0, 2220}, {-840, 0, 2340}, 390, 330, "AMBAMORADA"},
-        {{-1080, 0, 2790}, {-1320, 0, 2940}, {-1440, 0, 3090}, 420, 300, "MARATHON"},
-        {{-1590, 0, 3540}, {-1740, 0, 3720}, {-1890, 0, 3870}, 372, 300, "LOWER KEYS"},
-        {{-1980, 0, 4170}, {-2100, 0, 4380}, {-2190, 0, 4530}, 288, 330, "KEY WEST"}
+        {{-360, 0, 1260}, {-360, 0, 1500}, {-360, 0, 1740}, 150, 300, "NGAWISH"},
+        {{-540, 0, 2040}, {-780, 0, 2220}, {-840, 0, 2340}, 150, 300, "AMBAMORADA"},
+        {{-1080, 0, 2790}, {-1320, 0, 2940}, {-1440, 0, 3090}, 150, 300, "MARATHON"},
+        {{-1590, 0, 3540}, {-1740, 0, 3720}, {-1890, 0, 3870}, 150, 300, "LOWER KEYS"},
+        {{-1980, 0, 4170}, {-2100, 0, 4380}, {-2130, 0, 4650}, 150, 300, "KEY WEST"}
     };
     return layout;
+}
+Bridge key_bridge(std::size_t index) {
+    static constexpr float clearances[]{9, 10, 12, 9};
+    static constexpr const char* names[]{"OVERSEAS HIGHWAY", "LONG KEY BRIDGE", "SEVEN MILE BRIDGE", "KEY WEST CAUSEWAY"};
+    const auto& before = keys()[index]; const auto& after = keys()[index + 1];
+    Bridge bridge{before.exit, after.entry, Environment::highway_width, clearances[index], names[index]};
+    const float handle = (bridge.b - bridge.a).Length() * .45f;
+    bridge.control_a = bridge.a + before.forward() * handle;
+    bridge.control_b = bridge.b - after.forward() * handle;
+    return bridge;
 }
 }
 
@@ -75,12 +192,14 @@ Vec3 Bridge::point(float t) const {
     }
     const float ramp = std::min(.34f, 160.0f / (b - a).Length());
     const float blend = smooth(0, ramp, std::min(t, 1 - t));
-    const Vec3 p = a + (b - a) * t;
+    const Vec3 p = has_curve() ? cubic(a, control_a, control_b, b, t) : a + (b - a) * t;
     return Vec3(p.GetX(), Environment::road_level + (clearance - Environment::road_level) * blend, p.GetZ());
 }
 Vec3 Bridge::side(float t) const {
     if (start_side.LengthSq() > 0) return start_side + (end_side - start_side) * t;
-    const Vec3 delta = b - a;
+    const float u = 1 - t;
+    const Vec3 delta = has_curve() ? (control_a - a) * (3 * u * u) + (control_b - control_a) * (6 * u * t)
+        + (b - control_b) * (3 * t * t) : b - a;
     return Vec3(delta.GetX(), 0, delta.GetZ()).Normalized().Cross(Vec3::sAxisY());
 }
 const std::vector<Island>& Environment::islands() {
@@ -104,16 +223,17 @@ const std::vector<Bridge>& Environment::bridges() {
         {{180, 0, 240}, {570, 0, 240}, 16, 8, "MACARTHUR CAUSEWAY"},
         {{750, 0, 240}, {1140, 0, 240}, 16, 8, "MACARTHUR CAUSEWAY"},
         {{180, 0, -240}, {1140, 0, -240}, 12, 7, "VENETIAN CAUSEWAY"},
-        {{-360, highway_level, 900}, {-360, road_level, 1260}, 18, highway_level, "KEYS EXIT RAMP"},
-        {{-360, 0, 1740}, {-540, 0, 2040}, 10, 9, "OVERSEAS HIGHWAY"},
-        {{-840, 0, 2340}, {-1080, 0, 2790}, 10, 10, "LONG KEY BRIDGE"},
-        {{-1440, 0, 3090}, {-1590, 0, 3540}, 10, 12, "SEVEN MILE BRIDGE"},
-        {{-1890, 0, 3870}, {-1980, 0, 4170}, 10, 9, "KEY WEST CAUSEWAY"}
+        {{-360, highway_level, 900}, {-360, road_level, 1260}, highway_width, highway_level, "KEYS EXIT RAMP"},
+        key_bridge(0), key_bridge(1), key_bridge(2), key_bridge(3)
         };
+        // Keep the city-loop crossings at street level, with no hump or ramps.
+        result.push_back({{-360, 0, -690}, {-1120, 0, -690}, 18, road_level, "INTERSTATE CITY LOOP"});
+        result.push_back({{-1120, 0, 750}, {-692.5f, 0, 750}, 18, road_level, "INTERSTATE CITY LOOP"});
+        result.push_back({{-1180, 0, -690}, {-1180, 0, -500}, 7, road_level, "AIRPORT NEIGHBORHOOD LANE"});
         for (const auto& path : highways()) {
-            if (std::string_view(path.name) == "KEYS EXIT RAMP" || std::string_view(path.name) == "AIRPORT INTERNAL ACCESS"
-                || std::string_view(path.name) == "US 1 SLOW LANES"
-                || std::string_view(path.name) == "AIRPORT INTERCHANGE" || std::string_view(path.name) == "AIRPORT CROSS STREET") continue;
+            if (std::string_view(path.name) == "KEYS EXIT RAMP" || std::string_view(path.name) == "OVERSEAS HIGHWAY"
+                || std::string_view(path.name) == "AIRPORT INTERNAL ACCESS"
+                || std::string_view(path.name) == "US 1 SLOW LANES") continue;
             auto points = path.corners;
             if (path.closed) points.push_back(points.front());
             std::vector<Vec3> sides;
@@ -127,11 +247,26 @@ const std::vector<Bridge>& Environment::bridges() {
                 sides.push_back((incoming + outgoing).Cross(Vec3::sAxisY()) / (1 + incoming.Dot(outgoing)));
             }
             for (std::size_t i = 0; i + 1 < points.size(); ++i) {
+                const bool city_loop = std::string_view(path.name) == "INTERSTATE CITY LOOP";
+                const bool airport = std::string_view(path.name) == "AIRPORT INTERCHANGE"
+                    || std::string_view(path.name) == "AIRPORT CROSS STREET";
+                Vec3 a = points[i], b = points[i + 1];
+                Vec3 start_side = sides[i], end_side = sides[i + 1];
+                if (airport) {
+                    if (!southern_water_crossing(a, b)) continue;
+                    const float level = (a.GetZ() + b.GetZ()) / 2 < 0 ? Airport::elevation : road_level;
+                    a.SetY(level); b.SetY(level);
+                    // Square the bank ends; shared bridge joints retain their matching miters.
+                    const Vec3 direction = (b - a).Normalized(), side = direction.Cross(Vec3::sAxisY());
+                    // Overlap the ground pavement slightly so compressed collision edges cannot leave a seam.
+                    if (i == 0 || !southern_water_crossing(points[i - 1], points[i])) { start_side = side; a -= direction * .25f; }
+                    if (i + 2 == points.size() || !southern_water_crossing(points[i + 1], points[i + 2])) { end_side = side; b += direction * .25f; }
+                }
                 if ((std::string_view(path.name) == "US 1 GRAND BOULEVARD"
-                    || std::string_view(path.name) == "INTERSTATE CITY LOOP")
-                    && points[i].GetY() <= road_level + .001f && points[i + 1].GetY() <= road_level + .001f) continue;
-                result.push_back({points[i], points[i + 1], path.width, 32, path.name,
-                    sides[i], sides[i + 1], !path.closed && i == 0, !path.closed && i + 2 == points.size()});
+                        && points[i].GetY() <= road_level + .001f && points[i + 1].GetY() <= road_level + .001f)
+                    || (city_loop && (points[i].GetY() <= 0 || points[i + 1].GetY() <= 0 || city_loop_crossing(a, b)))) continue;
+                result.push_back({a, b, path.width, airport ? a.GetY() : city_loop ? road_level : 32, path.name,
+                    start_side, end_side, !path.closed && i == 0, !path.closed && i + 2 == points.size()});
             }
         }
         return result;
@@ -160,10 +295,10 @@ const std::vector<StreetLoop>& Environment::highways() {
         arc(-1120, -410, -pi / 2, -pi); arc(-1120, 470, pi, pi / 2);
         line(ring, ring.front());
         ring.pop_back(); // The closed route adds the shared first point itself.
-        // Lift the western curve over the river, with gentle approaches at both ends.
+        // The western river crossing follows the curve at street level, without ramps.
         for (auto& p : ring) {
             const float distance = std::hypot(p.GetX() + 1332, p.GetZ() - 654);
-            p.SetY(distance < 265 ? road_level + (8 - road_level) * (1 - smooth(70, 240, distance)) : 0);
+            p.SetY(distance < 265 ? road_level : 0);
         }
         result.push_back({ring, 18, "INTERSTATE CITY LOOP", true, 20, 48, 4});
         std::vector<Vec3> main{{-360, road_level, -840}};
@@ -173,7 +308,7 @@ const std::vector<StreetLoop>& Environment::highways() {
             main.emplace_back(-360, road_level + (highway_level - road_level) * smooth(360, 660, z), z);
         }
         line(main, Vec3(-360, highway_level, 900));
-        result.push_back({main, 24, "US 1 GRAND BOULEVARD", false, 16, 24, 6});
+        result.push_back({main, highway_width, "US 1 GRAND BOULEVARD", false, 16, 24, 6});
         std::vector<Vec3> skyway{{-360, 0, 750}};
         const auto sky_curve = [&](Vec3 control_a, Vec3 control_b, Vec3 end, int samples) {
             const Vec3 start = skyway.back();
@@ -193,13 +328,13 @@ const std::vector<StreetLoop>& Environment::highways() {
             const float high = highway_level + (32 - highway_level) * smooth(180, 780, distance[i]);
             skyway[i].SetY(road_level + (high - road_level) * smooth(120, 700, distance.back() - distance[i]));
         }
-        result.push_back({skyway, 24, "BEACH TO KEYS SKYWAY", false, 22, 36, 6});
+        result.push_back({skyway, highway_width, "BEACH TO KEYS SKYWAY", false, 22, 36, 6});
         std::vector<Vec3> cutoff;
         for (int i = 0; i <= 18; ++i) {
             const float t = float(i) / 18;
             cutoff.emplace_back(-360, highway_level + (road_level - highway_level) * smooth(1.0f / 6, 1, t), 900 + 360 * t);
         }
-        result.push_back({cutoff, 18, "KEYS EXIT RAMP", false, 12, 12, 4});
+        result.push_back({cutoff, highway_width, "KEYS EXIT RAMP", false, 12, 12, 6});
         const auto& airport = airports[0];
         std::vector<Vec3> access{{-360, 0, 750}};
         const Vec3 start = access.front(), end(airport.gate_x(), 0, airport.gate_z());
@@ -236,6 +371,24 @@ const std::vector<StreetLoop>& Environment::highways() {
         frontage_turn(-350, 888, 0, pi / 2); line(frontage, Vec3(-370, road_level, 900));
         frontage_turn(-370, 888, pi / 2, pi);
         result.push_back({frontage, 7, "US 1 SLOW LANES", true, 6, 12, 2.2f});
+        std::vector<Vec3> overseas{keys().front().entry};
+        const auto island_curve = [&](Vec3 end, Vec3 direction) {
+            const Vec3 start = overseas.back();
+            const float handle = (end - start).Length() / 3;
+            const int count = int((end - start).Length() / 8) + 1;
+            for (int i = 1; i <= count; ++i)
+                overseas.push_back(cubic(start, start + direction * handle, end - direction * handle, end, float(i) / count));
+        };
+        for (std::size_t i = 0; i < keys().size(); ++i) {
+            const auto& key = keys()[i];
+            island_curve(key.center, key.forward()); island_curve(key.exit, key.forward());
+            if (i + 1 == keys().size()) break;
+            const Bridge bridge = key_bridge(i);
+            const int count = int((bridge.b - bridge.a).Length() / 8) + 1;
+            for (int row = 1; row <= count; ++row) overseas.push_back(bridge.point(float(row) / count));
+            overseas.back().SetY(0); // The next island follows the terrain, including the airfield.
+        }
+        result.push_back({overseas, highway_width, "OVERSEAS HIGHWAY", false, 12, 126, 6});
         return result;
     }();
     return data;
@@ -258,36 +411,18 @@ const std::vector<StreetLoop>& Environment::street_loops() {
             {{{-360, 0, 240}, {-120, 0, 240}, {-160, 0, 420}, {-360, 0, 400}}, 8, "BRICKELL RESIDENTIAL"},
             {{{-160, 0, 420}, {0, 0, 400}, {0, 0, 600}, {-360, 0, 600}, {-360, 0, 400}}, 8, "SOUTHERN NEIGHBORHOOD"},
             {{{-780, 0, -240}, {-600, 0, -240}, {-580, 0, -40}, {-760, 0, -80}}, 8, "AIRPORT NEIGHBORHOOD"},
-            {{{-1040, 0, -520}, {-1240, 0, -480}, {-1220, 0, -160}, {-1040, 0, -160}}, 8, "AIRPORT WORKSHOPS"},
-            {{{-1220, 0, -160}, {-1040, 0, -160}, {-1040, 0, 100}, {-1200, 0, 140}}, 7.5f, "AIRPORT RESIDENTIAL"},
+            // One straight neighborhood road continues the airport's northern bridge.
+            {{{-1180, 0, -690}, {-1180, 0, -500}, {-1180, 0, 120}, {-1180, 0, 750}},
+                7, "AIRPORT RESIDENTIAL", false, 8, 12},
         };
         for (float x : {1140.0f, 1260.0f, 1380.0f}) for (float z : {-480.0f, -240.0f, 0.0f, 240.0f})
             result.push_back({{{x, 0, z}, {x + (x == 1380 ? 90 : 120), 0, z},
                 {x + (x == 1380 ? 90 : 120), 0, z + 240}, {x, 0, z + 240}}, 8, "SOUTH BEACH STREET"});
-        for (std::size_t i = 0; i < keys().size(); ++i) {
+        // Ngawish is a highway service island, without neighborhood streets.
+        for (std::size_t i = 1; i < keys().size(); ++i) {
             const auto& key = keys()[i];
-            const auto loop = [&](std::initializer_list<Vec3> points) {
-                std::vector<Vec3> corners;
-                for (const auto& p : points) corners.push_back(key.center + p);
-                result.push_back({std::move(corners), 7.5f, key.name});
-            };
-            if (i == 0) {
-                loop({{0, 0, 0}, {100, 0, -50}, {120, 0, 100}, {0, 0, 120}});
-                loop({{-120, 0, -100}, {0, 0, -100}, {0, 0, 80}, {-100, 0, 100}});
-            } else if (i == 1) {
-                loop({{0, 0, 0}, {110, 0, -80}, {200, 0, -15}, {155, 0, 110}, {40, 0, 95}});
-                loop({{0, 0, 0}, {-120, 0, -100}, {-220, 0, -10}, {-130, 0, 110}});
-            } else if (i == 2) {
-                loop({{0, 0, 0}, {160, 0, -50}, {180, 0, 100}, {0, 0, 120}});
-                loop({{0, 0, 0}, {-100, 0, -80}, {-190, 0, -60}, {-160, 0, 80}, {-60, 0, 100}});
-                loop({{0, 0, 120}, {90, 0, 120}, {90, 0, 200}, {0, 0, 200}});
-            } else if (i == 3) {
-                loop({{0, 0, 0}, {140, 0, -100}, {190, 0, -10}, {90, 0, 95}, {-40, 0, 80}});
-                loop({{-40, 0, 80}, {-140, 0, 130}, {-220, 0, 40}, {-130, 0, -50}, {0, 0, 0}});
-            } else {
-                for (float x : {-90.0f, 0.0f}) for (float z : {-90.0f, 0.0f})
-                    loop({{x, 0, z}, {x + 90, 0, z}, {x + 90, 0, z + 90}, {x, 0, z + 90}});
-            }
+            result.push_back({{key.local(50, -80), key.local(95, -80), key.local(95, 80), key.local(50, 80)},
+                6.5f, key.name, true, 5, 3, 1.8f});
         }
         for (auto& loop : result) {
             float center_x = 0;
@@ -312,14 +447,14 @@ const std::vector<Road>& Environment::roads() {
             result.push_back({Vec3(ax, 0, az), Vec3(bx, 0, bz), width, name});
         };
         add(0, -600, 0, 600, 14, "BISCAYNE BOULEVARD");
-        add(-360, -840, -360, 360, 24, "US 1 GRAND BOULEVARD");
+        add(-360, -840, -360, 360, highway_width, "US 1 GRAND BOULEVARD");
         for (float x : {-382.0f, -338.0f}) add(x, -600, x, 900, 7, "US 1 SLOW LANE");
         for (float z : {-600.0f, 900.0f}) add(-382, z, -338, z, 14, "US 1 SLOW LANE TURN");
         for (float z : {-240.0f, 240.0f}) add(-600, z, 180, z, z < 0 ? 18 : 14, "CAUSEWAY APPROACH");
         add(-780, -240, -600, -240, 18, "AIRPORT MAIN STREET");
-        for (const auto& loop : street_loops()) for (std::size_t i = 0; i < loop.corners.size(); ++i) {
+        for (const auto& loop : street_loops()) for (std::size_t i = 0; i + 1 < loop.corners.size() + std::size_t(loop.closed); ++i) {
             const Vec3 a = loop.corners[i], b = loop.corners[(i + 1) % loop.corners.size()];
-            bool duplicate = false;
+            bool duplicate = level_bridge_covers(a, b, loop.width);
             for (const auto& road : result)
                 if (((road.a - a).LengthSq() < .01f && (road.b - b).LengthSq() < .01f)
                     || ((road.b - a).LengthSq() < .01f && (road.a - b).LengthSq() < .01f)) { duplicate = true; break; }
@@ -344,9 +479,6 @@ const std::vector<Road>& Environment::roads() {
         add(-360, 520, 0, 520, 7, "SOUTHERN STREET");
         add(-700, -240, -680, -62, 7, "AIRPORT VILLAGE LANE");
         add(-770, -140, -600, -140, 7, "AIRPORT VILLAGE STREET");
-        add(-1180, -500, -1180, 120, 7, "AIRPORT NEIGHBORHOOD LANE");
-        add(-1180, -690, -1180, -500, 7, "AIRPORT NEIGHBORHOOD LANE");
-        add(-1180, 120, -1180, 750, 7, "AIRPORT NEIGHBORHOOD LANE");
         for (float z : {-400.0f, -280.0f, -40.0f, 60.0f})
             add(-1210, z, airports[0].center_x - std::max(airports[0].grounds_half_width, 115.f) - 20, z, 7, "AIRPORT SERVICE STREET");
         add(60, -180, 60, 180, 7, "MARKET LANE");
@@ -354,34 +486,17 @@ const std::vector<Road>& Environment::roads() {
         const auto airport_access = airports[0].access_points();
         for (std::size_t i = 1; i < airport_access.size(); ++i)
             add(airport_access[i - 1].x, airport_access[i - 1].z, airport_access[i].x, airport_access[i].z, airports[0].gate_width(), "AIRPORT INTERNAL ACCESS");
-        add(airports[1].apron_x(), airports[1].apron_z(), -2190, 4290, 7.5f, "KEY WEST AIRPORT ACCESS");
+        add(airports[1].apron_x(), airports[1].apron_z(), keys().back().center.GetX(), keys().back().center.GetZ(),
+            7.5f, "KEY WEST AIRPORT ACCESS");
         for (float x : {1140.0f, 1260.0f, 1380.0f}) for (float z : {-360.0f, -120.0f, 120.0f, 360.0f})
             add(x, z, x + (x == 1380 ? 90 : 120), z, 7, "BEACH NEIGHBORHOOD LANE");
         for (float x : {1200.0f, 1320.0f, 1425.0f}) add(x, -480, x, 480, 7, "BEACH STUDIO LANE");
         add(570, 240, 750, 240, 12, "PORTMIAMI ROAD");
         add(660, 240, 660, 340, 8, "CRUISE PORT ACCESS");
         for (const auto& key : keys()) {
-            result.push_back({key.entry, key.center, 10, "OVERSEAS HIGHWAY"});
-            result.push_back({key.center, key.exit, 10, "OVERSEAS HIGHWAY"});
-            const float x = key.center.GetX(), z = key.center.GetZ();
-            add(x, z, x + key.rx * .84f, z, 7.5f, "MARINA LANE");
-            for (const auto& loop : street_loops()) if (loop.name == key.name)
-                for (std::size_t i = 1; i < loop.corners.size(); i += 2) {
-                    const Vec3 a = loop.corners[i], b = a + (a - key.center).Normalized() * 35;
-                    if (coast_radius(b.GetX(), b.GetZ()) < .8f) result.push_back({a, b, 6.5f, "KEYS CUL-DE-SAC"});
-                }
+            if (std::string_view(key.name) == "NGAWISH") result.push_back({key.center, key.dock(), 7.5f, "MARINA LANE"});
+            else result.push_back({key.center, key.local(50, 0), 6.5f, "KEYS NEIGHBORHOOD ACCESS"});
         }
-        const auto key_lane = [&](int index, float ax, float az, float bx, float bz) {
-            const Vec3 center = keys()[index].center;
-            add(center.GetX() + ax, center.GetZ() + az, center.GetX() + bx, center.GetZ() + bz, 6.5f, "VILLAGE LANE");
-        };
-        key_lane(0, 0, 40, 112, 40); key_lane(0, -110, 0, 0, 0); key_lane(0, -55, -90, -55, 92);
-        key_lane(1, 0, 0, -100, 15); key_lane(1, -100, 15, -180, -10);
-        key_lane(1, 0, 0, 150, 20); key_lane(1, 150, 20, 180, 0);
-        key_lane(2, 0, 60, 175, 60); key_lane(2, -50, -40, -70, 60);
-        key_lane(3, 0, 0, 70, 25); key_lane(3, 70, 25, 120, 15);
-        key_lane(3, -40, 80, -80, 20); key_lane(3, -80, 20, -140, 30);
-        key_lane(4, -45, -90, -45, 90); key_lane(4, 45, -90, 45, 90);
         // Local streets meet the frontage lanes beside the rising flyover.
         for (auto& road : result) if (road.width < 24) {
             const float frontage = (road.a.GetX() + road.b.GetX()) / 2 < -360 ? -382 : -338;
@@ -391,11 +506,13 @@ const std::vector<Road>& Environment::roads() {
         }
         for (const auto& path : highways()) if (std::string_view(path.name) == "INTERSTATE CITY LOOP"
             || std::string_view(path.name) == "AIRPORT INTERCHANGE" || std::string_view(path.name) == "AIRPORT CROSS STREET"
-            || std::string_view(path.name) == "US 1 SLOW LANES") {
-            for (std::size_t i = 0; i + 1 < path.corners.size(); ++i)
-                if (path.corners[i].GetY() <= road_level + .001f && path.corners[i + 1].GetY() <= road_level + .001f)
-                    result.push_back({path.corners[i], path.corners[i + 1], path.width, path.name});
-            if (path.closed) result.push_back({path.corners.back(), path.corners.front(), path.width, path.name});
+            || std::string_view(path.name) == "US 1 SLOW LANES" || std::string_view(path.name) == "OVERSEAS HIGHWAY") {
+            for (std::size_t i = 0; i + 1 < path.corners.size() + std::size_t(path.closed); ++i) {
+                const Vec3 a = path.corners[i], b = path.corners[(i + 1) % path.corners.size()];
+                if (std::string_view(path.name) == "OVERSEAS HIGHWAY" && (a.GetY() != 0 || b.GetY() != 0)) continue;
+                if (a.GetY() <= road_level + .001f && b.GetY() <= road_level + .001f
+                    && !level_bridge_covers(a, b, path.width)) result.push_back({a, b, path.width, path.name});
+            }
         }
         // The southern fork rounds the turn onto the new cross street.
         for (const auto& path : highways()) if (std::string_view(path.name) == "AIRPORT INTERCHANGE") {
@@ -429,6 +546,11 @@ float Environment::coast_radius(float x, float z) {
         const auto& island = islands()[i];
         float dx = (x - island.center.GetX()) / island.radius_x;
         float dz = (z - island.center.GetZ()) / island.radius_z;
+        if (i >= 6) {
+            const auto& key = keys()[i - 6];
+            const Vec3 offset(x - key.center.GetX(), 0, z - key.center.GetZ());
+            dx = offset.Dot(key.right()) / key.rx; dz = offset.Dot(key.forward()) / key.rz;
+        }
         if (dx * dx + dz * dz > 9) continue;
         const float phase = float(i) * 1.73f;
         // Bent island spines and asymmetric lobes make coves, points and narrow waists.
@@ -458,11 +580,16 @@ float Environment::coast_radius(float x, float z) {
                 island.radius_x * .28f, island.radius_z * .42f);
             inlet(island.center.GetX() + island.radius_x * .45f, island.center.GetZ() + island.radius_z * .68f,
                 island.radius_x * .25f, island.radius_z * .24f);
+            // Keep a narrow, level bank around the island highway and its bridge approaches.
+            const auto& key = keys()[i - 6];
+            shape = std::min(shape, std::min(distance_to(key.entry, key.center, x, z), distance_to(key.center, key.exit, x, z)) / 45);
         }
         radius = std::min(radius, shape);
     }
     // Extend the western inlet into a winding river that opens onto the south coast.
     radius = std::max(radius, 1.30f - .40f * river_radius(x, z));
+    radius = std::max(radius, northern_bay_radius(x, z));
+    radius = std::max(radius, southern_inlets_radius(x, z));
     // Keep PortMiami and the Keys separated where their shorelines overlap.
     for (int index : {0, 3, 7}) {
         const auto& bridge = bridges()[index];
@@ -480,7 +607,9 @@ float Environment::coast_radius(float x, float z) {
 bool Environment::road(float x, float z) {
     for (const auto& airport : airports) if (airport.pavement(x, z)) return true;
     for (const auto& street : roads())
-        if (distance_to(street.a, street.b, x, z) <= street.width / 2) return true;
+        if (street.bridge >= 0 && bridges()[street.bridge].has_curve()) {
+            if (std::isfinite(deck_height(bridges()[street.bridge], x, z))) return true;
+        } else if (distance_to(street.a, street.b, x, z) <= street.width / 2) return true;
     return false;
 }
 const char* Environment::district(float x, float z) {
@@ -501,30 +630,37 @@ float Environment::elevation(float x, float z) {
     float ground = road_level - (road_level + 9) * smooth(.90f, 1.12f, radius);
     if (radius < 1.6f) {
         float verge = 10000;
-        for (const auto& street : roads()) if (street.bridge < 0)
+        for (const auto& street : roads()) if (street.bridge < 0 || bridges()[street.bridge].clearance <= Airport::elevation)
             verge = std::min(verge, distance_to(street.a, street.b, x, z) - street.width / 2);
-        // Raised ground follows streets, without extending the island under overpasses.
+        // Flatten streets and level bridge approaches without raising ground under overpasses.
         ground += (std::max(ground, road_level) - ground) * (1 - smooth(45, 85, verge));
         float relief = (1 + std::sin(x * .013f) * std::cos(z * .011f)) * .8f
             * (1 - smooth(.65f, .92f, radius)) * smooth(45, 120, verge);
         for (const auto& key : keys()) {
-            const Vec3 dock(key.center.GetX() + key.rx * .84f, 0, key.center.GetZ());
+            const Vec3 dock = key.dock();
             if (distance_to(dock, dock + Vec3(220, 0, 0), x, z) < spacing * 2) relief = 0;
         }
         ground += relief;
     }
     for (const auto& airport : airports) {
         const float padding = airport.international ? 25 : 5;
-        const float airport_blend = (1 - smooth(airport.grounds_half_width + padding, airport.grounds_half_width + 90,
+        const float airport_blend = (1 - smooth(airport.grounds_half_width + padding, airport.grounds_half_width + (airport.international ? 90 : 25),
             std::abs(x - airport.center_x))) * (1 - smooth(airport.grounds_half_length() + padding,
             airport.grounds_half_length() + 65, std::abs(z - airport.runway_z)));
         const float parking_distance = std::max(std::abs(x - airport.center_x + 76.5f) - 38.5f,
             std::abs(z - airport.runway_z + 30) - 190);
         ground += (Airport::elevation - ground) * std::max(airport_blend, 1 - smooth(5, 45, parking_distance));
     }
-    // Nearby road verges must stop at the riverbank instead of damming the channel.
-    const float river = 1.30f - .40f * river_radius(x, z);
-    if (river > .90f) ground = std::min(ground, road_level - (road_level + 9) * smooth(.90f, 1.12f, river));
+    // Keep the terrain below level decks, including the airport's higher verge.
+    for (const auto& bridge : bridges()) if (bridge.clearance <= Airport::elevation
+        && distance_to(bridge.a, bridge.b, x, z) < bridge.width / 2 + spacing)
+        ground = std::min(ground, bridge.point(.5f).GetY());
+    // Nearby road and airport verges must stop at the bank instead of filling the water.
+    float water = std::max({1.30f - .40f * river_radius(x, z), northern_bay_radius(x, z), southern_inlets_radius(x, z)});
+    bool airfield = false;
+    for (const auto& airport : airports) airfield |= airport.contains(x, z);
+    if (z > 1200 && !airfield) water = std::max(water, radius); // Keep the narrow shore instead of reclaiming it with road verges.
+    if (water > .90f) ground = std::min(ground, road_level - (road_level + 9) * smooth(.90f, 1.12f, water));
     return ground;
 }
 Surface Environment::surface(float x, float z, float y) {
@@ -640,9 +776,7 @@ Environment::Environment() {
                 if (shoreline_edge > -10000 && x + size.GetX() / 2 > shoreline_edge - highway.width / 2) return false;
             }
         }
-        bool airport_structure = false;
-        if (kind == BuildingKind::Terminal || kind == BuildingKind::Hangar || kind == BuildingKind::ControlTower)
-            for (const auto& airport : airports) airport_structure |= airport.contains(x, z);
+        const bool airport_structure = kind == BuildingKind::Terminal || kind == BuildingKind::Hangar || kind == BuildingKind::ControlTower;
         // Clip each street segment against the footprint expanded by its width.
         // This catches diagonal roads between the footprint sample points.
         for (const auto& street : roads()) {
@@ -680,7 +814,7 @@ Environment::Environment() {
         }
         const Vec3 outward = Vec3(x - frontage.GetX(), 0, z - frontage.GetZ()).NormalizedOr(Vec3::sAxisX());
         // ponytail: nearby shores only (220 m); extend the probe for wider waterfront setbacks.
-        for (float distance = nearest; distance <= 220 && !airport_structure; distance += 5) {
+        for (float distance = nearest; distance <= 220 && !airport_structure && kind != BuildingKind::GasStation; distance += 5) {
             const Vec3 p = frontage + outward * distance;
             bool inland = false;
             for (const auto& street : roads()) {
@@ -702,25 +836,31 @@ Environment::Environment() {
     for (std::size_t i = 0; i < keys().size(); ++i) {
         const auto& key = keys()[i];
         const float x = key.center.GetX(), z = key.center.GetZ();
-        if (i + 1 < keys().size()) {
-            bool cafe = false;
-            for (float ox : {40.0f, -40.0f, 80.0f, -80.0f, 140.0f, -140.0f}) {
-                for (float oz : {-40.0f, 40.0f, -80.0f, 80.0f, 140.0f})
-                    if (add_building(x + ox, z + oz, Vec3(14, 4, 12), BuildingKind::Cafe, true)) { cafe = true; break; }
-                if (cafe) break;
+        if (i == 0) {
+            add_building(x - 36, z - 40, Vec3(32, 4, 28), BuildingKind::GasStation, true);
+        } else {
+            const Vec3 right = key.right();
+            const bool east = std::abs(right.GetX()) > std::abs(right.GetZ());
+            for (float across : {65.0f, 80.0f}) for (float along : {-55.0f, -20.0f, 15.0f, 50.0f}) {
+                const Vec3 p = key.local(across, along);
+                const float facing = (across < 70 ? -1 : 1) * (east ? right.GetX() : right.GetZ());
+                add_building(p.GetX(), p.GetZ(), Vec3(8, 3.3f, 9), BuildingKind::House, east, facing > 0);
             }
         }
-        ports_.push_back({Vec3(x + key.rx * .84f, height(x + key.rx * .84f, z), z), true, key.name});
+        Vec3 dock = key.dock(); dock.SetY(height(dock.GetX(), dock.GetZ()));
+        ports_.push_back({dock, true, key.name,
+            i == 0 ? 60.0f : 220.0f, i == 0 ? 5.0f : 8.0f});
     }
     const auto& miami = airports[0];
     add_building(miami.gate_x() + 40, miami.gate_z(), Vec3(42, 9, 30), BuildingKind::Terminal, true, false);
     add_building(miami.center_x - 48, miami.apron_z() + 80, Vec3(28, 9, 24), BuildingKind::Hangar, true, true);
     add_building(miami.center_x - 48, miami.apron_z() - 80, Vec3(7, 18, 7), BuildingKind::ControlTower);
-    add_building(airports[1].center_x + 82, airports[1].runway_z - airports[1].departure * 140, Vec3(24, 4.5f, 14), BuildingKind::Terminal, true, false);
+    add_building(airports[1].center_x - 65, airports[1].runway_z - airports[1].departure * 280,
+        Vec3(16, 4, 12), BuildingKind::Terminal, true, true);
     // Frontage lots fill both sides of streets; a second row fills deep blocks.
     // ponytail: cardinal footprints on angled streets; rotate lots if precise parcel geometry is needed.
     for (const auto& street : roads()) {
-        if (street.bridge >= 0) continue;
+        if (street.bridge >= 0 || street.a.GetZ() > 1080 || street.b.GetZ() > 1080) continue;
         const Vec3 direction = (street.b - street.a).Normalized(), side = direction.Cross(Vec3::sAxisY());
         const float length = (street.b - street.a).Length();
         for (float along = 12; along < length - 12; along += 18) for (float sign : {-1.0f, 1.0f}) for (int row = 0; row < 2; ++row) {
@@ -731,6 +871,7 @@ Environment::Environment() {
             for (std::size_t i = 0; i < keys().size(); ++i)
                 if (std::hypot((x - keys()[i].center.GetX()) / keys()[i].rx, (z - keys()[i].center.GetZ()) / keys()[i].rz) < 1)
                     key_index = int(i);
+            if (key_index == 0) continue;
             BuildingKind kind;
             if (key_index >= 0 || z > 1080) kind = BuildingKind::House;
             else if (x > 1000) kind = roll < 30 ? BuildingKind::Hotel : roll < 52 ? BuildingKind::Apartment
@@ -765,7 +906,7 @@ Environment::Environment() {
     const auto add_tree = [&](float x, float z) {
         if (coast_radius(x, z) > .88f || ground_height(x, z) < 2.9f || road(x, z)) return;
         for (const auto& airport : airports) if (airport.contains(x, z) || airport.flight_path(x, z)) return;
-        for (const auto& street : roads()) if (distance_to(street.a, street.b, x, z) < street.width / 2 + 2) return;
+        for (const auto& street : roads()) if (distance_to(street.a, street.b, x, z) < street.width / 2 + (z > 1740 ? 3 : 2)) return;
         for (const auto& b : buildings_) {
             const float clearance = b.kind == BuildingKind::Cafe ? 3.0f : .8f;
             if (std::abs(x - b.center.GetX()) < b.size.GetX() / 2 + clearance
@@ -796,6 +937,11 @@ Environment::Environment() {
             add_tree(x + std::cos(angle) * distance, z + std::sin(angle) * distance);
         }
     }
+    for (std::size_t i = 1; i < keys().size(); ++i)
+        for (float across = -135; across <= 135; across += 10) for (float along = -260; along <= 260; along += 10) {
+            const Vec3 p = keys()[i].local(across + int(random() % 7) - 3, along + int(random() % 7) - 3);
+            add_tree(p.GetX(), p.GetZ());
+        }
 }
 float Environment::terrain_height(float x, float z) const {
     const float gx = std::clamp((x + extent) / spacing, 0.0f, float(samples - 1));
@@ -815,7 +961,8 @@ float Environment::height(float x, float z) const {
 }
 float Environment::ground_height(float x, float z) const {
     float ground = terrain_height(x, z);
-    for (const auto& bridge : bridges()) if (bridge.a.GetY() <= 0) ground = std::max(ground, deck_height(bridge, x, z));
+    for (const auto& bridge : bridges()) if (bridge.a.GetY() <= 0 || bridge.clearance <= Airport::elevation)
+        ground = std::max(ground, deck_height(bridge, x, z));
     return ground;
 }
 float Environment::road_height(const Road& road, float x, float z) const {

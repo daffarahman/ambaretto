@@ -19,20 +19,21 @@ bool equal(Image a, Image b) {
         if (!same(GetImageColor(a, x, y), GetImageColor(b, x, y))) return false;
     return true;
 }
-void sharp_map_edges(const forza::EnvironmentRenderer& scenery, RenderTexture2D texture) {
+void sharp_map_edges(const forza::EnvironmentRenderer& scenery, RenderTexture2D texture, bool in_vehicle = false) {
     using namespace forza;
     const Vec3 player(0, 3.3f, 105), heading(0, 0, -1);
     const Rectangle viewport{0, 0, 640, 480};
     // This render target has no MSAA: interior map pixels must retain the palette,
     // even at maximum zoom and while the minimap rotates.
     for (float scale : {.5f, 2.0f, 0.0f, -1.0f}) {
+        if (in_vehicle && scale > 0) continue;
         const Camera3D camera{{0, 6, 114}, {scale < 0 ? 9.0f : 0.0f, 4, 105}, {0, 1, 0}, 60, CAMERA_PERSPECTIVE};
-        const MinimapView mini(480, player, heading, camera);
+        const MinimapView mini(480, player, heading, camera, in_vehicle);
         const bool full = scale > 0;
         WorldMapView view; view.center = {player.GetX(), player.GetZ()}; view.scale = scale;
         BeginTextureMode(texture); ClearBackground(BLACK);
         if (full) scenery.world_map(view, viewport, player, heading);
-        else scenery.minimap(player, heading, camera);
+        else scenery.minimap(player, heading, camera, nullptr, in_vehicle);
         EndTextureMode();
         Image image = LoadImageFromTexture(texture.texture); ImageFlipVertical(&image);
         const Rectangle bounds = full ? viewport : mini.bounds;
@@ -75,16 +76,17 @@ int main() {
         Police police(world, map);
         EnvironmentRenderer scenery(map);
         const Vec3 player(0, 3.3f, 105), heading(0, 0, -1);
-        const Vec3 civilian_position = player + Vec3(70, 0, 35), plane_position = player + Vec3(-60, 4, 45);
+        const Vec3 civilian_position = player + Vec3(35, 0, 15), plane_position = player + Vec3(-40, 4, 15);
         civilian.reset(civilian_position); plane.reset(plane_position);
         const Camera3D camera{{0, 6, 114}, {0, 4, 105}, {0, 1, 0}, 60, CAMERA_PERSPECTIVE};
         const Rectangle viewport{0, 0, 640, 480};
         WorldMapView view; view.center = {player.GetX(), player.GetZ()}; view.scale = 1;
         const MinimapView mini(480, player, heading, camera);
         auto& unit = const_cast<PoliceUnit&>(police.units()[0]);
-        const Vec3 car_position = player + Vec3(50, 0, -40), foot_position = player + Vec3(-55, 0, -45);
+        const Vec3 car_position = player + Vec3(35, 0, -25), foot_position = player + Vec3(-30, 0, -25);
         const auto texture = LoadRenderTexture(640, 480);
         sharp_map_edges(scenery, texture);
+        sharp_map_edges(scenery, texture, true);
         const auto tall_texture = LoadRenderTexture(640, 720);
         sharp_map_edges(scenery, tall_texture);
         UnloadRenderTexture(tall_texture);
@@ -94,7 +96,9 @@ int main() {
         Image screen = LoadImageFromScreen(); EndDrawing();
         require(marker_pixels(screen, mini.anchor, RAYWHITE) > 5, "rounded minimap disappeared after an offscreen render pass");
         UnloadImage(screen);
-        for (bool full : {false, true}) {
+        for (int mode : {0, 1, 2}) {
+            const bool full = mode == 2, in_vehicle = mode == 1;
+            const MinimapView mini(480, player, heading, camera, in_vehicle);
             police.clear(); unit.car->reset(car_position); unit.car->repair();
             for (auto& officer : unit.officers) { officer.seated = true; officer.character->revive(); }
             const auto project = [&](Vec3 point) { return full ? view.project(point, viewport) : mini.project(point); };
@@ -107,7 +111,7 @@ int main() {
                 }
                 BeginTextureMode(texture); ClearBackground(BLACK);
                 if (full) scenery.world_map(view, viewport, player, heading, cops);
-                else scenery.minimap(player, heading, camera, cops);
+                else scenery.minimap(player, heading, camera, cops, in_vehicle);
                 EndTextureMode();
                 Image image = LoadImageFromTexture(texture.texture); ImageFlipVertical(&image); return image;
             };
@@ -138,7 +142,7 @@ int main() {
             Image live = render(&police);
             require(marker_pixels(live, project(car_position), {79, 142, 255, 255}) > 20,
                 "live police car had no marker while wanted");
-            ExportImage(live, full ? "map-markers-world-wanted.png" : "map-markers-minimap-wanted.png");
+            ExportImage(live, full ? "map-markers-world-wanted.png" : in_vehicle ? "map-markers-driving-wanted.png" : "map-markers-minimap-wanted.png");
             auto& officer = unit.officers[0];
             officer.seated = false; officer.character->reset(foot_position);
             Image one_out = render(&police);
@@ -176,7 +180,7 @@ int main() {
             const_cast<WantedLevel&>(police.wanted()).step(player + Vec3(2000, 0, 0), false, police.wanted().cooldown() + 1);
             Image escaped = render(&police);
             require(equal(baseline, escaped), "police or search markers remained after wanted level cleared");
-            ExportImage(escaped, full ? "map-markers-world-clear.png" : "map-markers-minimap-clear.png");
+            ExportImage(escaped, full ? "map-markers-world-clear.png" : in_vehicle ? "map-markers-driving-clear.png" : "map-markers-minimap-clear.png");
             for (Image image : {baseline, quiet, wanted_base, wanted_blue, searching, live, one_out, empty, reboarded, dead_crew, wreck, foot, dead, escaped}) UnloadImage(image);
         }
         UnloadRenderTexture(texture);

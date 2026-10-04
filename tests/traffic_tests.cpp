@@ -322,10 +322,14 @@ void traffic_horns_and_safety() {
         Car& follower = *traffic.cars()[index].car;
         const auto& loops = map.street_loops();
         const auto residential = std::find_if(loops.begin(), loops.end(), [](const StreetLoop& loop) { return std::string(loop.name) == "AIRPORT RESIDENTIAL"; });
-        const float x = bridge ? -362.2f : residential->corners[1].GetX() - 2.2f, z = bridge ? 1000 : 0;
-        constexpr float direction = 1, yaw = 3.14159265f;
-        follower.reset(ground(map, x, z), yaw);
-        starter.reset(ground(map, x, z + direction * 24), yaw);
+        const auto& deck = map.bridges()[4];
+        const Vec3 direction = bridge ? (deck.point(.51f) - deck.point(.5f)).Normalized() : Vec3::sAxisZ();
+        const Vec3 start = bridge ? deck.point(.5f) + deck.side(.5f) * 6
+            : Vec3(residential->corners[1].GetX() - 2.2f, 0, 0);
+        const float yaw = std::atan2(-direction.GetX(), -direction.GetZ());
+        follower.reset(ground(map, start.GetX(), start.GetZ()), yaw);
+        const Vec3 obstacle = start + direction * 24;
+        starter.reset(ground(map, obstacle.GetX(), obstacle.GetZ()), yaw);
         for (int step = 0; step < 120 * 12; ++step) {
             starter.step({0, 0, false, true});
             traffic.step(&starter, starter, nullptr, nullptr, starter.position()); world.step();
@@ -334,7 +338,7 @@ void traffic_horns_and_safety() {
         std::cout << "Queue " << (bridge ? "bridge" : "narrow") << ": " << follower.position().GetX()
             << ',' << follower.position().GetZ() << " speed=" << follower.velocity().Length()
             << " clearance=" << (follower.position() - starter.position()).Length() << '\n';
-        require(std::abs(follower.position().GetX() - x) < .6f && follower.velocity().Length() < .5f
+        require(std::abs((follower.position() - start).Dot(direction.Cross(Vec3::sAxisY()))) < .6f && follower.velocity().Length() < .5f
             && (follower.position() - starter.position()).Length() > 8,
             "NPC did not safely queue on a narrow street or bridge");
     }

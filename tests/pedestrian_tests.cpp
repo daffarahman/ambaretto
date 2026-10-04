@@ -45,8 +45,11 @@ int main() {
         require(character.grounded() && std::abs(character.position().GetY()
             - map.terrain_height(character.position().GetX(), character.position().GetZ())) < .2f,
             "walking pedestrian left the ground");
-        for (const Vec3 town : {Vec3(1320, 4, 0), Vec3(-360, 4, 1500), Vec3(-1320, 4, 2940), Vec3(-2100, 4, 4380)}) {
+        pedestrians.prepare(car, nullptr, Vec3(-360, 4, 1500), .6f);
+        require(walking_count(pedestrians, map) == 0, "Ngawish still spawns a town population");
+        for (const Vec3 town : {Vec3(1320, 4, 0), Vec3(-780, 4, 2220), Vec3(-1320, 4, 2940), Vec3(-2100, 4, 4380)}) {
             pedestrians.prepare(car, nullptr, town, .6f);
+            std::cout << "Town " << town.GetX() << ',' << town.GetZ() << ": " << walking_count(pedestrians, map) << " pedestrians.\n";
             require(walking_count(pedestrians, map) >= 8, "pedestrians did not stream into a beach or Keys town");
         }
         for (int i = 0; i < 120; ++i) { car.step({1, 0, false}); world.step(); }
