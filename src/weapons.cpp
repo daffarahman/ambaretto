@@ -32,6 +32,71 @@ ShotHit trace_shot(const PhysicsWorld& world, const Pedestrians*, Vec3 origin, V
     world.raycast_characters(origin, direction, result, ignore);
     return result;
 }
+std::optional<Vec3> AimAssist::point() const {
+    if (!target_ || !target_->enabled() || !target_->alive()) return std::nullopt;
+    const auto parts = target_->body_parts();
+    const Vec3 torso = parts[int(BodyPart::Torso)].position;
+    const Vec3 to_head = parts[int(BodyPart::Head)].position - torso;
+    // A small head-sized band makes fine camera adjustment usable on a stick.
+    const float height = to_head.Length();
+    const float elevation = std::abs(vertical_ - height) < .06f ? height : vertical_;
+    return torso + right_ * horizontal_ + to_head.NormalizedOr(Vec3::sAxisY()) * elevation;
+}
+void AimAssist::update(const PhysicsWorld& world, const std::vector<Character*>& candidates, const Character* player,
+    Vec3 origin, Vec3 direction, float range, float look_x, float look_y, float dt) {
+    range = std::min(range, 60.f);
+    direction = direction.NormalizedOr(Vec3(0, 0, -1));
+    switch_delay_ = std::max(0.f, switch_delay_ - dt);
+    const auto visible = [&](Character* candidate, Vec3 point) {
+        if (!candidate || candidate == player || !candidate->enabled() || !candidate->alive()) return false;
+        const Vec3 offset = point - origin;
+        const float distance = offset.Length();
+        return distance > .5f && distance <= range
+            && trace_shot(world, nullptr, origin, offset, distance + .1f, nullptr, player).character == candidate;
+    };
+    if (target_ && std::find(candidates.begin(), candidates.end(), target_) == candidates.end()) target_ = nullptr;
+    if (target_) {
+        if (!target_->enabled() || !target_->alive() || !visible(target_, target_->body_parts()[int(BodyPart::Torso)].position)) {
+            target_ = nullptr; horizontal_ = vertical_ = 0;
+        }
+    }
+    if (!target_) {
+        if (released_) return;
+        float best = .94f; // Acquire only a nearby, visible body in front of the camera.
+        for (auto* candidate : candidates) {
+            if (!candidate || candidate == player || !candidate->enabled() || !candidate->alive()) continue;
+            const Vec3 body = candidate->body_parts()[int(BodyPart::Torso)].position;
+            const Vec3 offset = body - origin;
+            const float score = offset.NormalizedOr(-direction).Dot(direction) - offset.Length() * .0001f;
+            if (score > best && visible(candidate, body)) { best = score; target_ = candidate; }
+        }
+        horizontal_ = vertical_ = 0;
+        if (!target_) return;
+        // A fresh aim locks to the chest; adjustment starts on the next frame.
+        right_ = (target_->body_parts()[int(BodyPart::Torso)].position - origin).Cross(Vec3::sAxisY()).NormalizedOr(Vec3::sAxisX());
+        return;
+    }
+    const Vec3 body = target_->body_parts()[int(BodyPart::Torso)].position;
+    const Vec3 forward = (body - origin).NormalizedOr(direction);
+    right_ = forward.Cross(Vec3::sAxisY()).NormalizedOr(Vec3::sAxisX());
+    const float sensitivity = std::min(.012f, (body - origin).Length() * .003f);
+    horizontal_ += look_x * sensitivity;
+    vertical_ -= look_y * sensitivity;
+    if (std::abs(horizontal_) > .75f && switch_delay_ == 0) {
+        Character* next = nullptr;
+        float best = 3.14159265f;
+        for (auto* candidate : candidates) {
+            if (candidate == target_ || !candidate || candidate == player || !candidate->enabled() || !candidate->alive()) continue;
+            const Vec3 point = candidate->body_parts()[int(BodyPart::Torso)].position;
+            const Vec3 offset = (point - origin).NormalizedOr(-forward);
+            const float angle = std::atan2(offset.Dot(right_), offset.Dot(forward)) * (horizontal_ > 0 ? 1 : -1);
+            if (angle > .015f && angle < 1.05f && angle < best && visible(candidate, point)) { best = angle; next = candidate; }
+        }
+        if (next) { target_ = next; horizontal_ = vertical_ = 0; switch_delay_ = .25f; }
+        else { target_ = nullptr; released_ = true; }
+    }
+    if (std::abs(vertical_) > 1.1f) { target_ = nullptr; released_ = true; }
+}
 void Weapons::reset() {
     selected_ = WeaponType::Unarmed;
     cooldown_ = reload_time_ = 0;

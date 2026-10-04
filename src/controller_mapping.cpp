@@ -268,6 +268,11 @@ bool ControllerMapping::load(const std::filesystem::path& path, std::string& err
             std::string kind, extra; row >> kind;
             if (kind == "version" && section == -1 && !version) { int v = 0; ok = bool(row >> v) && v == 2; version = ok; }
             else if (kind == "deadzone" && section == -1) { ok = version && bool(row >> candidate.deadzone) && std::isfinite(candidate.deadzone) && candidate.deadzone >= .05f && candidate.deadzone <= .5f; }
+            else if (kind == "auto_lock" && section == -1) {
+                int enabled = -1;
+                ok = version && bool(row >> enabled) && (enabled == 0 || enabled == 1);
+                candidate.auto_lock = enabled == 1;
+            }
             else if (section >= 0) {
                 Binding b{BindingKind::Key, 0};
                 if (kind == "button") b.kind = BindingKind::Button;
@@ -286,7 +291,7 @@ bool ControllerMapping::load(const std::filesystem::path& path, std::string& err
         if (!ok) { error = "Invalid mapping at line " + std::to_string(line_number); return false; }
     }
     if (!version || file.bad()) { error = "Incomplete controller mapping file"; return false; }
-    bindings = std::move(candidate.bindings); deadzone = candidate.deadzone;
+    bindings = std::move(candidate.bindings); deadzone = candidate.deadzone; auto_lock = candidate.auto_lock;
     values_ = {}; pressed_ = {};
     return true;
 }
@@ -295,7 +300,7 @@ bool ControllerMapping::save(const std::filesystem::path& path, std::string& err
     auto temporary = path; temporary += ".tmp";
     std::ofstream file(temporary, std::ios::trunc);
     if (!file) { error = "Cannot write controller mappings"; return false; }
-    file << "; Forza Ambazon - independent on-foot, car and plane bindings; gamepad bindings use any connected pad\nversion=2\ndeadzone=" << deadzone << '\n';
+    file << "; Forza Ambazon - independent on-foot, car and plane bindings; gamepad bindings use any connected pad\nversion=2\ndeadzone=" << deadzone << "\nauto_lock=" << int(auto_lock) << '\n';
     for (int a = 0; a < action_count; ++a) {
         file << '\n' << '[' << ids[a] << "]\n";
         for (auto b : bindings[a]) {

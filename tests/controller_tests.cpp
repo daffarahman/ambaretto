@@ -47,13 +47,15 @@ int main() {
         modes = {}; modes.keys[KEY_F5] = true; separate.update(modes);
         require(separate.pressed(Action::Respawn) && !separate.pressed(Action::Reload), "on-foot respawn also reloaded");
         std::string separate_error;
+        separate.auto_lock = false;
         require(separate.save(path, separate_error), separate_error.c_str());
         ControllerMapping restored;
-        require(restored.load(path, separate_error) && restored.bindings == separate.bindings,
+        require(restored.load(path, separate_error) && restored.bindings == separate.bindings && !restored.auto_lock,
             "independent movement, interaction and camera remaps did not persist");
         separate.defaults();
         require(separate.bindings == ControllerMapping().bindings && separate.value(Action::Respawn) == 0 && !separate.pressed(Action::Respawn),
             "reset did not restore all mode defaults and clear held input");
+        require(!separate.auto_lock, "restoring bindings changed the chosen aim mode");
         int next_action = 0;
         for (const auto& group : action_groups) {
             require(int(group.first) == next_action && int(group.end) > int(group.first), "binding tabs skipped or duplicated actions");
@@ -211,6 +213,13 @@ int main() {
         std::ofstream(path) << "version=2\n; Partial files retain other defaults\n[car_forward]\nkey=265\n";
         require(loaded.load(path, error) && loaded.bindings[int(Action::Forward)].size() == 1 &&
             !loaded.bindings[int(Action::EnterVehicle)].empty(), "partial mapping did not retain unspecified defaults");
+        require(loaded.auto_lock, "existing version 2 mappings did not default to auto lock");
+        std::ofstream(path) << "version=2\nauto_lock=0\n";
+        require(loaded.load(path, error) && !loaded.auto_lock, "free aim did not load");
+        std::ofstream(path) << "version=2\nauto_lock=2\n";
+        require(!loaded.load(path, error) && !loaded.auto_lock, "invalid aim mode was accepted or changed the current mode");
+        std::ofstream(path) << "version=2\nauto_lock=1\n";
+        require(loaded.load(path, error) && loaded.auto_lock, "auto lock did not load");
         require(loaded.bindings[int(Action::Horn)] == horn_defaults, "partial file without a horn section did not retain new horn defaults");
         require(loaded.bindings[int(Action::Cover)] == std::vector<Binding>{{BindingKind::Key, KEY_Q}, {BindingKind::Button, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT}},
             "partial mappings lost cover defaults");

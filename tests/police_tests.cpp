@@ -47,9 +47,14 @@ void weapon_pickups(const forza::Environment& map) {
         police.finish(player);
         require(police.pickups().size() == 1, "pickup passed through a solid vehicle");
         blocker.set_simulated(false);
+        const Vec3 approach = type == WeaponType::Pistol ? Vec3::sAxisX()
+            : type == WeaponType::SMG ? -Vec3::sAxisZ() : Vec3(-1, 0, 1).Normalized();
+        player.character().reset(drop + approach * (weapon_pickup_radius + .05f));
         police.finish(player);
-        require(police.pickups().empty() && police.take_pickup() == type && police.take_pickup() == WeaponType::Unarmed,
-            "nearby on-foot pickup failed or repeated its notification");
+        require(police.pickups().size() == 1, "weapon collected outside the pickup radius");
+        player.character().reset(drop + approach * (weapon_pickup_radius - .05f));
+        police.finish(player);
+        require(police.pickups().empty(), "weapon did not collect inside the radius from the side/front/diagonal");
         require(player.weapons().selected() == WeaponType::Pistol, "pickup changed the selected weapon");
         player.weapons().select(type);
         require(player.weapons().ammo() == weapon_data(type).magazine, "pickup did not reload the matching gun");
@@ -63,7 +68,7 @@ void weapon_pickups(const forza::Environment& map) {
     unit.active = unit.claimed = true; officer.weapon_dropped = false;
     police.clear(); police.finish(player);
     require(police.pickups().empty(), "reset recreated a drop from a dead officer in an owned car");
-    std::cout << "Police drops: each gun type, one drop per officer, on-foot ammo refill, despawning and expiry passed\n";
+    std::cout << "Police drops: each gun type, one drop per officer, pickup radius, on-foot ammo refill, despawning and expiry passed\n";
 }
 void speeding(const forza::Environment& map) {
     using namespace forza;

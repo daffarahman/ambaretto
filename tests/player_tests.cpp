@@ -284,6 +284,78 @@ void mouse_camera() {
     }
 }
 
+void on_foot_camera() {
+    using namespace forza;
+    const Vec3 facing(0, 0, -1);
+    for (int fps : {30, 60, 120}) {
+        const float dt = 1.f / fps;
+        ThirdPersonCamera camera;
+        camera.look(400, fps == 60 ? -200.f : 80.f, -1, false, facing, 3.2f, dt);
+        const float manual_yaw = camera.yaw(), manual_pitch = camera.pitch();
+        const float zoom_distance = (camera.desired_position(Vec3(0, 2, 0), false) - Vec3(0, 2, 0)).Length();
+        for (int i = 0; i < fps / 10 - 1; ++i) camera.look(0, 0, 0, false, facing, 3.2f, dt);
+        require(std::abs(camera.yaw() - manual_yaw) < .001f && std::abs(camera.pitch() - manual_pitch) < .001f,
+            "on-foot follow interrupted manual orbit before its delay");
+        camera.look(0, 0, 0, false, facing, 3.2f, dt);
+        require(std::abs(camera.yaw() - manual_yaw) > .001f && std::abs(camera.pitch() - manual_pitch) < .001f,
+            "horizontal follow did not start within 100 ms or changed the vertical angle");
+        for (int i = 0; i < fps * 3; ++i) {
+            const float previous_yaw = camera.yaw();
+            camera.look(0, 0, 0, false, facing, 3.2f, dt);
+            require(std::abs(std::remainder(camera.yaw() - previous_yaw, 6.2831853f)) <= 2.4f * dt + .0001f,
+                "on-foot follow snapped instead of turning smoothly");
+        }
+        require(std::abs(camera.yaw()) < .005f && std::abs(camera.pitch() - manual_pitch) < .001f,
+            "on-foot follow did not center horizontally while preserving pitch at different frame rates");
+        require(std::abs((camera.desired_position(Vec3(0, 2, 0), false) - Vec3(0, 2, 0)).Length() - zoom_distance) < .001f,
+            "automatic follow changed the chosen zoom distance");
+        camera.look(300, -50, 0, false, facing, 0, dt);
+        const float stationary_yaw = camera.yaw(), stationary_pitch = camera.pitch();
+        for (int i = 0; i < fps * 4; ++i) camera.look(0, 0, 0, false, facing, 0, dt);
+        require(std::abs(camera.yaw() - stationary_yaw) < .001f && std::abs(camera.pitch() - stationary_pitch) < .001f,
+            "standing still could not keep a manually chosen view");
+        for (int i = 0; i < fps * 3; ++i) camera.look(0, 0, 0, false, facing, 7.3f, dt, false, false);
+        require(std::abs(camera.yaw() - stationary_yaw) < .001f && std::abs(camera.pitch() - stationary_pitch) < .001f,
+            "aim/cover/weapon-wheel suppression still recentered the camera");
+        for (int i = 0; i < fps / 10 - 1; ++i) camera.look(0, 0, 0, false, facing, 7.3f, dt);
+        require(std::abs(camera.yaw() - stationary_yaw) < .001f, "follow resumed immediately after aim/cover");
+        camera.look(0, 0, 0, false, facing, 7.3f, dt);
+        require(std::abs(camera.yaw() - stationary_yaw) > .001f, "follow did not resume within 100 ms after aim/cover");
+        camera.reset(3.10f);
+        const auto wrapped_facing = Quat::sRotation(Vec3::sAxisY(), -3.10f) * facing;
+        for (int i = 0; i < fps * 3; ++i) camera.look(0, 0, 0, false, wrapped_facing, 1.8f, dt);
+        require(std::abs(std::remainder(camera.yaw() + 3.10f, 6.2831853f)) < .003f,
+            "on-foot follow took the long way around the yaw boundary");
+    }
+    // Exercise camera-relative controls with real character turning and velocity.
+    PhysicsWorld world(false);
+    Character character(world);
+    character.reset(Vec3(0, .08f, 0));
+    tick(world, character, {}, 60);
+    for (const auto input : {Vec3(1, 0, 0), Vec3(0, 0, 1), Vec3(1, 0, -1).Normalized()}) {
+        character.reset(Vec3(0, .08f, 0));
+        ThirdPersonCamera camera;
+        const auto travel = camera.move_direction(-input.GetZ(), input.GetX());
+        for (int i = 0; i < 600; ++i) {
+            const auto velocity = character.velocity();
+            camera.look(0, 0, 0, false, character.forward(), std::hypot(velocity.GetX(), velocity.GetZ()), fixed_step);
+            const auto direction = camera.move_direction(-input.GetZ(), input.GetX());
+            require(direction.Dot(travel) > .999f, "automatic camera turning bent held movement into a circle");
+            tick(world, character, {direction}, 1);
+        }
+        require(character.position().Dot(travel) > 10 && camera.forward().Dot(travel) > .999f,
+            "on-foot camera did not follow straight lateral/backward/diagonal travel");
+        require(camera.move_direction(0, 0).LengthSq() == 0, "released movement did not stop");
+        require(camera.move_direction(1, 0).Dot(camera.forward()) > .999f,
+            "new movement did not use the recentered camera");
+        const auto before_manual = camera.move_direction(1, 0);
+        camera.look(100, 0, 0, false, character.forward(), 3.2f, fixed_step);
+        require(camera.move_direction(1, 0).Dot(before_manual) < .97f,
+            "manual orbit did not steer held camera-relative movement");
+    }
+    std::cout << "On-foot camera: smooth follow, manual override, aim/cover suppression and straight held travel passed\n";
+}
+
 void surface_swimming() {
     using namespace forza;
     const Environment map;
@@ -422,7 +494,7 @@ void model_tree_collisions() {
 }
 int main() {
     try {
-        character_movement(); articulated_ragdoll(); city_collisions_and_interaction(); ragdoll_impact_damage(); car_coasting_and_direction_changes(); mouse_camera(); surface_swimming(); nearby_respawns(); model_tree_collisions();
+        character_movement(); articulated_ragdoll(); city_collisions_and_interaction(); ragdoll_impact_damage(); car_coasting_and_direction_changes(); mouse_camera(); on_foot_camera(); surface_swimming(); nearby_respawns(); model_tree_collisions();
         std::cout << "All player checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

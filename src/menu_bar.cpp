@@ -9,11 +9,11 @@ constexpr Color blue{0, 0, 128, 255}, gray{192, 192, 192, 255}, ink{0, 0, 0, 255
 struct Item { const char* label; MenuCommand command; };
 constexpr Item files[] = {{"Resume game", MenuCommand::Resume}, {"Pause game", MenuCommand::Pause}, {"Quit", MenuCommand::Quit}};
 constexpr Item edits[] = {{"Recover vehicle", MenuCommand::Recover}, {"Restore car tuning", MenuCommand::CarDefaults}};
-constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Graphics...", MenuCommand::Graphics}, {"Controller mapping...", MenuCommand::Controllers}};
+constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Graphics...", MenuCommand::Graphics}, {"Aim mode", MenuCommand::AimMode}, {"Controller mapping...", MenuCommand::Controllers}};
 constexpr Item helps[] = {{"Controls...", MenuCommand::Controls}, {"About...", MenuCommand::About}};
 constexpr const char* titles[] = {"File", "Edit", "Settings", "Help"};
 constexpr const Item* menus[] = {files, edits, settings, helps};
-constexpr int counts[] = {3, 2, 4, 2};
+constexpr int counts[] = {3, 2, 5, 2};
 Rectangle title_rect(int menu) {
     constexpr float gap = 48;
     float x = 8;
@@ -169,7 +169,9 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         for (int i = 0; i < counts[dropdown_]; ++i) {
             const auto r = item_rect(dropdown_, i);
             if (item_ == i) DrawRectangleRec(r, blue);
-            text(menus[dropdown_][i].label, r.x + 10, r.y + 7, 17, item_ == i ? RAYWHITE : ink);
+            const auto& item = menus[dropdown_][i];
+            text(item.command == MenuCommand::AimMode ? (mapping.auto_lock ? "Aim mode: Auto lock" : "Aim mode: Free aim") : item.label,
+                r.x + 10, r.y + 7, 17, item_ == i ? RAYWHITE : ink);
         }
     }
     if (popup_ == MenuCommand::None) return;
@@ -220,6 +222,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             "Swim: WASD / left stick. Shift, Space / L-stick, A: faster. Surface only; no diving.",
             "Weapons: hold Tab / LB, select with mouse / right stick, release to equip.",
             "On foot: right mouse / LT aim, left mouse / RT fire, R / X reload. Dot marks aim.",
+            "Auto lock: camera up/down adjusts aim; camera left/right switches or releases lock.",
             "Plane: W/S or left stick Y: pitch. A/D or left stick X: bank.",
             "Plane throttle: Shift/Ctrl or RT/LT. Rudder: arrows or LB/RB. Flaps: F / X.",
             "Camera: mouse / right stick. Zoom: wheel / D-pad down or left.",

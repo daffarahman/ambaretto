@@ -58,6 +58,7 @@ public:
     ControllerMapping();
     std::array<std::vector<Binding>, action_count> bindings;
     float deadzone = .2f;
+    bool auto_lock = true;
     void defaults();
     bool add(Action action, Binding binding);
     bool load(const std::filesystem::path& path, std::string& error);

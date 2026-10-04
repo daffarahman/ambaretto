@@ -1,5 +1,6 @@
 #pragma once
 #include "vehicle.hpp"
+#include <optional>
 #include <random>
 
 namespace forza {
@@ -18,6 +19,7 @@ struct WeaponData {
 };
 const WeaponData& weapon_data(WeaponType type);
 struct WeaponPickup { WeaponType weapon; Vec3 position; float lifetime = 120; };
+inline constexpr float weapon_pickup_radius = 3.f;
 // Four clockwise slots, starting at the top. The centre keeps the current selection.
 WeaponType wheel_selection(float x, float y, WeaponType current);
 struct ShotHit {
@@ -30,6 +32,19 @@ struct ShotHit {
 };
 ShotHit trace_shot(const PhysicsWorld& world, const Pedestrians* pedestrians,
     Vec3 origin, Vec3 direction, float range, const Police* police = nullptr, const Character* ignore = nullptr);
+class AimAssist {
+public:
+    void reset() { target_ = nullptr; horizontal_ = vertical_ = switch_delay_ = 0; released_ = false; }
+    void update(const PhysicsWorld& world, const std::vector<Character*>& candidates, const Character* player,
+        Vec3 origin, Vec3 direction, float range, float look_x, float look_y, float dt);
+    std::optional<Vec3> point() const;
+    const Character* target() const { return target_; }
+private:
+    Character* target_ = nullptr;
+    Vec3 right_{1, 0, 0};
+    float horizontal_ = 0, vertical_ = 0, switch_delay_ = 0;
+    bool released_ = false;
+};
 struct Shot {
     bool fired = false, hit = false;
     Vec3 from{0, 0, 0}, to{0, 0, 0};

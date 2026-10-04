@@ -476,12 +476,12 @@ void Police::finish(Player& player, float dt) {
         pickup.lifetime -= dt;
         if (pickup.lifetime <= 0) return true;
         if (!player.on_foot() || !player.character().alive() || player.character().ragdolling()
-            || player.character().swimming() || arrested() || (pickup.position - player.position()).LengthSq() > 2 * 2) return false;
+            || player.character().swimming() || arrested()
+            || (pickup.position - player.position()).LengthSq() > weapon_pickup_radius * weapon_pickup_radius) return false;
         const Vec3 eye = player.position() + Vec3(0, .9f, 0), delta = pickup.position + Vec3(0, .1f, 0) - eye;
         GroundHit wall;
         if (world_.cast_ray(eye, delta, delta.Length(), wall)) return false;
         if (!player.weapons().pickup(pickup.weapon)) return false;
-        collected_weapon_ = pickup.weapon;
         return true;
     }), pickups_.end());
     if (pedestrians_) for (std::size_t i = 0; i < pedestrians_->people().size(); ++i) {
@@ -523,7 +523,7 @@ void Police::raycast(Vec3 origin, Vec3 direction, ShotHit& hit, const Character*
 void Police::clear() {
     wanted_.clear(); report_time_ = observation_time_ = 0; pending_crime_ = -1; arrest_time_ = 0; dispatch_time_ = 3;
     crime_cooldowns_.fill(0);
-    pickups_.clear(); collected_weapon_ = WeaponType::Unarmed;
+    pickups_.clear();
     for (auto& unit : units_) {
         for (auto& officer : unit.officers) {
             officer.character->set_enabled(false); officer.seated = true;

@@ -9,10 +9,79 @@
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void check_aim_assist() {
+    using namespace forza;
+    PhysicsWorld world(false);
+    Character player(world), body(world), left(world), right(world), behind(world), distant(world), disabled(world);
+    player.reset(Vec3(0, .08f, 0));
+    body.reset(Vec3(0, .08f, -12)); left.reset(Vec3(-4, .08f, -12)); right.reset(Vec3(4, .08f, -12));
+    behind.reset(Vec3(0, .08f, 8)); distant.reset(Vec3(0, .08f, -75));
+    disabled.reset(Vec3(0, .08f, -6)); disabled.set_enabled(false);
+    const Vec3 origin(0, 1.48f, .85f), forward(0, 0, -1);
+    const std::vector<Character*> candidates{&player, &left, &body, &right, &behind, &distant, &disabled};
+    AimAssist aim;
+    const auto update = [&](float x = 0, float y = 0, float dt = 1.f / 60) {
+        aim.update(world, candidates, &player, origin, forward, 120, x, y, dt);
+    };
+    update();
+    require(aim.target() == &body && aim.point() && (*aim.point() - body.body_parts()[int(BodyPart::Torso)].position).Length() < .001f,
+        "auto lock did not acquire the visible chest nearest the crosshair while ignoring the player");
+    body.reset(Vec3(.5f, .08f, -12)); update();
+    require((*aim.point() - body.body_parts()[int(BodyPart::Torso)].position).Length() < .001f, "lock did not follow a moving body");
+    body.reset(Vec3(0, .08f, -12));
+    const auto parts = body.body_parts();
+    const float head_height = (parts[int(BodyPart::Head)].position - parts[int(BodyPart::Torso)].position).Length();
+    for (const float fps : {30.f, 60.f, 120.f}) {
+        aim.reset(); update();
+        for (int i = 0; i < int(fps); ++i) update(0, -head_height / (.012f * fps), 1 / fps);
+        require(aim.target() == &body && (*aim.point() - parts[int(BodyPart::Head)].position).Length() < .001f,
+            "camera up could not adjust chest lock to the actual head at different frame rates");
+        update();
+        require((*aim.point() - parts[int(BodyPart::Head)].position).Length() < .001f, "head adjustment was recentered to the body");
+    }
+    ThirdPersonCamera camera;
+    camera.aim_at(origin, *aim.point());
+    const auto head_hit = trace_shot(world, nullptr, origin, camera.aim_direction(), 120, nullptr, &player);
+    require(head_hit.character == &body && head_hit.part == int(BodyPart::Head), "lock camera direction missed the adjusted head hitbox");
+    update(65, 0);
+    require(aim.target() == &right && (*aim.point() - right.body_parts()[int(BodyPart::Torso)].position).Length() < .001f,
+        "camera right did not switch to the next visible target and center its body");
+    update(-65, 0, .3f);
+    require(aim.target() == &body, "camera left did not return to the nearest target on that side");
+    update(-65, 0, .3f);
+    require(aim.target() == &left, "camera left skipped or failed to acquire the next target");
+    update(-65, 0, .3f);
+    require(!aim.target() && !aim.point(), "looking beyond available targets failed to release into free aim");
+    update();
+    require(!aim.target(), "released camera was immediately pulled back to a target");
+    aim.reset(); update();
+    require(aim.target() == &body, "releasing and aiming again failed to reacquire a body");
+    update(0, 100);
+    require(!aim.target(), "large downward camera movement could not leave lock freely");
+    aim.reset();
+    aim.update(world, {&player, &behind, &distant, &disabled}, &player, origin, forward, 120, 0, 0, .1f);
+    require(!aim.target(), "auto lock selected the player, a disabled, distant, or behind-camera target");
+    aim.update(world, {&body}, &player, origin, forward, 5, 0, 0, .1f);
+    require(!aim.target(), "auto lock ignored the equipped weapon range");
+    update();
+    aim.update(world, {}, &player, origin, forward, 120, 0, 0, .1f);
+    require(!aim.target(), "removed target remained locked");
+    update(); update(0, -head_height / .012f);
+    Weapons gun; gun.select(WeaponType::AK47);
+    const auto shot = gun.fire(world, nullptr, origin, *aim.point() - origin, true, true, true, nullptr, &player);
+    require(shot.victim == &body && shot.killed && !body.alive(), "adjusted auto lock did not produce real headshot damage");
+    update();
+    require(aim.target() != &body, "auto lock retained an eliminated character");
+    body.reset(Vec3(0, .08f, -12)); body.revive();
+    Car obstacle(world); obstacle.reset(Vec3(0, 1, -4));
+    aim.reset(); aim.update(world, {&body}, &player, origin, forward, 120, 0, 0, .1f);
+    require(!aim.target(), "auto lock acquired a body through vehicle cover");
+}
 }
 int main() {
     using namespace forza;
     try {
+        check_aim_assist();
         require(wheel_selection(0, -1, WeaponType::Pistol) == WeaponType::Unarmed &&
             wheel_selection(1, 0, WeaponType::Unarmed) == WeaponType::Pistol &&
             wheel_selection(0, 1, WeaponType::Unarmed) == WeaponType::SMG &&

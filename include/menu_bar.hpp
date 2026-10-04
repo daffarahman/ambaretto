@@ -4,7 +4,7 @@
 
 namespace forza {
 constexpr int menu_height = 32;
-enum class MenuCommand { None, Resume, Pause, Quit, Recover, CarDefaults, Map, Tuning, Graphics, Controllers, Controls, About };
+enum class MenuCommand { None, Resume, Pause, Quit, Recover, CarDefaults, Map, Tuning, Graphics, AimMode, Controllers, Controls, About };
 class MenuBar {
 public:
     void open(int menu = 0) { dropdown_ = menu; item_ = 0; }
