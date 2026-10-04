@@ -12,7 +12,7 @@ void require(bool value, const char* message) { if (!value) throw std::runtime_e
 void check_aim_assist() {
     using namespace forza;
     PhysicsWorld world(false);
-    Character player(world), body(world), left(world), right(world), behind(world), distant(world), disabled(world);
+    Character player(world, nullptr, true), body(world), left(world), right(world), behind(world), distant(world), disabled(world);
     player.reset(Vec3(0, .08f, 0));
     body.reset(Vec3(0, .08f, -12)); left.reset(Vec3(-4, .08f, -12)); right.reset(Vec3(4, .08f, -12));
     behind.reset(Vec3(0, .08f, 8)); distant.reset(Vec3(0, .08f, -75));
@@ -70,8 +70,18 @@ void check_aim_assist() {
     Weapons gun; gun.select(WeaponType::AK47);
     const auto shot = gun.fire(world, nullptr, origin, *aim.point() - origin, true, true, true, nullptr, &player);
     require(shot.victim == &body && shot.killed && !body.alive(), "adjusted auto lock did not produce real headshot damage");
+    require(world.take_player_kill() && !world.take_player_kill(), "player kill notification was absent or repeated");
+    gun.step(.2f);
+    const auto corpse_shot = gun.fire(world, nullptr, origin, parts[int(BodyPart::Head)].position - origin, true, true, true, nullptr, &player);
+    require(corpse_shot.victim == &body && !corpse_shot.killed && !world.take_player_kill(), "shooting an eliminated character repeated kill feedback");
     update();
     require(aim.target() != &body, "auto lock retained an eliminated character");
+    body.reset(Vec3(0, .08f, -12)); body.revive();
+    gun.step(.2f);
+    const Vec3 npc_origin = parts[int(BodyPart::Head)].position + Vec3(0, 0, 5);
+    require(gun.fire(world, nullptr, npc_origin, parts[int(BodyPart::Head)].position - npc_origin, true, true, true, nullptr, &left).killed,
+        "NPC kill setup failed");
+    require(!world.take_player_kill(), "NPC gunfire triggered player kill feedback");
     body.reset(Vec3(0, .08f, -12)); body.revive();
     Car obstacle(world); obstacle.reset(Vec3(0, 1, -4));
     aim.reset(); aim.update(world, {&body}, &player, origin, forward, 120, 0, 0, .1f);

@@ -51,7 +51,7 @@ public:
     static constexpr float max_health = VehicleDamage::max_health;
     float health() const { return damage_.health; }
     bool destroyed() const { return health() <= 0; }
-    void take_damage(float amount);
+    void take_damage(float amount, bool by_player = false);
     void repair();
     float explosion_time() const { return damage_.explosion_time; }
     Vec3 explosion_position() const { return damage_.explosion_position; }

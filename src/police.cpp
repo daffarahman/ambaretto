@@ -456,12 +456,15 @@ void Police::finish(Player& player, float dt) {
                     officer.character->reset(unit.car->position() + Vec3(0, 2 + float(j), 0));
                 officer.seated = false;
                 officer.character->take_damage(100);
+                if (unit.car->player_destroyed()) world_.notify_player_kill();
             } else if (officer.seated && unit.claimed) exit(unit, officer, j);
             const float health = officer.character->health();
             drop_weapon(officer);
             if (health < officer.previous_health && (officer.character->last_vehicle_hit() == &player.car()
-                || (player.driving() && officer.character->touching(player.car()))))
+                || (player.driving() && officer.character->touching(player.car())))) {
+                if (health <= 0) world_.notify_player_kill();
                 crime(health <= 0 ? Crime::OfficerHomicide : Crime::OfficerAssault, player.position(), officer.character.get());
+            }
             officer.previous_health = health;
             walk(unit, officer, player, i * 2 + j, dt);
             if (wanted_.stars() && !officer.seated && officer.character->alive() && !officer.character->ragdolling()
@@ -489,8 +492,10 @@ void Police::finish(Player& player, float dt) {
         const float health = person.character->health();
         if (person.enabled && (person.character->last_vehicle_hit() == &player.car()
             || (player.driving() && person.character->touching(player.car())))
-            && (health < civilian_health_[i] || (person.character->ragdolling() && !civilian_ragdoll_[i])))
+            && (health < civilian_health_[i] || (person.character->ragdolling() && !civilian_ragdoll_[i]))) {
+            if (health <= 0 && civilian_health_[i] > 0) world_.notify_player_kill();
             crime(health <= 0 ? Crime::Homicide : Crime::Assault, player.position(), person.character.get());
+        }
         civilian_health_[i] = health; civilian_ragdoll_[i] = person.character->ragdolling();
     }
 }

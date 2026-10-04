@@ -19,6 +19,46 @@ bool equal(Image a, Image b) {
         if (!same(GetImageColor(a, x, y), GetImageColor(b, x, y))) return false;
     return true;
 }
+void sharp_map_edges(const forza::EnvironmentRenderer& scenery, RenderTexture2D texture) {
+    using namespace forza;
+    const Vec3 player(0, 3.3f, 105), heading(0, 0, -1);
+    const Rectangle viewport{0, 0, 640, 480};
+    // This render target has no MSAA: interior map pixels must retain the palette,
+    // even at maximum zoom and while the minimap rotates.
+    for (float scale : {.5f, 2.0f, 0.0f, -1.0f}) {
+        const Camera3D camera{{0, 6, 114}, {scale < 0 ? 9.0f : 0.0f, 4, 105}, {0, 1, 0}, 60, CAMERA_PERSPECTIVE};
+        const MinimapView mini(480, player, heading, camera);
+        const bool full = scale > 0;
+        WorldMapView view; view.center = {player.GetX(), player.GetZ()}; view.scale = scale;
+        BeginTextureMode(texture); ClearBackground(BLACK);
+        if (full) scenery.world_map(view, viewport, player, heading);
+        else scenery.minimap(player, heading, camera);
+        EndTextureMode();
+        Image image = LoadImageFromTexture(texture.texture); ImageFlipVertical(&image);
+        const Rectangle bounds = full ? viewport : mini.bounds;
+        const Vector2 anchor = full ? view.project(player, viewport) : mini.anchor;
+        if (!full) {
+            for (int x : {int(bounds.x + 1), int(bounds.x + bounds.width - 2)})
+                for (int y : {int(bounds.y + 1), int(bounds.y + bounds.height - 2)})
+                    require(same(GetImageColor(image, x, y), BLACK), "minimap content escaped rounded corners");
+            for (int x : {int(bounds.x - 1), int(bounds.x + bounds.width)})
+                require(same(GetImageColor(image, x, int(anchor.y)), BLACK), "minimap retained its outer border");
+            require(!same(GetImageColor(image, int(anchor.x), int(bounds.y + 1)), BLACK), "minimap lost its top edge");
+        }
+        int roads = 0, buildings = 0, blurred = 0;
+        for (int y = int(bounds.y + 6); y < int(bounds.y + bounds.height - (full ? 64 : 6)); ++y)
+            for (int x = int(bounds.x + 6); x < int(bounds.x + bounds.width - 6); ++x) {
+                if (y >= anchor.y - 16 && y <= anchor.y + 16 && x >= anchor.x - 16 && x <= anchor.x + 60) continue;
+                const Color color = GetImageColor(image, x, y);
+                roads += same(color, {205, 205, 205, 255});
+                buildings += same(color, {145, 145, 145, 255});
+                blurred += color.r == color.g && color.g == color.b && color.r > 96 && color.r < 205 && color.r != 145;
+            }
+        UnloadImage(image);
+        require(roads > 100 && buildings > 100, "map lost road or building geometry at zoom/rotation");
+        require(blurred == 0, "map edges still interpolate enlarged texture pixels");
+    }
+}
 }
 
 int main() {
@@ -44,6 +84,16 @@ int main() {
         auto& unit = const_cast<PoliceUnit&>(police.units()[0]);
         const Vec3 car_position = player + Vec3(50, 0, -40), foot_position = player + Vec3(-55, 0, -45);
         const auto texture = LoadRenderTexture(640, 480);
+        sharp_map_edges(scenery, texture);
+        const auto tall_texture = LoadRenderTexture(640, 720);
+        sharp_map_edges(scenery, tall_texture);
+        UnloadRenderTexture(tall_texture);
+        // Shadow textures leave rlgl's cached framebuffer size behind.
+        BeginDrawing(); ClearBackground(BLACK);
+        scenery.minimap(player, heading, camera);
+        Image screen = LoadImageFromScreen(); EndDrawing();
+        require(marker_pixels(screen, mini.anchor, RAYWHITE) > 5, "rounded minimap disappeared after an offscreen render pass");
+        UnloadImage(screen);
         for (bool full : {false, true}) {
             police.clear(); unit.car->reset(car_position); unit.car->repair();
             for (auto& officer : unit.officers) { officer.seated = true; officer.character->revive(); }

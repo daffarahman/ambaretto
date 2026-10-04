@@ -193,6 +193,7 @@ void Traffic::finish(Vec3 player_position, float dt) {
             vehicle.driver = std::make_unique<Character>(world_, &environment_);
             if (!vehicle.driver->pull_from(*vehicle.car)) vehicle.driver->reset(vehicle.car->position() + Vec3(0, 2, 0));
             vehicle.driver->take_damage(100);
+            if (vehicle.car->player_destroyed()) world_.notify_player_kill();
         }
         if (!vehicle.driver) continue;
         auto& driver = *vehicle.driver;

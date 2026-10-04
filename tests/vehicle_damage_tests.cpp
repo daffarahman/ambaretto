@@ -82,6 +82,46 @@ void blast_cover() {
     require(cover.health() > 0 && cover.health() < 100 && shielded.health() == 100 && exposed.health() < 100,
         "blast ignored cover or failed to damage exposed targets");
 }
+void kill_feedback() {
+    {
+        PhysicsWorld world(false);
+        Car source(world), chain(world);
+        source.reset(Vec3(0, .56f, 0)); chain.reset(Vec3(2.8f, .56f, 0));
+        Character shooter(world, nullptr, true), victim(world);
+        shooter.reset(Vec3(0, .08f, -6)); victim.reset(Vec3(5, .08f, 0));
+        Weapons gun; gun.select(WeaponType::AK47);
+        for (int i = 0; i < 8; ++i) {
+            require(gun.fire(world, nullptr, Vec3(0, 1, -6), Vec3(0, 0, 1), true, true, true, nullptr, &shooter).fired,
+                "player vehicle-destruction setup could not fire");
+            gun.step(.2f);
+        }
+        require(source.player_destroyed() && !world.take_player_kill(), "destroying an empty vehicle triggered a person-kill flash");
+        world.step();
+        require(chain.player_destroyed() && !victim.alive() && world.take_player_kill() && !world.take_player_kill(),
+            "player explosion chain lost its kill credit or repeated feedback");
+        world.step();
+        require(!world.take_player_kill(), "corpse in an old blast repeated kill feedback");
+        source.repair(); source.reset(Vec3(30, .56f, 0));
+        victim.revive(); victim.reset(Vec3(32, .08f, 0));
+        source.take_damage(100); world.step();
+        require(!source.player_destroyed() && !victim.alive() && !world.take_player_kill(), "environmental explosion triggered player kill feedback");
+    }
+    {
+        PhysicsWorld world(false);
+        Car car(world);
+        car.reset(Vec3(0, .56f, 0));
+        tick(world, car, 960, {1, 0, false, false, true});
+        require(car.velocity().Length() > 42, "runover kill-feedback setup did not reach lethal speed");
+        Character victim(world);
+        victim.reset(car.position() + car.forward() * 2 - Vec3(0, .48f, 0));
+        victim.hit_by(car);
+        require(!victim.alive() && world.take_player_kill(), "player runover did not trigger kill feedback");
+        car.step({1, 0, false});
+        victim.revive(); victim.reset(car.position() + car.forward() * 2 - Vec3(0, .48f, 0));
+        victim.hit_by(car);
+        require(!victim.alive() && !world.take_player_kill(), "NPC runover triggered player kill feedback");
+    }
+}
 void aircraft_damage() {
     for (auto type : {PlaneType::Trainer, PlaneType::F18, PlaneType::Boeing747}) {
         PhysicsWorld world(false);
@@ -203,7 +243,7 @@ void theft_and_occupants() {
 }
 int main() {
     try {
-        damage_and_gunfire(); explosions(); blast_cover(); aircraft_damage(); theft_and_occupants();
+        damage_and_gunfire(); explosions(); blast_cover(); kill_feedback(); aircraft_damage(); theft_and_occupants();
         std::cout << "Crash/gunfire damage, blasts, chains, wrecks, recovery and occupied theft passed\n";
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

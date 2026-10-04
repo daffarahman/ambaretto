@@ -645,7 +645,7 @@ int main(int argc, char** argv) {
         if (!graphics_status.empty()) { notice = "Graphics defaults in use: " + graphics_status; notice_time = 8; TraceLog(LOG_WARNING, "%s", notice.c_str()); }
         bool jump_pending = false, discard_mouse = true, orbit_dragging = false, map_dragging = false, flaps = false;
         bool fire_pending = false, suppress_fire = true;
-        float shot_flash = 0, hit_marker = 0, death_time = 0, arrest_time = 0, recoil_return = 0, hurt_flash = 0;
+        float shot_flash = 0, hit_marker = 0, death_time = 0, arrest_time = 0, recoil_return = 0, hurt_flash = 0, kill_flash = 0;
         forza::Vec3 death_position = scene->player.position();
         float previous_health = scene->player.character().health();
         forza::Shot last_shot;
@@ -669,6 +669,7 @@ int main(int argc, char** argv) {
             const float elapsed = GetFrameTime(), frame = std::min(elapsed, 0.1f);
             shot_flash = std::max(0.f, shot_flash - frame);
             hit_marker = std::max(0.f, hit_marker - frame);
+            kill_flash = std::max(0.f, kill_flash - frame);
             const Rectangle map_viewport{14, 124, float(GetScreenWidth() - 28), float(GetScreenHeight() - 202)};
             const std::array<Rectangle, 5> map_buttons{{
                 {float(GetScreenWidth() - 420), 82, 94, 30}, {float(GetScreenWidth() - 318), 82, 94, 30},
@@ -998,6 +999,7 @@ int main(int argc, char** argv) {
                 } else arrest_time = 0;
                 accumulator -= double(forza::fixed_step);
             }
+            if (scene->world.take_player_kill()) kill_flash = .18f;
             const auto target = focus();
             const auto desired = orbit.desired_position(target, tuning_open || scene->player.driving(), !tuning_open && scene->player.flying(),
                 scene->player.plane().camera_scale(), aiming && scene->player.can_shoot());
@@ -1168,6 +1170,8 @@ int main(int argc, char** argv) {
                 draw_plane_damage(scene->plane);
                 for (const auto& plane : scene->aircraft) draw_plane_damage(*plane);
                 EndMode3D();
+                if (kill_flash > 0) DrawRectangle(0, forza::menu_height, GetScreenWidth(), GetScreenHeight() - forza::menu_height,
+                    {150, 150, 150, static_cast<unsigned char>(110 * kill_flash / .18f)});
                 draw_resume_prompt(captured || tuning_open || graphics_panel.visible() || !screenshot.empty());
                 if (!tuning_open) scenery.minimap(scene->player.position(), scene->player.forward(), view, &scene->police);
                 const auto region = scene->player.position();

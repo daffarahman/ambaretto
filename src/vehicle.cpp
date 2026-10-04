@@ -115,6 +115,7 @@ struct PhysicsWorld::Impl {
     std::vector<Plane*> planes;
     std::vector<Character*> characters;
     std::vector<SoundEvent> sounds;
+    bool player_kill = false;
     JPH::CollisionGroup::GroupID next_character_group = 1;
 
     Impl() {
@@ -304,7 +305,7 @@ void PhysicsWorld::step(float dt) {
                 const float distance = delta.Length(), strength = 1 - distance / radius;
                 GroundHit cover;
                 if (strength <= 0 || (cast_ray(origin, delta, distance, cover, vehicle->body_id()) && cover.body != other->body_id())) return;
-                other->take_damage(150 * strength);
+                other->take_damage(150 * strength, vehicle->damage_.player_caused);
                 impl_->system.GetBodyInterface().AddImpulse(other->body_id(),
                     (delta.NormalizedOr(Vec3::sAxisY()) + Vec3(0, .4f, 0)) * (other_mass * 8 * strength));
             };
@@ -315,8 +316,10 @@ void PhysicsWorld::step(float dt) {
                 const float distance = delta.Length(), strength = 1 - distance / radius;
                 GroundHit cover;
                 if (strength <= 0 || cast_ray(origin, delta, distance, cover, vehicle->body_id())) continue;
+                const bool alive = character->alive();
                 character->take_damage(140 * strength, BodyPart::Torso,
                     (delta.NormalizedOr(Vec3::sAxisY()) + Vec3(0, .5f, 0)) * (220 * strength));
+                if (alive && !character->alive() && !character->player_controlled() && vehicle->damage_.player_caused) notify_player_kill();
             }
         };
         for (auto* car : impl_->cars) explode(car, mass, 10, car->simulated());
@@ -332,6 +335,12 @@ std::vector<SoundEvent> PhysicsWorld::take_sound_events() {
     std::vector<SoundEvent> result;
     result.swap(impl_->sounds);
     return result;
+}
+void PhysicsWorld::notify_player_kill() { impl_->player_kill = true; }
+bool PhysicsWorld::take_player_kill() {
+    const bool killed = impl_->player_kill;
+    impl_->player_kill = false;
+    return killed;
 }
 
 bool PhysicsWorld::cast_ray(const Vec3& origin, const Vec3& direction, float distance, GroundHit& hit, JPH::BodyID ignore) const {
@@ -447,8 +456,8 @@ Plane::~Plane() {
     auto& planes = world_.impl_->planes;
     planes.erase(std::remove(planes.begin(), planes.end(), this), planes.end());
 }
-void Plane::take_damage(float amount) {
-    damage_.take_damage(amount, position());
+void Plane::take_damage(float amount, bool by_player) {
+    damage_.take_damage(amount, position(), by_player);
     if (destroyed()) throttle_ = 0;
 }
 void Plane::repair() { damage_.repair(); }
@@ -675,6 +684,7 @@ Character::~Character() {
     characters.erase(std::remove(characters.begin(), characters.end(), this), characters.end());
 }
 bool Character::enabled() const { return impl_->enabled; }
+bool Character::player_controlled() const { return impl_->player_controlled; }
 bool Character::pull_from(const Car& car, float side) {
     const Vec3 heading = car.forward();
     const float yaw = std::atan2(-heading.GetX(), -heading.GetZ());
@@ -1117,10 +1127,15 @@ void Character::hit_by(const Car& car, float dt) {
     impl_->hit_car = &car;
     const Vec3 inherited = walking_velocity + relative * .65f + Vec3(0, std::clamp(speed * .09f, .5f, 3.5f), 0);
     ragdoll(inherited, direction * std::min(speed * 2.0f, 65.0f));
+    const bool alive_before_hit = alive();
     take_damage(std::max(0.f, speed - 8) * 3);
+    if (alive_before_hit && !alive() && !player_controlled() && car.player_controlled()) world_.notify_player_kill();
     impl_->hit_cooldown = .35f;
 }
 
+void Character::regenerate(float dt) {
+    if (alive() && health_ < 50 && std::isfinite(dt) && dt > 0) health_ = std::min(50.f, health_ + 5 * dt);
+}
 void Character::take_damage(float amount, BodyPart part, Vec3 impulse, DamageSource source) {
     if (!impl_->enabled || !std::isfinite(amount) || amount <= 0) return;
     health_ = std::max(0.f, health_ - amount);
@@ -1389,10 +1404,11 @@ Car::~Car() {
     cars.erase(std::remove(cars.begin(), cars.end(), this), cars.end());
 }
 
-void VehicleDamage::take_damage(float amount, Vec3 position) {
+void VehicleDamage::take_damage(float amount, Vec3 position, bool by_player) {
     if (health <= 0 || !std::isfinite(amount) || amount <= 0) return;
     health = std::max(0.f, health - amount);
     if (health > 0) return;
+    player_caused = by_player;
     explosion_position = position;
     explosion_time = 0;
     explosion_pending = true;
@@ -1404,8 +1420,9 @@ void VehicleDamage::repair() {
     impact_speed.store(0, std::memory_order_relaxed);
     explosion_time = 10;
     explosion_pending = false;
+    player_caused = false;
 }
-void Car::take_damage(float amount) { damage_.take_damage(amount, position()); }
+void Car::take_damage(float amount, bool by_player) { damage_.take_damage(amount, position(), by_player); }
 void Car::repair() { damage_.repair(); }
 
 void Car::update_wheel_mounts() {
@@ -1480,6 +1497,7 @@ void Car::refresh_wheel_contacts() {
 }
 
 void Car::step(Input input, float dt) {
+    player_controlled_ = input.player_controlled;
     if (destroyed()) input = {0, 0, false, true};
     auto& physics = world_.impl_->system.GetBodyInterface();
     input.throttle = clamp(input.throttle, -1, 1);

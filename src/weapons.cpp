@@ -143,13 +143,15 @@ Shot Weapons::fire(PhysicsWorld& world, const Pedestrians* pedestrians, Vec3 ori
     direction = (direction + (right * spread(random_) + up * spread(random_)) * (aiming ? 1.f : 3.f)).Normalized();
     const auto hit = trace_shot(world, pedestrians, origin, direction, data().range, police, ignore);
     const bool alive = hit.character && hit.character->alive();
+    const bool by_player = ignore && ignore->player_controlled();
     if (hit.character) {
         const auto part = BodyPart(hit.part);
         const float multiplier = part == BodyPart::Head ? 3.f : hit.part >= int(BodyPart::LeftUpperArm) ? .65f : 1.f;
         hit.character->take_damage(data().damage * multiplier, part, direction * data().impulse, DamageSource::Bullet);
+        if (alive && !hit.character->alive() && by_player) world.notify_player_kill();
     }
-    if (hit.car) hit.car->take_damage(data().damage * VehicleDamage::gunfire_multiplier);
-    if (hit.plane) hit.plane->take_damage(data().damage * VehicleDamage::gunfire_multiplier);
+    if (hit.car) hit.car->take_damage(data().damage * VehicleDamage::gunfire_multiplier, by_player);
+    if (hit.plane) hit.plane->take_damage(data().damage * VehicleDamage::gunfire_multiplier, by_player);
     switch (selected_) {
         case WeaponType::Pistol: world.emit_sound(SoundEffect::Pistol, origin); break;
         case WeaponType::SMG: world.emit_sound(SoundEffect::SMG, origin); break;

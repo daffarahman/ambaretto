@@ -37,6 +37,56 @@ void character_movement() {
     require(airborne && peak > 0.7f && character.grounded(), "jump did not rise and land");
     std::cout << "Character jump: " << peak << " m; walking and sprint passed\n";
 }
+void health_regeneration() {
+    using namespace forza;
+    Environment map;
+    PhysicsWorld world(false);
+    Car car(world);
+    Player player(world, car, map);
+    Character npc(world);
+    npc.reset(Vec3(70, .08f, 0)); npc.take_damage(70); npc.reset(Vec3(70, .08f, 0));
+    const Vec3 feet(20, .08f, 0);
+    const auto& character = player.character();
+    const auto step = [&](int count, FootInput input = {}) {
+        for (int i = 0; i < count; ++i) { player.step({}, input); npc.step({}); }
+    };
+    for (float fps : {30.f, 60.f, 120.f}) {
+        player.respawn_on_foot(feet);
+        player.character().take_damage(70); player.character().reset(feet);
+        for (int i = 0; i < int(fps * 2); ++i) player.step({}, {}, 1 / fps);
+        require(character.health() > 39.5f && character.health() <= 40.01f, "stationary regeneration rate changed with frame timing");
+    }
+    const float resting_health = character.health();
+    step(120, {Vec3(0, 0, -1)});
+    require(character.health() == resting_health, "walking regenerated health");
+    step(120, {Vec3(0, 0, -1), true});
+    require(character.health() == resting_health, "sprinting regenerated health");
+    step(120, {Vec3::sZero(), false, true});
+    require(character.health() == resting_health, "jumping regenerated health");
+    step(600);
+    require(character.health() == 50, "resting did not resume regeneration or exceeded half health");
+    player.character().take_damage(5); player.character().reset(player.position());
+    FootInput blocked; blocked.direction = Vec3(0, 0, -.005f);
+    step(120, blocked);
+    require(character.health() > 45 && character.health() <= 50, "stationary input noise prevented regeneration");
+    car.reset(Vec3(0, .56f, 0));
+    player.respawn_on_foot(Vec3(-2, .08f, .35f));
+    player.character().take_damage(70); player.character().reset(Vec3(-2, .08f, .35f));
+    require(player.interact() == Interaction::Entered, "regeneration check could not enter a stationary car");
+    step(300);
+    require(character.health() > 35 && character.health() <= 50, "stopped vehicle did not allow player regeneration");
+    const float parked_health = character.health();
+    for (int i = 0; i < 360; ++i) player.step({1, 0, false}, {});
+    require(character.health() == parked_health, "driving regenerated player health");
+    player.respawn_on_foot(feet);
+    player.character().revive(); player.character().take_damage(20); player.character().reset(feet);
+    step(360);
+    require(character.health() == 80, "regeneration reduced or increased health already above half");
+    player.character().take_damage(100); step(360);
+    require(character.health() == 0 && !character.alive(), "regeneration revived a dead player");
+    require(npc.health() == 30, "player regeneration also healed NPCs");
+    std::cout << "Health regeneration: stationary rate, movement pause/resume, half-health cap, dead player and NPC exclusion passed\n";
+}
 
 void articulated_ragdoll() {
     using namespace forza;
@@ -494,7 +544,7 @@ void model_tree_collisions() {
 }
 int main() {
     try {
-        character_movement(); articulated_ragdoll(); city_collisions_and_interaction(); ragdoll_impact_damage(); car_coasting_and_direction_changes(); mouse_camera(); on_foot_camera(); surface_swimming(); nearby_respawns(); model_tree_collisions();
+        character_movement(); health_regeneration(); articulated_ragdoll(); city_collisions_and_interaction(); ragdoll_impact_damage(); car_coasting_and_direction_changes(); mouse_camera(); on_foot_camera(); surface_swimming(); nearby_respawns(); model_tree_collisions();
         std::cout << "All player checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

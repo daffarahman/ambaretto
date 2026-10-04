@@ -18,6 +18,22 @@ namespace {
 constexpr float pi = 3.14159265359f;
 constexpr int sign_rows = 11;
 constexpr Color map_water{24, 44, 70, 255};
+const char* minimap_fragment = R"GLSL(#version 330
+in vec2 fragTexCoord;
+in vec4 fragColor;
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+uniform vec4 clipBounds;
+out vec4 finalColor;
+void main() {
+    const float radius = 14.0;
+    vec2 q = abs(gl_FragCoord.xy - clipBounds.xy - clipBounds.zw * 0.5) - (clipBounds.zw * 0.5 - radius);
+    float distance = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+    float coverage = 1.0 - smoothstep(-0.5, 0.5, distance);
+    if (coverage <= 0.0) discard;
+    finalColor = texture(texture0, fragTexCoord) * colDiffuse * fragColor;
+    finalColor.a *= coverage;
+})GLSL";
 std::pair<int, int> cell(Vec3 position) {
     return {int(std::floor(position.GetX() / 256)), int(std::floor(position.GetZ() / 256))};
 }
@@ -818,61 +834,78 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         SetMaterialTexture(&signs_.materials[0], MATERIAL_MAP_DIFFUSE, sign_texture_);
     }
     sign_emission_ = GetShaderLocation(tree_shader_, "emissiveStrength");
-    load_minimap(env);
+    load_map(env);
 }
 
-void EnvironmentRenderer::load_minimap(const Environment& env) {
-    constexpr int size = 2048;
-    Image map = GenImageColor(size, size, map_water);
-    for (int z = 0; z < size; ++z) for (int x = 0; x < size; ++x) {
-        const float y = env.terrain_height((x + .5f) * (2 * Environment::extent / size) - Environment::extent,
-            (z + .5f) * (2 * Environment::extent / size) - Environment::extent);
-        if (y > .1f) ImageDrawPixel(&map, x, z, {96, 96, 96, 255});
+void EnvironmentRenderer::load_map(const Environment& env) {
+    MeshBuilder map;
+    const auto point = [](Vec3 p) { return Vec3(p.GetX(), p.GetZ(), 0); };
+    // Keep the terrain's exact shoreline instead of enlarging five-meter texels.
+    for (const auto& triangle : env.triangles()) {
+        if (triangle.deck) continue;
+        const std::array<Vec3, 3> vertices{env.vertices()[triangle.a], env.vertices()[triangle.b], env.vertices()[triangle.c]};
+        std::array<Vec3, 4> land;
+        int count = 0;
+        Vec3 previous = vertices.back();
+        for (Vec3 current : vertices) {
+            if ((current.GetY() > .1f) != (previous.GetY() > .1f))
+                land[count++] = previous + (current - previous) * ((.1f - previous.GetY()) / (current.GetY() - previous.GetY()));
+            if (current.GetY() > .1f) land[count++] = current;
+            previous = current;
+        }
+        for (int i = 1; i + 1 < count; ++i)
+            map.triangle(point(land[0]), point(land[i]), point(land[i + 1]), {96, 96, 96, 255});
     }
-    const auto pixel = [](float value) { return int((value + Environment::extent) * size / (2 * Environment::extent)); };
-    for (const auto& road : env.roads()) {
-        ImageDrawLineEx(&map, {float(pixel(road.a.GetX())), float(pixel(road.a.GetZ()))},
-            {float(pixel(road.b.GetX())), float(pixel(road.b.GetZ()))},
-            std::max(1, int(road.width * size / (2 * Environment::extent))), {205, 205, 205, 255});
-    }
+    const Color pavement{205, 205, 205, 255};
+    const auto rectangle = [&](float x, float z, float width, float depth, Color color) {
+        map.quad(Vec3(x, z, 0), Vec3(x + width, z, 0), Vec3(x + width, z + depth, 0), Vec3(x, z + depth, 0), color);
+    };
+    const auto line = [&](Vec3 a, Vec3 b, float width) {
+        const Vec3 side = Vec3(-(b - a).GetZ(), 0, (b - a).GetX()).NormalizedOr(Vec3::sAxisX()) * (width / 2);
+        map.quad(point(a - side), point(a + side), point(b + side), point(b - side), pavement);
+    };
+    for (const auto& road : env.roads()) line(road.a, road.b, road.width);
     for (const auto& airport : airports) {
-        const Color pavement{205, 205, 205, 255};
-        ImageDrawRectangle(&map, pixel(airport.center_x - 115), pixel(airport.runway_z - 220),
-            pixel(airport.center_x - 38) - pixel(airport.center_x - 115),
-            pixel(airport.runway_z + 160) - pixel(airport.runway_z - 220), pavement);
-        const auto line = [&](AirportPoint a, AirportPoint b, float width) {
-            ImageDrawLineEx(&map, {float(pixel(a.x)), float(pixel(a.z))}, {float(pixel(b.x)), float(pixel(b.z))},
-                std::max(1, int(width * size / (2 * Environment::extent))), pavement);
+        rectangle(airport.center_x - 115, airport.runway_z - 220, 77, 380, pavement);
+        const auto airport_line = [&](AirportPoint a, AirportPoint b, float width) {
+            line(Vec3(a.x, 0, a.z), Vec3(b.x, 0, b.z), width);
         };
-        line({airport.center_x - 78, airport.runway_z - 200}, {airport.center_x, airport.runway_z - 200}, 16);
+        airport_line({airport.center_x - 78, airport.runway_z - 200}, {airport.center_x, airport.runway_z - 200}, 16);
         if (airport.international) {
-            ImageDrawRectangle(&map, pixel(airport.apron_x() - 15), pixel(airport.apron_z() - 60),
-                pixel(airport.apron_x() + 15) - pixel(airport.apron_x() - 15),
-                pixel(airport.apron_z() + 60) - pixel(airport.apron_z() - 60), pavement);
+            rectangle(airport.apron_x() - 15, airport.apron_z() - 60, 30, 120, pavement);
             const auto access = airport.access_points();
-            for (int i = 1; i < int(access.size()); ++i) line(access[i - 1], access[i], airport.gate_width());
+            for (int i = 1; i < int(access.size()); ++i) airport_line(access[i - 1], access[i], airport.gate_width());
         } else {
             const float apron_end = airport.runway_z + airport.departure * (airport.runway_length() / 2 - 12);
             const float apron_start = std::min(airport.plane_z(), apron_end);
-            ImageDrawRectangle(&map, pixel(airport.apron_x() - 15), pixel(apron_start),
-                pixel(airport.apron_x() + 15) - pixel(airport.apron_x() - 15),
-                pixel(std::max(airport.plane_z(), apron_end)) - pixel(apron_start), pavement);
-            line({airport.center_x, airport.plane_z()}, {airport.apron_x(), airport.plane_z()}, 10);
+            rectangle(airport.apron_x() - 15, apron_start, 30, std::max(airport.plane_z(), apron_end) - apron_start, pavement);
+            airport_line({airport.center_x, airport.plane_z()}, {airport.apron_x(), airport.plane_z()}, 10);
         }
         for (int runway = 0; runway < airport.runway_count(); ++runway) {
-            line(airport.point(-airport.runway_length() / 2, 0, runway), airport.point(airport.runway_length() / 2, 0, runway), airport.runway_width());
+            airport_line(airport.point(-airport.runway_length() / 2, 0, runway), airport.point(airport.runway_length() / 2, 0, runway), airport.runway_width());
             if (airport.international) {
-                line({airport.apron_x(), airport.apron_z()}, {airport.apron_x(), airport.plane_z()}, 12);
-                line({airport.apron_x(), airport.plane_z()}, airport.point(airport.plane_along(), 0, runway), 12);
+                airport_line({airport.apron_x(), airport.apron_z()}, {airport.apron_x(), airport.plane_z()}, 12);
+                airport_line({airport.apron_x(), airport.plane_z()}, airport.point(airport.plane_along(), 0, runway), 12);
             }
         }
     }
     for (const auto& b : env.buildings())
-        ImageDrawRectangle(&map, pixel(b.center.GetX() - b.size.GetX() / 2), pixel(b.center.GetZ() - b.size.GetZ() / 2),
-            std::max(1, int(b.size.GetX() * size / (2 * Environment::extent))),
-            std::max(1, int(b.size.GetZ() * size / (2 * Environment::extent))), {145, 145, 145, 255});
-    minimap_texture_ = LoadTextureFromImage(map); UnloadImage(map);
-    SetTextureFilter(minimap_texture_, TEXTURE_FILTER_BILINEAR);
+        rectangle(b.center.GetX() - b.size.GetX() / 2, b.center.GetZ() - b.size.GetZ() / 2,
+            b.size.GetX(), b.size.GetZ(), {145, 145, 145, 255});
+    map_ = map.upload();
+    minimap_shader_ = LoadShaderFromMemory(nullptr, minimap_fragment);
+}
+void EnvironmentRenderer::draw_map(Vector2 center, Vector2 anchor, float scale, float rotation, Shader shader) const {
+    Matrix transform = MatrixTranslate(-center.x, -center.y, 0);
+    transform = MatrixMultiply(transform, MatrixScale(scale, scale, 1));
+    transform = MatrixMultiply(transform, MatrixRotateZ(rotation * DEG2RAD));
+    transform = MatrixMultiply(transform, MatrixTranslate(anchor.x, anchor.y, 0));
+    rlDrawRenderBatchActive();
+    rlDisableBackfaceCulling();
+    Material material = map_.materials[0];
+    if (shader.id) material.shader = shader;
+    DrawMesh(map_.meshes[0], material, transform);
+    rlEnableBackfaceCulling();
 }
 void EnvironmentRenderer::load_trees(const Environment& env) {
     if (env.trees().empty()) return;
@@ -936,7 +969,8 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     if (sand_texture_.id != 0) UnloadTexture(sand_texture_);
     if (asphalt_texture_.id != 0) UnloadTexture(asphalt_texture_);
     if (sign_texture_.id) UnloadTexture(sign_texture_);
-    if (minimap_texture_.id) UnloadTexture(minimap_texture_);
+    UnloadModel(map_);
+    UnloadShader(minimap_shader_);
     UnloadShader(land_shader_); UnloadShader(water_shader_);
     UnloadShader(sky_shader_); UnloadShader(light_shader_);
     if (tree_shader_.id != 0) UnloadShader(tree_shader_);
@@ -1016,15 +1050,12 @@ void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float
 void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police) const {
     const MinimapView map(GetScreenHeight(), player_position, player_forward, camera);
     const auto bounds = map.bounds;
-    DrawRectangle(int(bounds.x - 4), int(bounds.y - 4), int(bounds.width + 8), int(bounds.height + 8), {19, 28, 45, 235});
+    const Vector4 clip{bounds.x, float(GetRenderHeight()) - bounds.y - bounds.height, bounds.width, bounds.height};
+    SetShaderValue(minimap_shader_, GetShaderLocation(minimap_shader_, "clipBounds"), &clip, SHADER_UNIFORM_VEC4);
     BeginScissorMode(int(bounds.x), int(bounds.y), int(bounds.width), int(bounds.height));
+    BeginShaderMode(minimap_shader_);
     DrawRectangleRec(bounds, map_water);
-    const float size = 2 * Environment::extent * map.scale;
-    // Draw only the finite world texture; the ocean backdrop fills views beyond its edge.
-    DrawTexturePro(minimap_texture_, {0, 0, float(minimap_texture_.width), float(minimap_texture_.height)},
-        {map.anchor.x, map.anchor.y, size, size},
-        {(player_position.GetX() + Environment::extent) * map.scale,
-            (player_position.GetZ() + Environment::extent) * map.scale}, map.rotation(), WHITE);
+    draw_map({player_position.GetX(), player_position.GetZ()}, map.anchor, map.scale, map.rotation(), minimap_shader_);
     if (police && police->wanted().stars()) {
         const auto p = map.project(police->wanted().last_seen());
         const float radius = police->wanted().radius() * map.scale;
@@ -1048,16 +1079,13 @@ void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, con
     const Vector2 b{map.anchor.x - delta.x * .5f + delta.y * .55f, map.anchor.y - delta.y * .5f - delta.x * .55f};
     DrawCircleV(map.anchor, 8, {19, 28, 45, 230});
     DrawTriangle(tip, b, a, RAYWHITE);
+    EndShaderMode();
     EndScissorMode();
-    DrawRectangleLinesEx(bounds, 2, {115, 157, 174, 255});
 }
 void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police) const {
     BeginScissorMode(int(viewport.x), int(viewport.y), int(viewport.width), int(viewport.height));
     DrawRectangleRec(viewport, map_water);
-    const auto corner = view.project(Vec3(-Environment::extent, 0, -Environment::extent), viewport);
-    const float size = 2 * Environment::extent * view.scale;
-    DrawTexturePro(minimap_texture_, {0, 0, float(minimap_texture_.width), float(minimap_texture_.height)},
-        {corner.x, corner.y, size, size}, {0, 0}, 0, WHITE);
+    draw_map(view.center, {viewport.x + viewport.width / 2, viewport.y + viewport.height / 2}, view.scale);
     const auto inside = [&](Vector2 p) { return p.x >= viewport.x + 8 && p.x <= viewport.x + viewport.width - 8
         && p.y >= viewport.y + 8 && p.y <= viewport.y + viewport.height - 8; };
     if (police && police->wanted().stars()) {

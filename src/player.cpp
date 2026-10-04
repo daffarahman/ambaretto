@@ -14,6 +14,7 @@ Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Pl
       pedestrians_(pedestrians), police_(police) { starter_plane_ = plane; aircraft_ = aircraft; reset(); }
 
 void Player::reset() {
+    world_.take_player_kill();
     Vec3 spawn = environment_.spawn();
     // A stolen car must not recover on top of the starter or another car
     // still parked downtown. Search along the paved main avenue.
@@ -45,6 +46,7 @@ void Player::reset() {
 }
 
 void Player::respawn_on_foot(Vec3 feet, float yaw) {
+    world_.take_player_kill();
     driving_ = flying_ = coasting_ = false;
     character_.reset(feet, yaw);
     character_.revive();
@@ -258,6 +260,12 @@ void Player::step(Input driving, FootInput walking, float dt, FlightInput flight
     if (pedestrians_) pedestrians_->step(starter_car_, traffic_, position(), dt);
     if (traffic_) traffic_->finish(position(), dt);
     if (police_) police_->finish(*this, dt);
+    const Vec3 velocity = driving_ ? car_->velocity() : flying_ ? plane_->velocity() : character_.velocity();
+    const bool idle = on_foot() ? walking.direction.LengthSq() < .0001f && !walking.jump && character_.grounded()
+        && !character_.ragdolling() && !character_.swimming()
+        : driving_ ? std::abs(driving.throttle) < .01f : plane_->grounded() && std::abs(flight.throttle) < .01f;
+    const float speed_squared = on_foot() ? velocity.GetX() * velocity.GetX() + velocity.GetZ() * velocity.GetZ() : velocity.LengthSq();
+    if (idle && speed_squared < .04f && (!police_ || !police_->arrested())) character_.regenerate(dt);
 }
 
 bool Player::can_shoot() const {

@@ -24,8 +24,8 @@ struct VehicleDamage {
     float health = max_health, crash_cooldown = 0, explosion_time = 10;
     std::atomic<float> impact_speed{0};
     Vec3 explosion_position{0, 0, 0};
-    bool explosion_pending = false;
-    void take_damage(float amount, Vec3 position);
+    bool explosion_pending = false, player_caused = false;
+    void take_damage(float amount, Vec3 position, bool by_player = false);
     void repair();
 };
 inline constexpr float fixed_step = 1.0f / 120.0f;
@@ -76,6 +76,8 @@ public:
     void step(float dt = fixed_step);
     void emit_sound(SoundEffect effect, Vec3 position);
     std::vector<SoundEvent> take_sound_events();
+    void notify_player_kill();
+    bool take_player_kill();
     float camera_fraction(const Vec3& origin, const Vec3& offset, JPH::BodyID ignore = {}) const;
 private:
     friend class Car;
@@ -113,7 +115,9 @@ public:
     static constexpr float max_health = VehicleDamage::max_health;
     float health() const { return damage_.health; }
     bool destroyed() const { return health() <= 0; }
-    void take_damage(float amount);
+    void take_damage(float amount, bool by_player = false);
+    bool player_destroyed() const { return destroyed() && damage_.player_caused; }
+    bool player_controlled() const { return player_controlled_; }
     void repair();
     float explosion_time() const { return damage_.explosion_time; }
     Vec3 explosion_position() const { return damage_.explosion_position; }
@@ -130,6 +134,7 @@ private:
     CarTuning tuning_{};
     CarType type_;
     bool simulated_ = true;
+    bool player_controlled_ = false;
     VehicleDamage damage_;
 };
 } // namespace forza

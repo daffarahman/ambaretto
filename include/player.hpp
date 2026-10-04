@@ -40,6 +40,7 @@ public:
     void step(FootInput input, float dt = fixed_step);
     void set_enabled(bool enabled);
     bool enabled() const;
+    bool player_controlled() const;
     bool pull_from(const Car& car, float side = -1);
     bool ragdolling() const;
     bool swimming() const;
@@ -64,6 +65,7 @@ public:
     float health() const { return health_; }
     bool alive() const { return health_ > 0; }
     void revive() { health_ = 100; }
+    void regenerate(float dt);
     void take_damage(float amount, BodyPart part = BodyPart::Torso, Vec3 impulse = Vec3::sZero(), DamageSource source = DamageSource::Impact);
     bool raycast(Vec3 origin, Vec3 direction, float& distance, BodyPart& part) const;
     float yaw() const { return yaw_; }
