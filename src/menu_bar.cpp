@@ -5,23 +5,46 @@
 
 namespace forza {
 namespace {
-constexpr Color blue{0, 0, 128, 255}, gray{192, 192, 192, 255}, ink{0, 0, 0, 255}, selected{0, 128, 128, 255};
-struct Item { const char* label; MenuCommand command; };
-constexpr Item files[] = {{"Resume game", MenuCommand::Resume}, {"Pause game", MenuCommand::Pause}, {"Quit", MenuCommand::Quit}};
+constexpr Color blue = ui::dos_blue, gray = ui::dos_white, ink = ui::dos_blue, selected = ui::dos_light_blue;
+struct Item { const char* label; MenuCommand command; const char* shortcut = ""; };
+constexpr Item files[] = {{"Capture mouse", MenuCommand::Resume}, {"Release mouse", MenuCommand::Pause}, {"End Game", MenuCommand::Cities}};
 constexpr Item edits[] = {{"Recover vehicle", MenuCommand::Recover}, {"Restore car tuning", MenuCommand::CarDefaults}};
-constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Graphics...", MenuCommand::Graphics}, {"Aim mode", MenuCommand::AimMode}, {"Controller mapping...", MenuCommand::Controllers}};
+constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Aim mode", MenuCommand::AimMode}};
+constexpr Item main_settings[] = {{"Graphics...", MenuCommand::Graphics}, {"Controller mapping...", MenuCommand::Controllers}};
 constexpr Item helps[] = {{"Controls...", MenuCommand::Controls}, {"About...", MenuCommand::About}};
-constexpr const char* titles[] = {"File", "Edit", "Settings", "Help"};
-constexpr const Item* menus[] = {files, edits, settings, helps};
-constexpr int counts[] = {3, 2, 5, 2};
-Rectangle title_rect(int menu) {
-    constexpr float gap = 48;
-    float x = 8;
-    for (int i = 0; i < menu; ++i) x += ui::measure_text(titles[i], 19) + gap;
-    return {x, 0, float(ui::measure_text(titles[menu], 19) + 24), menu_height};
+constexpr Item editor_files[] = {{"Save city", MenuCommand::SaveCity, "Ctrl+S"}, {"Start time...", MenuCommand::StartTime}, {"Play city", MenuCommand::PlayCity}, {"Cities...", MenuCommand::Cities, "Esc"}, {"Quit", MenuCommand::Quit}};
+constexpr Item editor_edits[] = {{"Undo", MenuCommand::Undo, "Ctrl+Z"}, {"Redo", MenuCommand::Redo, "Ctrl+Y"}, {"Delete selection", MenuCommand::DeleteSelection, "Del"}};
+constexpr Item builds[] = {{"Select / edit", MenuCommand::SelectTool, "1"}, {"Island / expand", MenuCommand::LandTool, "2"}, {"Road", MenuCommand::RoadTool, "3"}, {"Building block", MenuCommand::BuildingTool, "4"}, {"Player spawn", MenuCommand::SpawnTool, "5"}, {"Vehicle", MenuCommand::VehicleTool, "6"}, {"Bulldoze", MenuCommand::BulldozeTool, "7"}, {"Tree brush", MenuCommand::TreesTool, "8"}, {"Ground texture", MenuCommand::GroundTool, "9"}, {"Ground elevation", MenuCommand::ElevationTool, "0"}};
+constexpr Item views[] = {{"Top view", MenuCommand::TopView, "V"}, {"Show grid", MenuCommand::Grid, "G"}, {"Rotate left", MenuCommand::RotateLeft, "Q"}, {"Rotate right", MenuCommand::RotateRight, "E"}, {"Zoom in", MenuCommand::ZoomIn}, {"Zoom out", MenuCommand::ZoomOut}};
+constexpr Item city_files[] = {{"New city...", MenuCommand::NewCity, "Ins"}, {"Quit", MenuCommand::Quit}};
+constexpr Item city_actions[] = {{"Edit / build", MenuCommand::EditCity, "E"}, {"Play city", MenuCommand::PlayCity, "Enter"}, {"Rename...", MenuCommand::RenameCity, "F2"}, {"Delete city...", MenuCommand::DeleteCity, "Del"}};
+struct Menu { const char* title; const Item* items; int count; };
+constexpr Menu game_menus[] = {{"File", files, 3}, {"Edit", edits, 2}, {"Settings", settings, 3}, {"Help", helps, 2}};
+constexpr Menu editor_menus[] = {{"File", editor_files, 5}, {"Edit", editor_edits, 3}, {"Build", builds, int(std::size(builds))}, {"View", views, 6}, {"Help", helps, 2}};
+constexpr Menu city_menus[] = {{"File", city_files, 2}, {"City", city_actions, 4}, {"Settings", main_settings, 2}, {"Help", helps, 2}};
+const Menu* menus(MenuMode mode) { return mode == MenuMode::Editor ? editor_menus : mode == MenuMode::Cities ? city_menus : game_menus; }
+int menu_count(MenuMode mode) { return mode == MenuMode::Editor ? 5 : 4; }
+bool enabled(MenuCommand command, const MenuState& state) {
+    switch (command) {
+        case MenuCommand::Undo: return state.undo;
+        case MenuCommand::Redo: return state.redo;
+        case MenuCommand::PlayCity: return state.play;
+        case MenuCommand::DeleteSelection: case MenuCommand::EditCity: case MenuCommand::RenameCity: case MenuCommand::DeleteCity: return state.selection;
+        default: return true;
+    }
 }
-Rectangle dropdown_rect(int menu) { return {title_rect(menu).x, menu_height, 302, float(counts[menu] * 32 + 8)}; }
-Rectangle item_rect(int menu, int item) { auto r = dropdown_rect(menu); return {r.x + 4, r.y + 4 + item * 32, r.width - 8, 32}; }
+bool checked(MenuCommand command, const MenuState& state) {
+    if (command == MenuCommand::TopView) return state.top;
+    if (command == MenuCommand::Grid) return state.grid;
+    return state.tool >= 0 && int(command) == int(MenuCommand::SelectTool) + state.tool;
+}
+Rectangle title_rect(MenuMode mode, int menu) {
+    float x = 44;
+    for (int i = 0; i < menu; ++i) x += ui::measure_text(menus(mode)[i].title, 19) + 32;
+    return {x, 0, float(ui::measure_text(menus(mode)[menu].title, 19) + 32), menu_height};
+}
+Rectangle dropdown_rect(MenuMode mode, int menu) { return {title_rect(mode, menu).x, menu_height, mode == MenuMode::Game ? 320.f : 360.f, float(menus(mode)[menu].count * 32 + 8)}; }
+Rectangle item_rect(MenuMode mode, int menu, int item) { auto r = dropdown_rect(mode, menu); return {r.x + 4, r.y + 4 + item * 32, r.width - 8, 32}; }
 Rectangle panel_rect() { return {float((GetScreenWidth() - 944) / 2), 64, 944, float(GetScreenHeight() - 96)}; }
 int visible_rows() { return std::max(1, int((panel_rect().height - 264) / 28)); }
 int first_row(int selection, int total) { return std::clamp(selection - visible_rows() / 2, 0, std::max(0, total - visible_rows())); }
@@ -31,9 +54,9 @@ Rectangle button_rect(int index) { auto r = panel_rect(); return {r.x + 20 + ind
 bool hit(Rectangle r) { return CheckCollisionPointRec(GetMousePosition(), r); }
 bool repeat(int key) { return IsKeyPressed(key) || IsKeyPressedRepeat(key); }
 void box(Rectangle r, Color color = gray) {
-    DrawRectangleRec({r.x + 5, r.y + 5, r.width, r.height}, {0, 0, 0, 160});
+    DrawRectangleRec({r.x + 5, r.y + 5, r.width, r.height}, {0, 0, 85, 255});
     DrawRectangleRec(r, color);
-    DrawRectangleLinesEx(r, 2, RAYWHITE);
+    DrawRectangleLinesEx(r, 2, blue);
 }
 void text(const char* value, float x, float y, int size = 17, Color color = ink) { ui::draw_text(value, int(x), int(y), size, color); }
 void button(int index, const char* label) {
@@ -64,11 +87,16 @@ MenuCommand MenuBar::update(ControllerMapping& mapping, const std::filesystem::p
         if (!devices_.empty()) devices_ += " / ";
         devices_ += (pad.raw ? "USB joystick: " : "Gamepad: ") + pad.name;
     }
-    if (devices_.empty()) devices_ = "No controller detected - plug in a gamepad, then choose Add binding.";
+    if (devices_.empty()) devices_ = "No controller detected";
     if (!IsWindowFocused()) { if (capturing_) status_ = "Binding cancelled: window lost focus"; capturing_ = false; return MenuCommand::None; }
     const bool click = mouse_enabled && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
     if (popup_ != MenuCommand::None) {
         interacted_ = true;
+        if (click && hit(ui::window_close(panel_rect()))) {
+            if (popup_==MenuCommand::Controllers) close_mapping(mapping,path);
+            else popup_ = MenuCommand::None;
+            capturing_ = false; return MenuCommand::None;
+        }
         if (popup_ != MenuCommand::Controllers) {
             if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) || (click && hit(button_rect(4)))) popup_ = MenuCommand::None;
             return MenuCommand::None;
@@ -115,7 +143,7 @@ MenuCommand MenuBar::update(ControllerMapping& mapping, const std::filesystem::p
             if (binding_first + i < int(list.size()) && hit(row_rect(i, true))) binding_ = binding_first + i;
         }
         if (IsKeyPressed(KEY_INSERT) || (click && hit(button_rect(0)))) {
-            capturing_ = true; capture_.start(input); status_ = "Press a key, gamepad button, or move a stick/trigger. Esc cancels.";
+            capturing_ = true; capture_.start(input); status_ = "Waiting for input...";
             while (GetKeyPressed()) {}
         } else if (IsKeyPressed(KEY_DELETE) || (click && hit(button_rect(1)))) {
             if (!list.empty()) { list.erase(list.begin() + std::clamp(binding_, 0, int(list.size()) - 1)); binding_ = std::max(0, binding_ - 1); dirty_ = true; status_ = "Removed binding"; save_pending(mapping, path); }
@@ -126,60 +154,96 @@ MenuCommand MenuBar::update(ControllerMapping& mapping, const std::filesystem::p
         } else if (IsKeyPressed(KEY_ENTER) || (click && hit(button_rect(4)))) close_mapping(mapping, path, true);
         return MenuCommand::None;
     }
-    if (IsKeyPressed(KEY_F10)) {
+    const auto command = update({}, mouse_enabled);
+    if (command == MenuCommand::Controllers || command == MenuCommand::Controls || command == MenuCommand::About) { show(command); return MenuCommand::None; }
+    return command;
+}
+MenuCommand MenuBar::update(const MenuState& state, bool mouse_enabled) {
+    MenuInput input;
+    input.mouse_enabled = mouse_enabled;
+    input.mouse = GetMousePosition(); input.click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    input.moved = GetMouseDelta().x != 0 || GetMouseDelta().y != 0;
+    input.enter = IsKeyPressed(KEY_ENTER); input.escape = IsKeyPressed(KEY_ESCAPE); input.toggle = IsKeyPressed(KEY_F10);
+    input.focused = IsWindowFocused();
+    input.horizontal = int(repeat(KEY_RIGHT)) - int(repeat(KEY_LEFT));
+    input.vertical = int(repeat(KEY_DOWN)) - int(repeat(KEY_UP));
+    return update(state, input);
+}
+MenuCommand MenuBar::update(const MenuState& state, const MenuInput& input) {
+    interacted_ = false;
+    if (!input.focused) { interacted_ = blocking(); dropdown_ = -1; return MenuCommand::None; }
+    const bool click = input.mouse_enabled && input.click;
+    const auto over = [&](Rectangle r) { return CheckCollisionPointRec(input.mouse, r); };
+    const int total = menu_count(mode_);
+    if (input.toggle) {
         interacted_ = true;
         if (dropdown_ < 0) open(); else dropdown_ = -1;
         return MenuCommand::None;
     }
-    if (click && GetMousePosition().y < menu_height) {
+    if (click && input.mouse.y < menu_height) {
         interacted_ = true;
-        for (int i = 0; i < 4; ++i) if (hit(title_rect(i))) { if (dropdown_ == i) dropdown_ = -1; else open(i); return MenuCommand::None; }
+        for (int i = 0; i < total; ++i) if (over(title_rect(mode_, i))) { if (dropdown_ == i) dropdown_ = -1; else open(i); return MenuCommand::None; }
         dropdown_ = -1; return MenuCommand::None;
     }
-    if (dropdown_ < 0) return MenuCommand::None;
-    interacted_ = true;
-    if (IsKeyPressed(KEY_ESCAPE)) { dropdown_ = -1; return MenuCommand::None; }
-    const int horizontal = int(repeat(KEY_RIGHT)) - int(repeat(KEY_LEFT));
-    if (horizontal) { dropdown_ = (dropdown_ + horizontal + 4) % 4; item_ = 0; }
-    const int vertical = int(repeat(KEY_DOWN)) - int(repeat(KEY_UP));
-    item_ = (item_ + vertical + counts[dropdown_]) % counts[dropdown_];
-    if (mouse_enabled && (GetMouseDelta().x != 0 || GetMouseDelta().y != 0)) {
-        for (int i = 0; i < 4; ++i) if (hit(title_rect(i))) { if (dropdown_ != i) open(i); }
-        for (int i = 0; i < counts[dropdown_]; ++i) if (hit(item_rect(dropdown_, i))) item_ = i;
+    if (dropdown_ < 0) {
+        if (mode_ == MenuMode::Game && input.escape) { interacted_ = true; return MenuCommand::Pause; }
+        return MenuCommand::None;
     }
-    if (IsKeyPressed(KEY_ENTER) || (click && hit(item_rect(dropdown_, item_)))) {
-        const auto command = menus[dropdown_][item_].command;
+    interacted_ = true;
+    if (input.escape) { dropdown_ = -1; return MenuCommand::None; }
+    if (input.horizontal) { dropdown_ = (dropdown_ + input.horizontal + total) % total; item_ = 0; }
+    const auto& menu = menus(mode_)[dropdown_];
+    item_ = (item_ + input.vertical + menu.count) % menu.count;
+    if (input.mouse_enabled && input.moved) {
+        for (int i = 0; i < total; ++i) if (over(title_rect(mode_, i))) { if (dropdown_ != i) open(i); }
+        for (int i = 0; i < menus(mode_)[dropdown_].count; ++i) if (over(item_rect(mode_, dropdown_, i))) item_ = i;
+    }
+    if (input.enter || (click && over(item_rect(mode_, dropdown_, item_)))) {
+        const auto command = menus(mode_)[dropdown_].items[item_].command;
+        if (!enabled(command, state)) return MenuCommand::None;
         dropdown_ = -1;
-        if (command == MenuCommand::Controllers || command == MenuCommand::Controls || command == MenuCommand::About) { show(command); return MenuCommand::None; }
         return command;
     }
-    if (click && !hit(dropdown_rect(dropdown_))) dropdown_ = -1;
+    if (click && !over(dropdown_rect(mode_, dropdown_))) dropdown_ = -1;
     return MenuCommand::None;
 }
-void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path& path) const {
+void MenuBar::draw(const MenuState& state) const {
     DrawRectangle(0, 0, GetScreenWidth(), menu_height, gray);
-    DrawLine(0, menu_height - 1, GetScreenWidth(), menu_height - 1, WHITE);
-    for (int i = 0; i < 4; ++i) {
-        const auto r = title_rect(i);
+    DrawLine(0, menu_height - 1, GetScreenWidth(), menu_height - 1, blue);
+    DrawRectangleLines(10, 7, 22, 18, blue);
+    DrawRectangle(14, 11, 14, 6, blue);
+    DrawLine(18, 21, 24, 21, blue);
+    for (int i = 0; i < menu_count(mode_); ++i) {
+        const auto r = title_rect(mode_, i);
         if (dropdown_ == i) DrawRectangleRec(r, blue);
-        text(titles[i], r.x + 12, 6, 19, dropdown_ == i ? RAYWHITE : ink);
+        text(menus(mode_)[i].title, r.x + 16, 6, 19, dropdown_ == i ? ui::dos_yellow : ink);
     }
     if (dropdown_ >= 0) {
-        box(dropdown_rect(dropdown_));
-        for (int i = 0; i < counts[dropdown_]; ++i) {
-            const auto r = item_rect(dropdown_, i);
+        box(dropdown_rect(mode_, dropdown_));
+        const auto& menu = menus(mode_)[dropdown_];
+        for (int i = 0; i < menu.count; ++i) {
+            const auto r = item_rect(mode_, dropdown_, i);
             if (item_ == i) DrawRectangleRec(r, blue);
-            const auto& item = menus[dropdown_][i];
-            text(item.command == MenuCommand::AimMode ? (mapping.auto_lock ? "Aim mode: Auto lock" : "Aim mode: Free aim") : item.label,
-                r.x + 10, r.y + 7, 17, item_ == i ? RAYWHITE : ink);
+            const auto& item = menu.items[i];
+            const Color color = !enabled(item.command, state) ? ui::dos_light_blue : item_ == i ? ui::dos_yellow : ink;
+            if (checked(item.command, state)) text("*", r.x + 8, r.y + 7, 17, color);
+            text(item.label, r.x + 28, r.y + 7, 17, color);
+            text(item.shortcut, r.x + r.width - 12 - ui::measure_text(item.shortcut, 17), r.y + 7, 17, color);
         }
+    }
+}
+void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path&) const {
+    draw();
+    if (mode_ == MenuMode::Game && dropdown_ == 2) {
+        const auto r = item_rect(mode_, dropdown_, 2);
+        text(mapping.auto_lock ? "Aim mode: Auto lock" : "Aim mode: Free aim", r.x + 28, r.y + 7, 17, item_ == 2 ? ui::dos_yellow : ink);
     }
     if (popup_ == MenuCommand::None) return;
     DrawRectangle(0, menu_height, GetScreenWidth(), GetScreenHeight() - menu_height, {0, 0, 0, 150});
-    const auto r = panel_rect(); box(r, blue);
-    text(popup_ == MenuCommand::Controllers ? "SETTINGS / CONTROLLER MAPPING" : popup_ == MenuCommand::Controls ? "HELP / CONTROLS" : "HELP / ABOUT", r.x + 20, r.y + 16, 22, YELLOW);
+    const auto r = panel_rect();
+    ui::draw_window(r, popup_ == MenuCommand::Controllers ? "SETTINGS / CONTROLLER MAPPING" : popup_ == MenuCommand::Controls ? "HELP / CONTROLS" : "HELP / ABOUT");
+    ui::draw_window_close(r);
     if (popup_ == MenuCommand::Controllers) {
-        text("Tab: control mode. Up/Down: action. Left/Right: binding. Scroll either list.", r.x + 20, r.y + 50, 15, RAYWHITE);
         BeginScissorMode(int(r.x + 20), int(r.y + 74), int(r.width - 40), 19);
         text(devices_.empty() ? "Controller detection runs during interactive play." : devices_.c_str(), r.x + 20, r.y + 74, 15, YELLOW);
         EndScissorMode();
@@ -190,7 +254,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             text(action_groups[i].label, tab.x + 10, tab.y + 5, 16, i == group_ ? RAYWHITE : ink);
         }
         text("ACTION", r.x + 20, r.y + 132, 16, YELLOW);
-        text(capturing_ ? "WAITING FOR INPUT..." : "BINDINGS (click to select)", r.x + 456, r.y + 132, 16, YELLOW);
+        text(capturing_ ? "WAITING FOR INPUT..." : "BINDINGS", r.x + 456, r.y + 132, 16, YELLOW);
         const auto& list = mapping.bindings[selected_];
         const int group_first = int(action_groups[group_].first), group_end = int(action_groups[group_].end);
         const int first = group_first + first_row(selected_ - group_first, group_end - group_first), binding_first = first_row(binding_, int(list.size()));
@@ -206,14 +270,12 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
                 text(binding_label(list[binding_first + i]).c_str(), row.x + 6, row.y + 5, 16, RAYWHITE);
             }
         }
-        if (list.empty()) text("Unbound - choose Add binding", r.x + 462, r.y + 159, 16, GRAY);
-        text(status_.empty() ? "Insert: add   Delete: remove   Enter/Esc: save and close" : status_.c_str(), r.x + 20, r.y + r.height - 106, 15, YELLOW);
+        if (list.empty()) text("Unbound", r.x + 462, r.y + 159, 16, GRAY);
+        text(status_.c_str(), r.x + 20, r.y + r.height - 106, 15, YELLOW);
         button(0, capturing_ ? "Listening..." : "Add binding"); button(1, "Remove binding"); button(2, "Defaults");
         button(3, TextFormat("Deadzone: %d%%", int(std::round(mapping.deadzone * 100)))); button(4, "Save & close");
-        const std::string filename = path.filename().string();
-        text(("Saved beside the executable: " + filename + (dirty_ ? "  (unsaved changes)" : "")).c_str(), r.x + 20, r.y + r.height - 32, 14, RAYWHITE);
     } else if (popup_ == MenuCommand::Controls) {
-        text("Keyboard and gamepad defaults. Edit bindings in Settings > Controller mapping.", r.x + 20, r.y + 58, 16, RAYWHITE);
+        text("Keyboard and gamepad defaults. Edit bindings in the main menu's Settings.", r.x + 20, r.y + 58, 16, RAYWHITE);
         constexpr const char* lines[] = {
             "Car: W/S or left stick. Opposite direction brakes, then reverses. Space / B: handbrake.",
             "Car horn: H / right-stick click. E / Y: exit, or jump out while moving and tumble.",
@@ -227,16 +289,16 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             "Plane throttle: Shift/Ctrl or RT/LT. Rudder: arrows or LB/RB. Flaps: F / X.",
             "Camera: mouse / right stick. Zoom: wheel / D-pad down or left.",
             "Recover vehicle: R / D-pad up. Respawn on foot: F5 / D-pad up. Map: F2 / Back.",
-            "Esc: map / close. Start: pause/resume. F10: menubar; arrows and Enter navigate.",
+            "Esc: release mouse / close. Start: capture/release mouse. F10: menubar.",
             "Tuning: drag sliders; arrows adjust; Shift is fine adjustment.",
-            "Tuning camera: right-drag outside panel; scroll to zoom. Menus pause physics."
+            "Tuning camera: right-drag outside panel; scroll to zoom. The map pauses physics."
         };
         const int spacing = std::min(30, int((r.height - 220) / std::size(lines)));
         for (int i = 0; i < int(std::size(lines)); ++i) text(lines[i], r.x + 20, r.y + 108 + i * spacing, 16, RAYWHITE);
         button(4, "Close");
     } else {
         text("AMBARETTO", r.x + 20, r.y + 90, 26, RAYWHITE);
-        text("Explore Miami and the Florida Keys by car, on foot, or by plane.", r.x + 20, r.y + 145, 18, RAYWHITE);
+        text("Build an island city, then explore by car, on foot, or by plane.", r.x + 20, r.y + 145, 18, RAYWHITE);
         text("Built with C++17, raylib and Jolt Physics.", r.x + 20, r.y + 180, 18, RAYWHITE);
         button(4, "Close");
     }

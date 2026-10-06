@@ -2,6 +2,7 @@
 #include <raymath.h>
 #include <rlgl.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -117,6 +118,31 @@ void main() {
     float fog = smoothstep(viewDistance * 0.65, viewDistance, distance(cameraPosition.xz, worldPosition.xz));
     finalColor = vec4(mix(shaded, horizonColor, fog) * brightness, surface.a);
 })glsl";
+const char* damage_fragment = R"glsl(#version 330
+in vec2 fragTexCoord;
+in vec4 fragColor;
+uniform float effectTime;
+uniform int fire;
+out vec4 finalColor;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p) {
+    vec2 cell = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(cell), hash(cell + vec2(1, 0)), f.x),
+               mix(hash(cell + vec2(0, 1)), hash(cell + vec2(1, 1)), f.x), f.y);
+}
+void main() {
+    vec2 p = fragTexCoord * 2.0 - 1.0;
+    vec2 flow = p * 3.0 + vec2(effectTime * 0.3, -effectTime * 0.7);
+    float cloud = noise(flow) * 0.6 + noise(flow * 2.0) * 0.3 + noise(flow * 4.0) * 0.1;
+    float edge = 1.0 - smoothstep(0.25, 1.0, length(p) + (cloud - 0.5) * 0.18);
+    vec3 color = fragColor.rgb * mix(0.65, 1.15, cloud);
+    if (fire == 1) {
+        float core = 1.0 - smoothstep(0.0, 0.8, length(p));
+        color = mix(vec3(1.0, 0.18, 0.015), vec3(1.0, 0.9, 0.45), core * cloud) * fragColor.rgb;
+    }
+    finalColor = vec4(color, fragColor.a * edge * mix(0.65, 1.0, cloud));
+})glsl";
 } // namespace
 
 CarRenderer::CarRenderer() {
@@ -125,6 +151,9 @@ CarRenderer::CarRenderer() {
     shader_.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(shader_, "matNormal");
     camera_location_ = GetShaderLocation(shader_, "cameraPosition");
     emission_location_ = GetShaderLocation(shader_, "emissionColor");
+    damage_shader_ = LoadShaderFromMemory(nullptr, damage_fragment);
+    damage_time_location_ = GetShaderLocation(damage_shader_, "effectTime");
+    damage_fire_location_ = GetShaderLocation(damage_shader_, "fire");
     load_body();
     load_wheel();
 }
@@ -221,6 +250,52 @@ CarRenderer::~CarRenderer() {
     if (body_.meshes || body_.materials) UnloadModel(body_);
     if (wheel_.meshes || wheel_.materials) UnloadModel(wheel_);
     if (shader_.id != 0) UnloadShader(shader_);
+    if (damage_shader_.id != 0) UnloadShader(damage_shader_);
+}
+
+void CarRenderer::draw_damage(const Camera3D& camera, Vec3 center, bool wreck, float age, float size, float time) const {
+    if (wreck && age >= 8) return;
+    const Texture2D white{rlGetTextureIdDefault(), 1, 1, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    const Vector3 direction = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
+    const Vector3 right = Vector3Normalize(Vector3CrossProduct(direction, camera.up));
+    const Vector3 up = Vector3CrossProduct(right, direction);
+    const float phase = wreck ? age : time;
+    const auto puff = [&](Vec3 p, float radius, Color tint) {
+        DrawBillboardPro(camera, white, {0, 0, 1, 1}, {p.GetX(), p.GetY(), p.GetZ()}, up,
+            {radius * 2, radius * 2}, {.5f, .5f}, 0, tint);
+    };
+    BeginShaderMode(damage_shader_);
+    SetShaderValue(damage_shader_, damage_time_location_, &phase, SHADER_UNIFORM_FLOAT);
+    // Keep opaque scene occlusion, but let translucent puffs overlap without cutting each other off.
+    rlDrawRenderBatchActive();
+    rlDisableDepthMask();
+    int fire = 1;
+    if (wreck && age < .8f) {
+        SetShaderValue(damage_shader_, damage_fire_location_, &fire, SHADER_UNIFORM_INT);
+        BeginBlendMode(BLEND_ADDITIVE);
+        for (int i = 0; i < 8; ++i) {
+            const float angle = i * .78539816f;
+            const Vec3 p = center + Vec3(std::cos(angle), .5f, std::sin(angle)) * (age * 4 * size);
+            puff(p, (.6f + age * 2.5f) * size, Fade(WHITE, .45f * std::pow(1 - age / .8f, 2)));
+        }
+        EndBlendMode();
+    }
+    fire = 0;
+    SetShaderValue(damage_shader_, damage_fire_location_, &fire, SHADER_UNIFORM_INT);
+    struct Smoke { Vec3 p; float radius, alpha; };
+    std::array<Smoke, 6> smoke;
+    for (int i = 0; i < int(smoke.size()); ++i) {
+        const float rise = std::fmod(phase * .7f + i / 6.f, 1.f), angle = i * 2.4f;
+        smoke[i] = {center + Vec3(std::cos(angle) * rise, .7f + rise * 4, std::sin(angle) * rise) * size,
+            (.25f + rise * (wreck ? 1.3f : .6f)) * size,
+            std::sin(rise * PI) * .65f * (wreck ? 1 - age / 8 : 1)};
+    }
+    const Vec3 eye(camera.position.x, camera.position.y, camera.position.z);
+    std::sort(smoke.begin(), smoke.end(), [&](const Smoke& a, const Smoke& b) { return (a.p - eye).LengthSq() > (b.p - eye).LengthSq(); });
+    for (const auto& s : smoke) puff(s.p, s.radius, Fade(wreck ? Color{48, 44, 40, 255} : GRAY, s.alpha));
+    rlDrawRenderBatchActive();
+    rlEnableDepthMask();
+    EndShaderMode();
 }
 
 bool CarRenderer::draw_body(const Car& car, const Camera3D& camera, Color paint, Shader override_shader) const {

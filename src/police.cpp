@@ -72,7 +72,7 @@ Police::Police(PhysicsWorld& world, const Environment& environment, Traffic* tra
     }
 }
 void Police::build_roads() {
-    const auto& source = environment_.roads();
+    const auto& source = environment_.road_segments();
     std::vector<std::vector<float>> cuts(source.size(), {0, 1});
     for (std::size_t i = 0; i < source.size(); ++i) {
         const Vec3 a = source[i].a, u = flat(source[i].b - a);
@@ -198,17 +198,28 @@ bool Police::spawn(PoliceUnit& unit, const Player& player, std::size_t index) {
     if (roads_.empty()) return false;
     const Vec3 center = wanted_.stars() ? wanted_.last_seen() : player.position();
     const int destination = nearest_node(center);
+    const float usual_minimum = wanted_.stars() ? 110.f : 55.f;
+    float component_radius = usual_minimum*2;
+    if (environment_.city()) {
+        component_radius = 0;
+        for (const auto& node : roads_) if (node.component==roads_[destination].component)
+            component_radius = std::max(component_radius,flat(node.point-center).Length());
+    }
+    const float minimum = environment_.city() ? std::min(usual_minimum,std::max(12.f,component_radius*.45f)) : usual_minimum;
+    const float player_clearance = environment_.city() ? std::min(45.f,minimum*.7f) : 45.f;
     const std::size_t start = (++spawn_sequence_ * 71 + index * 113) % roads_.size();
     for (std::size_t attempt = 0; attempt < roads_.size(); ++attempt) {
         const auto& node = roads_[(start + attempt) % roads_.size()];
         if (node.component != roads_[destination].component) continue;
         const float distance = flat(node.point - center).Length();
-        if (distance < (wanted_.stars() ? 110.f : 55.f) || distance > (wanted_.stars() ? 240.f : 140.f) || node.edges.empty()) continue;
+        if (distance < minimum || distance > (wanted_.stars() ? 240.f : 140.f) || node.edges.empty()) continue;
         Vec3 direction = flat(roads_[node.edges.front().first].point - node.point).NormalizedOr(Vec3(0, 0, -1));
         if (direction.Dot(flat(center - node.point)) < 0) direction = -direction;
         if (!wanted_.stars() && std::abs(node.point.GetY() - environment_.terrain_height(node.point.GetX(), node.point.GetZ())) > .3f) continue;
         const Vec3 position = node.point + direction.Cross(Vec3::sAxisY()) * (wanted_.stars() ? 2.2f : node.width / 2 - 1.8f) + Vec3(0, .56f, 0);
-        if ((position - player.position()).LengthSq() < 45 * 45 || camera_visible(position) || environment_.submerged(position)) continue;
+        // A small island may have no road outside the camera; retain safe spacing there.
+        if ((position - player.position()).LengthSq() < player_clearance*player_clearance
+            || (component_radius>=usual_minimum && camera_visible(position)) || environment_.submerged(position)) continue;
         const auto occupied = [&](const Car& other) { return other.simulated() && (other.position() - position).LengthSq() < 9 * 9; };
         bool blocked = occupied(player.car());
         if (traffic_) for (const auto& other : traffic_->cars()) blocked |= occupied(*other.car);

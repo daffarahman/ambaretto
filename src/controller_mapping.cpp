@@ -26,7 +26,7 @@ const std::array<const char*, action_count> action_labels{{
     "Pitch down", "Pitch up", "Bank left", "Bank right", "Throttle up", "Throttle down", "Rudder left", "Rudder right",
     "Toggle flaps", "Wheel brake", "Exit plane", "Recover plane",
     "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out",
-    "World map", "Pause / resume"
+    "World map", "Capture / release mouse"
 }};
 const std::array<ActionGroup, 4> action_groups{{
     {"On foot", Action::FootForward, Action::Forward},
@@ -191,7 +191,7 @@ void ControllerMapping::defaults() {
         key(a, KEY_R); button(a, GAMEPAD_BUTTON_LEFT_FACE_UP);
     }
     key(Action::Respawn, KEY_F5); button(Action::Respawn, GAMEPAD_BUTTON_LEFT_FACE_UP);
-    key(Action::Map, KEY_F2); key(Action::Map, KEY_ESCAPE); key(Action::Tuning, KEY_F3);
+    key(Action::Map, KEY_F2); key(Action::Tuning, KEY_F3);
     button(Action::Sprint, GAMEPAD_BUTTON_LEFT_THUMB); button(Action::Jump, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
     axis(Action::ThrottleUp, GAMEPAD_AXIS_RIGHT_TRIGGER); axis(Action::ThrottleDown, GAMEPAD_AXIS_LEFT_TRIGGER);
     button(Action::RudderLeft, GAMEPAD_BUTTON_LEFT_TRIGGER_1); button(Action::RudderRight, GAMEPAD_BUTTON_RIGHT_TRIGGER_1);
@@ -291,6 +291,8 @@ bool ControllerMapping::load(const std::filesystem::path& path, std::string& err
         if (!ok) { error = "Invalid mapping at line " + std::to_string(line_number); return false; }
     }
     if (!version || file.bad()) { error = "Incomplete controller mapping file"; return false; }
+    auto& map = candidate.bindings[int(Action::Map)];
+    map.erase(std::remove(map.begin(), map.end(), Binding{BindingKind::Key, KEY_ESCAPE}), map.end());
     bindings = std::move(candidate.bindings); deadzone = candidate.deadzone; auto_lock = candidate.auto_lock;
     values_ = {}; pressed_ = {};
     return true;

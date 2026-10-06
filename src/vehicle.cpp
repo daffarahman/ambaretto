@@ -285,7 +285,7 @@ void PhysicsWorld::step(float dt) {
         }
     };
     for (auto* car : impl_->cars) advance_damage(car, car->simulated());
-    for (auto* plane : impl_->planes) advance_damage(plane, true);
+    for (auto* plane : impl_->planes) advance_damage(plane, plane->simulated());
     // Consume each blast once, including vehicles destroyed by another blast.
     bool exploded;
     do {
@@ -321,7 +321,7 @@ void PhysicsWorld::step(float dt) {
             }
         };
         for (auto* car : impl_->cars) explode(car, mass, 10, car->simulated());
-        for (auto* plane : impl_->planes) explode(plane, plane->specs().mass, plane->explosion_radius(), true);
+        for (auto* plane : impl_->planes) explode(plane, plane->specs().mass, plane->explosion_radius(), plane->simulated());
     } while (exploded);
 }
 
@@ -450,9 +450,16 @@ Plane::Plane(PhysicsWorld& world, PlaneType type) : world_(world), type_(type) {
 Plane::~Plane() {
     auto& physics = world_.impl_->system.GetBodyInterface();
     physics.SetUserData(body_, 0);
-    physics.RemoveBody(body_);
+    if (simulated_) physics.RemoveBody(body_);
     auto& planes = world_.impl_->planes;
     planes.erase(std::remove(planes.begin(), planes.end(), this), planes.end());
+}
+void Plane::set_simulated(bool simulated) {
+    if (simulated == simulated_) return;
+    auto& physics = world_.impl_->system.GetBodyInterface();
+    if (simulated) physics.AddBody(body_,JPH::EActivation::Activate);
+    else physics.RemoveBody(body_);
+    simulated_ = simulated;
 }
 void Plane::take_damage(float amount, bool by_player) {
     damage_.take_damage(amount, position(), by_player);
@@ -471,6 +478,14 @@ Vec3 Plane::boarding_position() const {
 }
 std::vector<std::unique_ptr<Plane>> parked_aircraft(PhysicsWorld& world, const Environment& environment) {
     std::vector<std::unique_ptr<Plane>> result;
+    if (const auto* city = environment.city()) {
+        for (auto v : city->vehicles) if (v.kind != CityVehicleKind::Car) {
+            auto plane = std::make_unique<Plane>(world,PlaneType(int(v.kind)-1));
+            plane->reset(v.position+Vec3(0,plane->parking_height(),0),v.rotation*1.57079633f);
+            result.push_back(std::move(plane));
+        }
+        return result;
+    }
     for (std::size_t a = 0; a < airports.size(); ++a) {
         const auto& airport = airports[a];
         for (int i = 0; i < 5 + (a == 1); ++i) {
@@ -519,6 +534,7 @@ void Plane::refresh_gear() {
     }
 }
 void Plane::step(FlightInput input, float dt) {
+    if (!simulated_) return;
     const auto& spec = specs();
     const float mass_scale = spec.mass / 850;
     auto& physics = world_.impl_->system.GetBodyInterface();
@@ -1495,6 +1511,7 @@ void Car::refresh_wheel_contacts() {
 }
 
 void Car::step(Input input, float dt) {
+    if (!simulated_) return;
     player_controlled_ = input.player_controlled;
     if (destroyed()) input = {0, 0, false, true};
     auto& physics = world_.impl_->system.GetBodyInterface();

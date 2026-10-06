@@ -115,9 +115,9 @@ int main() {
         ControllerState escape;
         escape.keys[KEY_ESCAPE] = true;
         mapping.update(escape);
-        require(mapping.pressed(Action::Map) && !mapping.pressed(Action::Pause), "Escape must open the map instead of pause");
+        require(!mapping.pressed(Action::Map) && !mapping.pressed(Action::Pause), "Escape must release the cursor outside mapped gameplay actions");
         mapping.update(escape);
-        require(!mapping.pressed(Action::Map), "held Escape repeatedly toggled the map");
+        require(!mapping.pressed(Action::Map), "held Escape triggered the map");
         mapping.update({});
         require(mapping.add(Action::Forward, {BindingKind::Key, KEY_UP}), "extra key rejected");
         require(mapping.add(Action::Forward, {BindingKind::Button, GAMEPAD_BUTTON_RIGHT_FACE_DOWN}), "extra gamepad button rejected");
@@ -230,6 +230,12 @@ int main() {
             loaded.bindings[int(Action::Horn)].empty(), "explicitly unbound horn or existing INI section was not preserved");
         require(loaded.save(path, error) && mapping.load(path, error) && mapping.bindings[int(Action::Horn)].empty(),
             "intentionally unbound horn did not round-trip");
+        std::ofstream(path) << "version=2\n[map]\nkey=291\nkey=256\nbutton=13\n[car_horn]\n";
+        require(loaded.load(path,error) && loaded.bindings[int(Action::Horn)].empty(), "legacy Escape migration changed other bindings");
+        loaded.update(escape);
+        require(!loaded.pressed(Action::Map), "saved Escape map binding was not removed");
+        ControllerState map_key; map_key.keys[KEY_F2] = true; loaded.update(map_key);
+        require(loaded.pressed(Action::Map), "F2 stopped opening the map after Escape migration");
         require(!loaded.save(folder / "missing" / "controls.ini", error), "save error was hidden");
         std::filesystem::remove(path);
         std::filesystem::remove(folder);

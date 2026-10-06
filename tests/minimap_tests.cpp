@@ -17,6 +17,14 @@ int main() {
         using forza::Vec3;
         const Vec3 player(120, 4, -350);
         const float extent = 5120;
+        for (const auto size : {Vector2{1024,600},Vector2{1280,720},Vector2{1920,1080}}) {
+            const forza::WorldMapLayout layout(int(size.x),int(size.y));
+            const auto r = layout.window, v = layout.viewport, close = layout.buttons[4];
+            require(r.x>0 && r.y>32 && r.x+r.width<size.x && r.y+r.height<size.y,"map is not an inset window");
+            require(close.x>r.x && close.x+close.width<r.x+r.width && close.y>r.y && close.y+close.height<=r.y+31,"close button leaves title bar");
+            require(v.y>r.y+31 && v.x>r.x && v.x+v.width<r.x+r.width && v.y+v.height<r.y+r.height,"map content escapes window");
+            for (int i = 0; i < 4; ++i) require(layout.buttons[i].y+layout.buttons[i].height<v.y,"map button overlaps map content");
+        }
         for (Vec3 direction : {Vec3(0, 0, -1), Vec3(1, 0, 0), Vec3(0, 0, 1), Vec3(-1, 0, 0), Vec3(1, 0, -1).Normalized()}) {
             const forza::MinimapView map(720, player, Vec3(0, 0, -1), looking(direction));
             require(near(map.project(player), map.anchor), "player moved away from map anchor");

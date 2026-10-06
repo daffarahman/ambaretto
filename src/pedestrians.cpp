@@ -20,7 +20,7 @@ std::size_t next_point(const Pedestrian& person, std::size_t target, std::size_t
 bool Pedestrians::walkable(Vec3 p) const {
     const float ground = environment_.terrain_height(p.GetX(), p.GetZ());
     if (ground < 1 || std::abs(environment_.ground_height(p.GetX(), p.GetZ()) - ground) > .2f) return false;
-    for (const auto& airport : airports) if (airport.contains(p.GetX(), p.GetZ())) return false;
+    if (!environment_.city()) for (const auto& airport : airports) if (airport.contains(p.GetX(), p.GetZ())) return false;
     for (const auto& building : environment_.buildings()) {
         const Vec3 relative = p - building.solid_center(), half = building.solid_size() / 2;
         if (std::abs(relative.GetX()) < half.GetX() + .5f && std::abs(relative.GetZ()) < half.GetZ() + .5f) return false;
@@ -37,7 +37,21 @@ bool Pedestrians::walkable(Vec3 p) const {
 }
 
 Pedestrians::Pedestrians(PhysicsWorld& world, const Environment& environment) : world_(world), environment_(environment) {
-    for (const auto& loop : environment.street_loops()) {
+    if (environment.city()) for (const auto& road : environment.road_segments()) {
+        const Vec3 side = flat(road.b-road.a).Normalized().Cross(Vec3::sAxisY())*(road.width/2);
+        for (float sign : {-1.f,1.f}) {
+            std::vector<Vec3> route;
+            const Vec3 a = road.a+side*sign, b = road.b+side*sign;
+            const int count = std::max(2,int((b-a).Length()/3)); bool valid = true;
+            for (int i = 0; i <= count; ++i) {
+                Vec3 p = a+(b-a)*(float(i)/count)+Vec3(0,.08f,0);
+                if (!walkable(p)) { valid = false; break; }
+                route.push_back(p);
+            }
+            if (valid) { for (int i = count-1; i > 0; --i) route.push_back(route[std::size_t(i)]); routes_.push_back(std::move(route)); }
+        }
+    }
+    for (const auto& loop : environment.street_routes()) {
         if (!loop.closed || loop.corners.size() < 3) continue;
         const std::size_t count = loop.corners.size();
         float area = 0;
@@ -52,7 +66,7 @@ Pedestrians::Pedestrians(PhysicsWorld& world, const Environment& environment) : 
             const Vec3 a = loop.corners[i], b = loop.corners[(i + 1) % count];
             const Vec3 direction = flat(b - a).Normalized();
             float width = loop.width;
-            for (const auto& road : environment.roads())
+            for (const auto& road : environment.road_segments())
                 if (road.bridge < 0 && segment_distance((a + b) / 2, road.a, road.b) < .01f
                     && std::abs(direction.Dot(flat(road.b - road.a).Normalized())) > .99f)
                     width = std::max(width, road.width);

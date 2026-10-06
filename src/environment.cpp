@@ -666,7 +666,7 @@ float Environment::elevation(float x, float z) {
 Surface Environment::surface(float x, float z, float y) {
     if (y < -.1f) return Surface::Seabed;
     if (road(x, z)) return Surface::Road;
-    return coast_radius(x, z) > .86f ? Surface::Sand : Surface::Grass;
+    return Surface::Soil;
 }
 
 Environment::Environment() {
@@ -944,6 +944,17 @@ Environment::Environment() {
         }
 }
 float Environment::terrain_height(float x, float z) const {
+    if (city_) {
+        if (city_->land(City::cell(x,z))) return city_->height(x,z);
+        if (city_heights_.empty() || std::abs(x)>=city_mesh_extent || std::abs(z)>=city_mesh_extent) return -8;
+        const float gx = (x+city_mesh_extent)/city_mesh_spacing, gz = (z+city_mesh_extent)/city_mesh_spacing;
+        const int ix = std::min(int(gx),city_mesh_width-2), iz = std::min(int(gz),city_mesh_width-2);
+        const float u = gx-ix, v = gz-iz;
+        const int a = iz*city_mesh_width+ix;
+        const float ha = city_heights_[a], hb = city_heights_[a+city_mesh_width];
+        const float hc = city_heights_[a+city_mesh_width+1], hd = city_heights_[a+1];
+        return v>=u ? ha+v*(hb-ha)+u*(hc-hb) : ha+u*(hd-ha)+v*(hc-hd);
+    }
     const float gx = std::clamp((x + extent) / spacing, 0.0f, float(samples - 1));
     const float gz = std::clamp((z + extent) / spacing, 0.0f, float(samples - 1));
     const int ix = std::min(int(gx), samples - 2), iz = std::min(int(gz), samples - 2);
@@ -955,17 +966,32 @@ float Environment::terrain_height(float x, float z) const {
         : hd + (1 - u) * (hc - hd) + (1 - v) * (hb - hd);
 }
 float Environment::height(float x, float z) const {
+    if (city_) {
+        const auto cell = City::cell(x,z);
+        if (city_->tile(cell)!=CityTile::Bridge) return terrain_height(x,z);
+        const int owner = city_diagonal_bridge_owner_[City::index(cell)];
+        if (owner<0) return city_->height(x,z);
+        const auto& deck = city_diagonal_bridge_decks_[owner];
+        for (std::size_t i = 0; i < deck.size(); ++i) {
+            const Vec3 a = deck[i], b = deck[(i+1)%deck.size()];
+            if ((b.GetZ()-a.GetZ())*(x-a.GetX())-(b.GetX()-a.GetX())*(z-a.GetZ())<-.0001f)
+                return terrain_height(x,z);
+        }
+        return city_->height(x,z);
+    }
     float ground = terrain_height(x, z);
     for (const auto& bridge : bridges()) ground = std::max(ground, deck_height(bridge, x, z));
     return ground;
 }
 float Environment::ground_height(float x, float z) const {
+    if (city_) return height(x,z);
     float ground = terrain_height(x, z);
     for (const auto& bridge : bridges()) if (bridge.a.GetY() <= 0 || bridge.clearance <= Airport::elevation)
         ground = std::max(ground, deck_height(bridge, x, z));
     return ground;
 }
 float Environment::road_height(const Road& road, float x, float z) const {
+    if (city_) return height(x,z);
     float level = ground_height(x, z);
     if (road.bridge >= 0) {
         const auto& bridge = bridges()[std::size_t(road.bridge)];
@@ -981,6 +1007,11 @@ float Environment::road_height(const Road& road, float x, float z) const {
     return top;
 }
 float Environment::surface_height(Vec3 reference) const {
+    if (city_) {
+        const float ground = terrain_height(reference.GetX(),reference.GetZ());
+        const float top = height(reference.GetX(),reference.GetZ());
+        return reference.GetY()>=top-.6f ? top : ground;
+    }
     float best = ground_height(reference.GetX(), reference.GetZ());
     float difference = std::abs(reference.GetY() - best);
     for (const auto& bridge : bridges()) {

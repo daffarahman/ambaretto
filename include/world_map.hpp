@@ -1,9 +1,22 @@
 #pragma once
 
 #include "minimap.hpp"
+#include "ui_font.hpp"
 #include <algorithm>
+#include <array>
 
 namespace forza {
+struct WorldMapLayout {
+    Rectangle window, viewport;
+    std::array<Rectangle,5> buttons;
+    WorldMapLayout(int width,int height) {
+        const float w = float(std::min(1120,width-96)), h = float(std::min(760,height-112));
+        window = {(width-w)/2,(height-h)/2+16,w,h};
+        viewport = {window.x+12,window.y+84,w-24,h-96};
+        buttons = {{{window.x+18,window.y+44,94,30},{window.x+120,window.y+44,94,30},
+            {window.x+222,window.y+44,42,30},{window.x+272,window.y+44,42,30},ui::window_close(window)}};
+    }
+};
 struct WorldMapView {
     Vector2 center{0, 0};
     float scale = .5f;

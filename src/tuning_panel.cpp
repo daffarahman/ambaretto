@@ -2,12 +2,11 @@
 #include "tuning_panel.hpp"
 #include <algorithm>
 #include <cmath>
-#include <sstream>
 #include <string>
 
 namespace forza {
 namespace {
-constexpr Color background{0, 0, 128, 255}, muted{192, 192, 192, 255};
+constexpr Color muted{192, 192, 192, 255};
 constexpr Color selected_color{0, 128, 128, 255}, ink{0, 0, 0, 255};
 constexpr Color accent = YELLOW, track_color = muted;
 constexpr std::array<int, 3> tab_starts{{0, suspension_controls, suspension_controls + handling_controls}};
@@ -23,7 +22,7 @@ struct Layout {
         const auto r = row(index);
         return {r.x, r.y + 23, r.width, 10};
     }
-    Rectangle close() const { return {panel.x + panel.width - 42, panel.y + 12, 26, 26}; }
+    Rectangle close() const { return ui::window_close(panel); }
     Rectangle button(int index) const { return {panel.x + 18 + index * 118, panel.y + panel.height - 58, 110, 30}; }
 };
 void button(Rectangle r, const char* text, bool selected = false) {
@@ -34,19 +33,6 @@ void button(Rectangle r, const char* text, bool selected = false) {
     while (size > 10 && forza::ui::measure_text(text, size) > r.width - 12) --size;
     forza::ui::draw_text(text, int(r.x + (r.width - forza::ui::measure_text(text, size)) / 2),
         int(r.y + (r.height - size) / 2), size, selected || hover ? RAYWHITE : ink);
-}
-void wrapped(const char* text, int x, int y, int width) {
-    std::istringstream words(text);
-    std::string word, line;
-    while (words >> word) {
-        const auto next = line.empty() ? word : line + " " + word;
-        if (forza::ui::measure_text(next.c_str(), 14) > width && !line.empty()) {
-            forza::ui::draw_text(line.c_str(), x, y, 14, muted);
-            y += 18;
-            line = word;
-        } else line = next;
-    }
-    forza::ui::draw_text(line.c_str(), x, y, 14, muted);
 }
 } // namespace
 
@@ -113,12 +99,8 @@ TuningPanelAction TuningPanel::update(Car& car, int width, int height, const Tun
 void TuningPanel::draw(const Car& car, int width, int height) const {
     const Layout layout(bounds(width, height));
     const auto r = layout.panel;
-    DrawRectangleRec({r.x + 5, r.y + 5, r.width, r.height}, {0, 0, 0, 160});
-    DrawRectangleRec(r, background);
-    DrawRectangleLinesEx(r, 2, RAYWHITE);
-    forza::ui::draw_text("CAR TUNING", int(r.x + 18), int(r.y + 15), 23, YELLOW);
-    forza::ui::draw_text("LIVE / parking brake   Esc closes", int(r.x + 18), int(r.y + 44), 13, RAYWHITE);
-    button(layout.close(), "X");
+    ui::draw_window(r,"CAR TUNING");
+    ui::draw_window_close(r);
     button(layout.tab(0), "Suspension", tab_ == 0);
     button(layout.tab(1), "Handling", tab_ == 1);
     button(layout.tab(2), "Performance", tab_ == 2);
@@ -139,7 +121,6 @@ void TuningPanel::draw(const Car& car, int width, int height) const {
         const float thumb_width = dragging_ == id ? 14.0f : 10.0f;
         DrawRectangleRec({slider.x + slider.width * fraction - thumb_width / 2, slider.y - 2, thumb_width, 14}, RAYWHITE);
     }
-    wrapped(tuning_controls[selected_].hint, int(r.x + 18), int(r.y + r.height - 190), 348);
     forza::ui::draw_text("WHEEL CONTACT / compression / load", int(r.x + 18), int(r.y + r.height - 141), 13, muted);
     constexpr const char* names[] = {"FL", "FR", "RL", "RR"};
     for (int i = 0; i < 4; ++i) {
@@ -151,8 +132,6 @@ void TuningPanel::draw(const Car& car, int width, int height) const {
     }
     button(layout.button(0), "Defaults");
     button(layout.button(1), "Reset car");
-    button(layout.button(2), "Close / Esc");
-    forza::ui::draw_text("Arrows: select / adjust   Shift: fine", int(r.x + 18), int(r.y + r.height - 18), 12, muted);
-    forza::ui::draw_text("RMB drag outside panel: orbit   Scroll: zoom", 26, height - 82, 16, RAYWHITE);
+    button(layout.button(2), "Close");
 }
 } // namespace forza

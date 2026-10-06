@@ -47,8 +47,8 @@ bool GraphicsSettings::valid(std::string& error) const {
     if (shadows < 0 || shadows > 3) error = "Shadow quality must be Off, Low, Medium or High";
     else if (!std::isfinite(shadow_distance) || shadow_distance < 30 || shadow_distance > 180)
         error = "Shadow distance must be 30-180 m";
-    else if (!std::isfinite(view_distance) || view_distance < 500 || view_distance > 6000)
-        error = "View distance must be 500-6000 m";
+    else if (!std::isfinite(view_distance) || view_distance < 100 || view_distance > 6000)
+        error = "View distance must be 100-6000 m";
     else if (!std::isfinite(brightness) || brightness < .6f || brightness > 1.5f)
         error = "Brightness must be 60-150%";
     else if (std::find(graphics_fps_limits.begin(), graphics_fps_limits.end(), fps_limit) == graphics_fps_limits.end())

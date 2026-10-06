@@ -15,6 +15,12 @@ Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Pl
 
 void Player::reset() {
     world_.take_player_kill();
+    if (environment_.city() && (car_ == &starter_car_ || on_foot())) {
+        starter_car_.set_simulated(false);
+        starter_car_.reset({-9000,-8,-9000});
+        respawn_on_foot(environment_.spawn()-Vec3(0,.48f,0));
+        return;
+    }
     Vec3 spawn = environment_.spawn();
     // A stolen car must not recover on top of the starter or another car
     // still parked downtown. Search along the paved main avenue.
@@ -29,6 +35,14 @@ void Player::reset() {
         return false;
     };
     for (int i = 0; i < 30 && occupied(spawn); ++i) {
+        if (const auto* city = environment_.city()) {
+            const auto origin = *city->spawn;
+            const CityCell candidate{origin.x+i%5-2,origin.z+i/5-3};
+            if (city->tile(candidate)==CityTile::Water || city->building_at(candidate)>=0) continue;
+            Vec3 point = City::center(candidate); point.SetY(environment_.height(point.GetX(),point.GetZ())+.56f);
+            if (!occupied(point)) spawn = point;
+            continue;
+        }
         const float z = environment_.spawn().GetZ() + (i % 2 == 0 ? 1 : -1) * (i / 2 + 1) * 8;
         spawn = Vec3(0, environment_.height(0, z) + .56f, z);
     }
@@ -73,7 +87,7 @@ void Player::respawn_near(Vec3 origin) {
     }
     // Offshore deaths use the closest safe road, including bridge decks.
     std::vector<Vec3> roads;
-    for (const auto& road : environment_.roads()) {
+    for (const auto& road : environment_.road_segments()) {
         Vec3 direction = road.b - road.a; direction.SetY(0);
         const float t = std::clamp((origin - road.a).Dot(direction) / std::max(.001f, direction.LengthSq()), 0.f, 1.f);
         Vec3 point = road.a + direction * t;
@@ -88,6 +102,13 @@ void Player::respawn_near(Vec3 origin) {
 
 void Player::recover_plane() {
     if (!plane_) return;
+    if (const auto* city = environment_.city()) {
+        const CityVehicle* nearest = nullptr;
+        for (const auto& v : city->vehicles) if (int(v.kind) == int(plane_->type())+1
+            && (!nearest || (v.position-plane_->position()).LengthSq() < (nearest->position-plane_->position()).LengthSq())) nearest = &v;
+        if (nearest) { plane_->reset(nearest->position+Vec3(0,plane_->parking_height(),0),nearest->rotation*1.57079633f); plane_->repair(); }
+        return;
+    }
     const Airport* nearest = &airports.front();
     for (const auto& airport : airports)
         if (std::hypot(plane_->position().GetX() - airport.center_x, plane_->position().GetZ() - airport.runway_z)
@@ -124,7 +145,7 @@ Player::EntryTarget Player::entry_target() const {
         if (world_.camera_fraction(eye, position + Vec3(0, .7f, 0) - eye, body) < .98f) return;
         result = {kind, car, plane}; nearest = distance;
     };
-    consider(EntryVehicle::Car, starter_car_.position(), starter_car_.velocity(), starter_car_.body_id(), 3.3f, !starter_car_.destroyed(), &starter_car_);
+    consider(EntryVehicle::Car, starter_car_.position(), starter_car_.velocity(), starter_car_.body_id(), 3.3f, starter_car_.simulated() && !starter_car_.destroyed(), &starter_car_);
     if (traffic_) for (const auto& vehicle : traffic_->cars()) {
         auto* car = vehicle.car.get();
         consider(EntryVehicle::Car, car->position(), car->velocity(), car->body_id(), 3.3f, car->simulated() && !car->destroyed(), car);
@@ -133,7 +154,7 @@ Player::EntryTarget Player::entry_target() const {
         consider(EntryVehicle::Car, unit.car->position(), unit.car->velocity(), unit.car->body_id(), 3.3f, !unit.car->destroyed(), unit.car.get());
     }
     const auto consider_plane = [&](Plane* plane) {
-        if (plane) consider(EntryVehicle::Plane, plane->boarding_position(), plane->velocity(), plane->body_id(), 2.5f,
+        if (plane && plane->simulated()) consider(EntryVehicle::Plane, plane->boarding_position(), plane->velocity(), plane->body_id(), 2.5f,
             !plane->destroyed() && plane->grounded() && plane->position().GetY() > Environment::water_level + .1f, nullptr, plane);
     };
     consider_plane(starter_plane_);

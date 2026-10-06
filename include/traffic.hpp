@@ -1,6 +1,7 @@
 #pragma once
 #include "player.hpp"
 #include <vector>
+#include <map>
 
 namespace forza {
 class Plane;
@@ -44,7 +45,7 @@ private:
         Vec3 point;
         float distance;
     };
-    RouteLocation locate(const std::vector<Vec3>& route, Vec3 position) const;
+    RouteLocation locate(const std::vector<Vec3>& route, Vec3 position, std::size_t hint = std::size_t(-1)) const;
     Vec3 ahead(const std::vector<Vec3>& route, RouteLocation location, float distance) const;
     RouteLocation advance(const std::vector<Vec3>& route, RouteLocation location, float distance) const;
     void stream(Vec3 player_position, const Car* starter, const Plane* plane);
@@ -56,5 +57,8 @@ private:
     std::vector<TrafficCar> cars_;
     float stream_time_ = 0;
     const Police* police_ = nullptr;
+    struct Junction { Vec3 center, half; };
+    std::vector<Junction> intersections_;
+    std::map<int, const Car*> junctions_;
 };
 } // namespace forza

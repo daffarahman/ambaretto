@@ -29,6 +29,8 @@ public:
     void reset(const Vec3& center, float yaw = 0,
                const Vec3& velocity = Vec3::sZero(), float throttle = 0);
     void step(FlightInput input, float dt = fixed_step);
+    void set_simulated(bool simulated);
+    bool simulated() const { return simulated_; }
     Vec3 position() const;
     Vec3 velocity() const;
     Quat rotation() const;
@@ -68,6 +70,7 @@ private:
     std::array<Wheel, 3> wheels_{};
     float throttle_ = 0, airspeed_ = 0, alpha_ = 0, propeller_angle_ = 0;
     bool stalled_ = false;
+    bool simulated_ = true;
     VehicleDamage damage_;
 };
 std::vector<std::unique_ptr<Plane>> parked_aircraft(PhysicsWorld& world, const Environment& environment);

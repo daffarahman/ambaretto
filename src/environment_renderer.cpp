@@ -50,9 +50,17 @@ Texture2D load_terrain_texture(const char* filename) {
     return texture;
 }
 struct MeshBuilder {
+    const City* ground_city = nullptr;
+    float ground_lift = 0;
     std::vector<float> positions, normals, texcoords;
     std::vector<unsigned char> colors;
     void triangle(Vec3 a, Vec3 b, Vec3 c, Color color) {
+        if (ground_city) {
+            for (const auto& t : ground_city->drape_triangle({a,b,c}))
+                flat_triangle(t[0]+Vec3(0,ground_lift,0),t[1]+Vec3(0,ground_lift,0),t[2]+Vec3(0,ground_lift,0),color);
+        } else flat_triangle(a,b,c,color);
+    }
+    void flat_triangle(Vec3 a, Vec3 b, Vec3 c, Color color) {
         const Vec3 cross = (b - a).Cross(c - a);
         if (cross.LengthSq() < 1.0e-10f) return;
         const Vec3 normal = cross.Normalized();
@@ -65,6 +73,29 @@ struct MeshBuilder {
     }
     void quad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, Color color) {
         triangle(a, b, c, color); triangle(a, c, d, color);
+    }
+    void polygon(std::vector<Vec3> points,Color color) {
+        Vec3 normal = Vec3::sZero();
+        for (std::size_t i = 0; i < points.size(); ++i) normal += points[i].Cross(points[(i+1)%points.size()]);
+        normal = normal.NormalizedOr(Vec3::sAxisY());
+        if (normal.GetY()<0) { std::reverse(points.begin(),points.end()); normal = -normal; }
+        const auto side = [&](Vec3 a,Vec3 b,Vec3 p) { return (b-a).Cross(p-a).Dot(normal); };
+        // ponytail: ear clipping is quadratic; junction contours have fewer than 64 vertices.
+        while (points.size()>3) {
+            bool clipped = false;
+            for (std::size_t i = 0; i < points.size(); ++i) {
+                const std::size_t before = (i+points.size()-1)%points.size(), after = (i+1)%points.size();
+                const Vec3 a = points[before], b = points[i], c = points[after];
+                if (side(a,b,c)<=.000001f) continue;
+                bool occupied = false;
+                for (std::size_t j = 0; j < points.size(); ++j) if (j!=before && j!=i && j!=after)
+                    if (side(a,b,points[j])>=-.000001f && side(b,c,points[j])>=-.000001f && side(c,a,points[j])>=-.000001f) { occupied = true; break; }
+                if (occupied) continue;
+                triangle(a,b,c,color); points.erase(points.begin()+i); clipped = true; break;
+            }
+            if (!clipped) break;
+        }
+        if (points.size()==3) triangle(points[0],points[1],points[2],color);
     }
     void sign(Vec3 center, Vec3 right, float width, float height, int row) {
         const Vec3 up(0, height / 2, 0), side = right * (width / 2);
@@ -199,10 +230,10 @@ Mesh batch_tree_mesh(const Mesh& source, const std::vector<Tree>& trees, const V
 }
 Color surface_color(Surface s) {
     switch (s) {
+        case Surface::Soil: return {130, 98, 69, 255};
         case Surface::Sand: return {222, 202, 143, 255};
         case Surface::Rock: return {128, 147, 122, 255};
-        // Road ribbons define crisp edges; keep the underlying grid green.
-        case Surface::Road: return {98, 151, 96, 255};
+        case Surface::Road: return {57, 64, 72, 255};
         case Surface::Seabed: return {181, 176, 133, 255};
         default: return {98, 151, 96, 255};
     }
@@ -236,8 +267,9 @@ out vec4 finalColor;
 )GLSL") + scene_lighting_glsl() + R"GLSL(
 void main() {
     // World coordinates keep the four-meter tiles continuous across cells.
-    vec4 surface = texture(texture0, position.xz / 4.0) * color;
     vec3 n = normalize(normal);
+    vec2 uv = abs(n.y) > 0.5 ? position.xz : abs(n.x) > abs(n.z) ? position.zy : position.xy;
+    vec4 surface = texture(texture0, uv / 4.0) * color;
     vec3 lighting = ambientLight + sunColor * (0.42 * daylight * max(dot(n, sunDirection), 0.0) * scene_shadow(position, n, sunDirection));
     lighting += scene_local_light(position, n, normalize(cameraPosition - position), 0.0);
     float fog = smoothstep(viewDistance * 0.65, viewDistance, distance(position.xz, cameraPosition.xz));
@@ -383,6 +415,8 @@ bool EnvironmentRenderer::nearby(const Chunk& part, const Vector3& focus, float 
     return dx * dx + dz * dz <= range * range;
 }
 EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
+    environment_ = &env;
+    if (env.city()) { load_city(env); return; }
     MeshBuilder ground, grass, sand, roads, city, water, signs, lights, glows;
     constexpr Color concrete{203, 211, 208, 255};
     const auto add_light = [&](Vec3 position, Color color, float radius) {
@@ -401,8 +435,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             if (glows.colors.size() > first) { glows.colors[first + 7] = 0; glows.colors[first + 11] = 0; }
         }
     };
-    grass_texture_ = load_terrain_texture("grass.png");
-    sand_texture_ = load_terrain_texture("beach-sand.png");
+    soil_texture_ = load_terrain_texture("soil.png");
     asphalt_texture_ = load_terrain_texture("asphalt.png");
     const Color asphalt = asphalt_texture_.id ? WHITE : Color{57, 65, 70, 255};
     for (const auto& t : env.triangles()) {
@@ -417,11 +450,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             const Vec3 down(0, 1.2f, 0);
             city.triangle(env.vertices()[t.c] - down, env.vertices()[t.b] - down, env.vertices()[t.a] - down, concrete);
         }
-        else if (t.surface == Surface::Grass || t.surface == Surface::Road) {
-            surface = &grass; if (grass_texture_.id) tint = WHITE;
-        } else if (t.surface == Surface::Sand || shoreline) {
-            surface = &sand; tint = sand_texture_.id ? WHITE : surface_color(Surface::Sand);
-        }
+        else tint = soil_texture_.id ? WHITE : surface_color(Surface::Soil);
         surface->triangle(env.vertices()[t.a] + lift, env.vertices()[t.b] + lift, env.vertices()[t.c] + lift, tint);
     }
     const auto deck_strip = [&](const Road& road, Vec3 a, Vec3 b, float width, Color color) {
@@ -429,9 +458,9 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         const auto raised = [&](Vec3 p) { p.SetY(env.road_height(road, p.GetX(), p.GetZ()) + .085f); return p; };
         city.quad(raised(a - side), raised(a + side), raised(b + side), raised(b - side), color);
     };
-    for (const auto& road : env.roads()) {
-        if (road.bridge >= 0 && env.bridges()[road.bridge].has_curve()) {
-            const auto& bridge = env.bridges()[road.bridge];
+    for (const auto& road : env.road_segments()) {
+        if (road.bridge >= 0 && env.bridge_segments()[road.bridge].has_curve()) {
+            const auto& bridge = env.bridge_segments()[road.bridge];
             const float length = (bridge.b - bridge.a).Length();
             const auto stripe = [&](float begin, float end, float offset, float width, Color color) {
                 const int count = std::max(1, int(std::ceil((end - begin) / 2)));
@@ -462,7 +491,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
                 const Vec3 start = a + (b - a) * (float(i) / steps), end = a + (b - a) * (float(i + 1) / steps);
                 const Vec3 middle = (start + end) / 2;
                 bool covered = false;
-                for (const auto& other : env.roads()) {
+                for (const auto& other : env.road_segments()) {
                     if (&other == &road) continue;
                     if (std::string_view(road.name) == "OVERSEAS HIGHWAY" && std::string_view(other.name) == road.name) continue;
                     Vec3 delta = other.b - other.a; delta.SetY(0);
@@ -508,7 +537,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             const float sign = int(along / 40) % 2 ? -1.0f : 1.0f;
             Vec3 p = road.a + direction * along + side * (sign * (road.width / 2 + .65f));
             bool junction = false;
-            for (const auto& other : env.roads()) {
+            for (const auto& other : env.road_segments()) {
                 if (&other == &road) continue;
                 Vec3 d = other.b - other.a; d.SetY(0);
                 const float t = std::clamp((p - other.a).Dot(d) / d.LengthSq(), 0.0f, 1.0f);
@@ -671,8 +700,8 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         city.box(rail.center + rail.rotation() * Vec3(0, .55f, 0),
             Vec3(.55f, .12f, rail.size.GetZ()), RAYWHITE, rail.yaw, rail.pitch);
     }
-    for (std::size_t bridge_index = 0; bridge_index < env.bridges().size(); ++bridge_index) {
-        const auto& bridge = env.bridges()[bridge_index];
+    for (std::size_t bridge_index = 0; bridge_index < env.bridge_segments().size(); ++bridge_index) {
+        const auto& bridge = env.bridge_segments()[bridge_index];
         const bool segmented = bridge.a.GetY() > 0;
         const bool curved = segmented || bridge.has_curve();
         const Vec3 direction = (bridge.b - bridge.a).Normalized();
@@ -703,7 +732,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
                     ? env.terrain_height(column.GetX(), column.GetZ()) : env.ground_height(column.GetX(), column.GetZ());
                 if (p.GetY() - base < 4) continue;
                 bool street = false;
-                for (const auto& road : env.roads()) if (road.bridge < 0) {
+                for (const auto& road : env.road_segments()) if (road.bridge < 0) {
                     Vec3 delta = road.b - road.a; delta.SetY(0);
                     const float t = std::clamp((column - road.a).Dot(delta) / delta.LengthSq(), 0.0f, 1.0f);
                     Vec3 distance = column - road.a - delta * t; distance.SetY(0);
@@ -824,8 +853,8 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
             city.box(sock + Vec3(.5f + i * .5f, 5.8f - i * .09f, 0),
                 Vec3(.5f, .6f - i * .075f, .6f - i * .075f), i % 2 ? RAYWHITE : ORANGE);
     }
-    for (std::size_t i = 3; i < env.bridges().size(); ++i) {
-        const auto& bridge = env.bridges()[i];
+    for (std::size_t i = 3; i < env.bridge_segments().size(); ++i) {
+        const auto& bridge = env.bridge_segments()[i];
         if (!bridge.open_a) continue;
         const Vec3 dir = (bridge.b - bridge.a).Normalized(), side = dir.Cross(Vec3::sAxisY());
         const Vec3 p = bridge.point(.08f) + side * (bridge.width / 2 - 1);
@@ -849,8 +878,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     for (Model* model : {&terrain_, &grass_, &sand_, &roads_})
         if (model->materials) model->materials[0].shader = land_shader_;
     for (auto& part : city_chunks_) part.model.materials[0].shader = land_shader_;
-    if (grass_.materials && grass_texture_.id) SetMaterialTexture(&grass_.materials[0], MATERIAL_MAP_DIFFUSE, grass_texture_);
-    if (sand_.materials && sand_texture_.id) SetMaterialTexture(&sand_.materials[0], MATERIAL_MAP_DIFFUSE, sand_texture_);
+    if (terrain_.materials && soil_texture_.id) SetMaterialTexture(&terrain_.materials[0], MATERIAL_MAP_DIFFUSE, soil_texture_);
     if (roads_.materials && asphalt_texture_.id) SetMaterialTexture(&roads_.materials[0], MATERIAL_MAP_DIFFUSE, asphalt_texture_);
     ocean_.materials[0].shader = water_shader_;
     land_camera_ = GetShaderLocation(land_shader_, "cameraPosition");
@@ -866,6 +894,130 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         SetMaterialTexture(&signs_.materials[0], MATERIAL_MAP_DIFFUSE, sign_texture_);
     }
     sign_emission_ = GetShaderLocation(tree_shader_, "emissiveStrength");
+    load_map(env);
+}
+
+void EnvironmentRenderer::load_city(const Environment& env) {
+    MeshBuilder ground, grass, sand, roads, buildings, markings, water;
+    soil_texture_ = load_terrain_texture("soil.png");
+    grass_texture_ = load_terrain_texture("grass.png");
+    sand_texture_ = load_terrain_texture("beach-sand.png");
+    asphalt_texture_ = load_terrain_texture("asphalt.png");
+    for (const auto& t : env.triangles()) if (t.surface != Surface::Seabed && !t.deck) {
+        MeshBuilder& mesh = t.surface == Surface::Grass ? grass : t.surface == Surface::Sand ? sand : t.surface == Surface::Road ? roads : ground;
+        const Color tint = t.surface == Surface::Grass ? (grass_texture_.id ? WHITE : surface_color(t.surface))
+            : t.surface == Surface::Sand ? (sand_texture_.id ? WHITE : surface_color(t.surface))
+            : t.surface == Surface::Road ? (asphalt_texture_.id ? WHITE : surface_color(t.surface))
+            : soil_texture_.id ? WHITE : surface_color(t.surface);
+        mesh.triangle(env.vertices()[t.a],env.vertices()[t.b],env.vertices()[t.c],tint);
+    }
+    const City& city = *env.city();
+    if (std::any_of(city.elevation.begin(),city.elevation.end(),[](auto h){return h>0;})) {
+        roads.ground_city = markings.ground_city = &city;
+        roads.ground_lift = .065f; markings.ground_lift = .09f;
+    }
+    const auto box = [&](Vec3 c, float width, float depth, Color tint) { markings.box(c,Vec3(width,.025f,depth),tint); };
+    const auto pavement = [&](Vec3 c,float width,float depth) { roads.box(c,Vec3(width,.06f,depth),asphalt_texture_.id ? WHITE : Color{57,64,72,255}); };
+    const auto lift = [](Vec3 v,float height) { v.SetY(height); return v; };
+    const auto strip = [&](MeshBuilder& mesh,const std::vector<Vec3>& a,const std::vector<Vec3>& b,float height,Color color) {
+        for (std::size_t i = 0; i+1 < a.size(); ++i) {
+            mesh.quad(lift(a[i],height),lift(b[i],height),lift(b[i+1],height),lift(a[i+1],height),color);
+        }
+    };
+    const auto line = [&](Vec3 a,Vec3 b,float width,Color color) {
+        const Vec3 side = (b-a).Cross(Vec3::sAxisY()).NormalizedOr(Vec3::sAxisX())*(width/2);
+        markings.quad(lift(a-side,City::level+.09f),lift(a+side,City::level+.09f),lift(b+side,City::level+.09f),lift(b-side,City::level+.09f),color);
+    };
+    for (const auto& t : env.triangles()) if (t.deck) {
+        const Vec3 a = env.vertices()[t.a]-Vec3(0,.05f,0), b = env.vertices()[t.b]-Vec3(0,.05f,0), c = env.vertices()[t.c]-Vec3(0,.05f,0);
+        const Vec3 down(0,.6f,0); const Color concrete{149,158,170,255};
+        buildings.triangle(a,b,c,concrete);
+        for (const auto& edge : {std::pair<Vec3,Vec3>{a,b},{b,c},{c,a}})
+            buildings.quad(edge.first,edge.first-down,edge.second-down,edge.second,concrete);
+        buildings.triangle(c-down,b-down,a-down,concrete);
+    }
+    for (const auto& node : city.road_network()) {
+        Vec3 c = node.center()+Vec3(0,.035f,0); const Vec3 half = node.half_size();
+        const unsigned mask = node.mask;
+        const auto inner = node.path(0,.7f), outer = node.path(1,-.7f);
+        if (!inner.empty()) {
+            strip(roads,inner,outer,City::level+.065f,asphalt_texture_.id ? WHITE : Color{57,64,72,255});
+            strip(markings,node.path(.5f,-.063f),node.path(.5f,.063f),City::level+.09f,{222,210,152,255});
+            for (float fraction : {0.f,1.f}) {
+                const float inset = fraction==0 ? 1.26f : -1.26f;
+                strip(markings,node.path(fraction,inset-.049f),node.path(fraction,inset+.049f),City::level+.09f,RAYWHITE);
+            }
+        } else if (const auto border = node.outline(); !border.empty()) {
+            std::vector<Vec3> pavement;
+            for (auto p : border) pavement.push_back(lift(p,City::level+.065f));
+            roads.polygon(std::move(pavement),asphalt_texture_.id ? WHITE : Color{57,64,72,255});
+            for (std::size_t i = 0; i < border.size(); ++i) {
+                const Vec3 a = border[i], b = border[(i+1)%border.size()];
+                bool gate_edge = false;
+                for (int d = 0; d < 4; ++d) if (mask&(1u<<d)) {
+                    const Vec3 out((d==1)-(d==3),0,(d==2)-(d==0));
+                    gate_edge |= std::abs((a-node.port(d).center).Dot(out))<.001f && std::abs((b-node.port(d).center).Dot(out))<.001f;
+                }
+                if (!gate_edge) line(a+(node.center()-a).NormalizedOr(Vec3::sZero())*.56f,b+(node.center()-b).NormalizedOr(Vec3::sZero())*.56f,.098f,RAYWHITE);
+            }
+            for (int d = 0; d < 4; ++d) if (mask&(1u<<d)) {
+                const auto gate = node.port(d); const Vec3 out((d==1)-(d==3),0,(d==2)-(d==0)), across = out.Cross(Vec3::sAxisY());
+                const int stripes = std::max(1,int((gate.width-2.52f)/1.05f));
+                for (int stripe = 0; stripe < stripes; ++stripe) {
+                    const Vec3 p = gate.center-out*.9f+across*((stripe-(stripes-1)/2.f)*1.05f)+Vec3(0,.075f,0);
+                    box(p,d%2 ? 1.45f : .55f,d%2 ? .55f : 1.45f,RAYWHITE);
+                }
+            }
+        } else {
+            const float left = -half.GetX()+(mask&8 ? 0 : .7f), right = half.GetX()-(mask&2 ? 0 : .7f);
+            const float top = -half.GetZ()+(mask&1 ? 0 : .7f), bottom = half.GetZ()-(mask&4 ? 0 : .7f);
+            pavement(c+Vec3((left+right)/2,0,(top+bottom)/2),right-left,bottom-top);
+            const bool vertical = mask==5 || mask==1 || mask==4;
+            const bool horizontal = mask==10 || mask==2 || mask==8;
+            if (vertical || horizontal) {
+                const Vec3 along = vertical ? Vec3::sAxisZ() : Vec3::sAxisX();
+                const Vec3 across = vertical ? Vec3::sAxisX() : Vec3::sAxisZ();
+                const float length = vertical ? bottom-top : right-left;
+                const float width = 2*(vertical ? half.GetX() : half.GetZ());
+                const auto marking = [&](float offset,float size,Color color) {
+                    box(c+across*offset+Vec3(0,.04f,0),vertical ? .098f : size,vertical ? size : .098f,color);
+                };
+                marking(0,length,{222,210,152,255});
+                for (float sign : {-1.f,1.f}) marking(sign*(width/2-1.26f),length,RAYWHITE);
+                if (mask!=5 && mask!=10) {
+                    const float end = (mask==1 || mask==8 ? 1.f : -1.f)*(length/2-.7f);
+                    box(c+along*end+Vec3(0,.04f,0),vertical ? width-2.52f : .112f,vertical ? .112f : width-2.52f,RAYWHITE);
+                }
+            }
+        }
+    }
+    for (const auto& b : env.barriers()) buildings.box(b.center,b.size,{197,204,211,255},b.yaw,b.pitch);
+    for (const auto& b : env.buildings()) buildings.box(b.center,b.size,{197,204,211,255});
+    water.quad({-Environment::extent,0,-Environment::extent},{-Environment::extent,0,Environment::extent},
+        {Environment::extent,0,Environment::extent},{Environment::extent,0,-Environment::extent},WHITE);
+    terrain_ = ground.upload(); grass_ = grass.upload(); sand_ = sand.upload(); roads_ = roads.upload(); ocean_ = water.upload();
+    for (Model model : buildings.upload_chunks()) city_chunks_.push_back(chunk(model));
+    for (Model model : markings.upload_chunks()) city_chunks_.push_back(chunk(model));
+    land_shader_ = LoadShaderFromMemory(land_vertex,land_fragment.c_str());
+    water_shader_ = LoadShaderFromMemory(water_vertex,water_fragment.c_str());
+    sky_shader_ = LoadShaderFromMemory(nullptr,sky_fragment);
+    light_shader_ = LoadShaderFromMemory(land_vertex,light_fragment);
+    for (Model* model : {&terrain_,&grass_,&sand_,&roads_}) if (model->materials) model->materials[0].shader = land_shader_;
+    for (auto& part : city_chunks_) part.model.materials[0].shader = land_shader_;
+    if (terrain_.materials && soil_texture_.id) SetMaterialTexture(&terrain_.materials[0],MATERIAL_MAP_DIFFUSE,soil_texture_);
+    if (grass_.materials && grass_texture_.id) SetMaterialTexture(&grass_.materials[0],MATERIAL_MAP_DIFFUSE,grass_texture_);
+    if (sand_.materials && sand_texture_.id) SetMaterialTexture(&sand_.materials[0],MATERIAL_MAP_DIFFUSE,sand_texture_);
+    if (roads_.materials && asphalt_texture_.id) SetMaterialTexture(&roads_.materials[0],MATERIAL_MAP_DIFFUSE,asphalt_texture_);
+    ocean_.materials[0].shader = water_shader_;
+    land_camera_ = GetShaderLocation(land_shader_,"cameraPosition");
+    water_camera_ = GetShaderLocation(water_shader_,"cameraPosition");
+    water_time_ = GetShaderLocation(water_shader_,"time");
+    load_trees(env);
+    if (!tree_shader_.id) {
+        tree_shader_ = LoadShaderFromMemory(tree_vertex,tree_fragment.c_str());
+        tree_camera_ = GetShaderLocation(tree_shader_,"cameraPosition");
+    }
+    sign_emission_ = GetShaderLocation(tree_shader_,"emissiveStrength");
     load_map(env);
 }
 
@@ -896,9 +1048,26 @@ void EnvironmentRenderer::load_map(const Environment& env) {
         const Vec3 side = Vec3(-(b - a).GetZ(), 0, (b - a).GetX()).NormalizedOr(Vec3::sAxisX()) * (width / 2);
         map.quad(point(a - side), point(a + side), point(b + side), point(b - side), pavement);
     };
-    for (const auto& road : env.roads()) {
-        if (road.bridge < 0 || !env.bridges()[road.bridge].has_curve()) { line(road.a, road.b, road.width); continue; }
-        const auto& bridge = env.bridges()[road.bridge];
+    if (const auto* city = env.city()) {
+        for (const auto& node : city->road_network()) {
+            const auto inner = node.path(0,.7f), outer = node.path(1,-.7f);
+            if (!inner.empty()) {
+                for (std::size_t i = 0; i+1 < inner.size(); ++i)
+                    map.quad(point(inner[i]),point(outer[i]),point(outer[i+1]),point(inner[i+1]),pavement);
+            } else if (const auto border = node.outline(); !border.empty()) {
+                std::vector<Vec3> polygon;
+                for (auto p : border) polygon.push_back(point(p));
+                map.polygon(std::move(polygon),pavement);
+            } else {
+                const Vec3 c = node.center(), half = node.half_size(); const unsigned mask = node.mask;
+                const float left = -half.GetX()+(mask&8 ? 0 : .7f), right = half.GetX()-(mask&2 ? 0 : .7f);
+                const float top = -half.GetZ()+(mask&1 ? 0 : .7f), bottom = half.GetZ()-(mask&4 ? 0 : .7f);
+                rectangle(c.GetX()+left,c.GetZ()+top,right-left,bottom-top,pavement);
+            }
+        }
+    } else for (const auto& road : env.road_segments()) {
+        if (road.bridge < 0 || !env.bridge_segments()[road.bridge].has_curve()) { line(road.a, road.b, road.width); continue; }
+        const auto& bridge = env.bridge_segments()[road.bridge];
         const int rows = int((bridge.b - bridge.a).Length() / 8) + 1;
         for (int row = 0; row < rows; ++row) {
             const float from = float(row) / rows, to = float(row + 1) / rows;
@@ -909,7 +1078,7 @@ void EnvironmentRenderer::load_map(const Environment& env) {
     }
     for (const auto& port : env.ports())
         line(port.center, port.center + (port.east ? Vec3::sAxisX() : Vec3::sAxisZ()) * port.length, port.width);
-    for (const auto& airport : airports) {
+    if (!env.city()) for (const auto& airport : airports) {
         rectangle(airport.center_x - 115, airport.runway_z - 220, 77, 380, pavement);
         const auto airport_line = [&](AirportPoint a, AirportPoint b, float width) {
             line(Vec3(a.x, 0, a.z), Vec3(b.x, 0, b.z), width);
@@ -1005,6 +1174,7 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     for (auto& part : tree_chunks_) UnloadModel(part.model);
     if (trees_.meshes || trees_.materials) UnloadModel(trees_);
     if (tree_texture_.id != 0 && tree_texture_.id != rlGetTextureIdDefault()) UnloadTexture(tree_texture_);
+    if (soil_texture_.id != 0) UnloadTexture(soil_texture_);
     if (grass_texture_.id != 0) UnloadTexture(grass_texture_);
     if (sand_texture_.id != 0) UnloadTexture(sand_texture_);
     if (asphalt_texture_.id != 0) UnloadTexture(asphalt_texture_);
@@ -1166,7 +1336,7 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
             if (inside(dot)) DrawCircleV(dot, 3.3f, {79, 142, 255, 255});
         }
     }
-    for (std::size_t i : {std::size_t(0), std::size_t(1), std::size_t(2), std::size_t(6), std::size_t(7), std::size_t(8), std::size_t(9), std::size_t(10)}) {
+    if (!environment_->city()) for (std::size_t i : {std::size_t(0), std::size_t(1), std::size_t(2), std::size_t(6), std::size_t(7), std::size_t(8), std::size_t(9), std::size_t(10)}) {
         if (i == 2 && view.scale < .15f) continue;
         const auto& island = Environment::islands()[i];
         const auto p = view.project(island.center, viewport);
@@ -1175,7 +1345,7 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
         DrawRectangle(int(p.x) - width / 2 - 5, int(p.y) - 28, width + 10, 24, {19, 28, 45, 205});
         forza::ui::draw_text(island.name, int(p.x) - width / 2, int(p.y) - 24, 16, RAYWHITE);
     }
-    for (const auto& airport : airports) {
+    if (!environment_->city()) for (const auto& airport : airports) {
         const auto p = view.project(Vec3(airport.center_x, 0, airport.runway_z), viewport);
         if (inside(p)) DrawRectangle(int(p.x - 4), int(p.y - 4), 8, 8, YELLOW);
     }

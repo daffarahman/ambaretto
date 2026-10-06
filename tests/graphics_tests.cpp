@@ -1,4 +1,5 @@
 #include "graphics_panel.hpp"
+#include "ui_font.hpp"
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -22,7 +23,7 @@ int main() {
         settings.apply_preset(GraphicsPreset::High);
         require(settings.preset() == GraphicsPreset::High && settings.shadow_resolution() == 2048 &&
             settings.shadow_distance == 180 && settings.view_distance == 4000, "High preset is incomplete");
-        settings.brightness = 1.23f; settings.fps_limit = 144;
+        settings.brightness = 1.23f; settings.fps_limit = 144; settings.view_distance = 100;
         require(settings.preset() == GraphicsPreset::Custom, "individual edits did not become Custom");
         std::string error;
         require(settings.save(path, error), error.c_str());
@@ -33,7 +34,7 @@ int main() {
         const auto before = loaded;
         for (const char* invalid : {"version=2\n", "version=1\nshadows=4\n", "version=1\nsoft_shadows=2\n",
             "version=1\nlocal_lights=true\n", "version=1\nbrightness=nan\n", "version=1\nbrightness=0.59\n",
-            "version=1\nview_distance=6001\n", "version=1\nshadow_distance=29\n", "version=1\nfps_limit=59\n",
+            "version=1\nview_distance=6001\n", "version=1\nview_distance=99\n", "version=1\nshadow_distance=29\n", "version=1\nfps_limit=59\n",
             "version=1\nunknown=1\n", "version=1\nshadows=1\nshadows=2\n", "shadows=1\nversion=1\n",
             "version=1 extra\n", "version=1\nvsync=1 garbage\n", "; empty file\n"}) {
             std::ofstream(path) << invalid;
@@ -74,10 +75,13 @@ int main() {
         require(!panel.dirty(), "restoring previous values did not clear unsaved marker");
         input = {}; input.cancel = true;
         require(panel.update(width, height, input) == GraphicsPanelAction::Cancel && panel.visible(), "Cancel must wait for caller to restore and close");
+        input = {}; const auto close = ui::window_close(rect);
+        input.mouse = {close.x+close.width/2,close.y+close.height/2}; input.pressed = true;
+        require(panel.update(width,height,input)==GraphicsPanelAction::Cancel,"title-bar close button did not cancel graphics preview");
         input = {}; input.apply = true;
         require(panel.update(width, height, input) == GraphicsPanelAction::Apply && panel.visible(), "Apply must remain open if saving fails");
         // Drag view distance beyond the right edge, release and cancel on focus loss.
-        const float row_height = (rect.height - 216) / 8, left_width = rect.width * .56f - 24;
+        const float row_height = std::min(42.f,(rect.height - 216) / 8), left_width = rect.width - 36;
         const Vector2 slider{rect.x + 26 + (left_width - 16) / 2, rect.y + 108 + 4 * row_height + 26};
         input = {}; input.mouse = slider; input.pressed = input.down = true;
         require(panel.update(width, height, input) == GraphicsPanelAction::Preview, "mouse slider did not preview");
@@ -97,6 +101,11 @@ int main() {
         require(panel.pending().view_distance == 6000, "release retained stale slider drag");
         input = {}; input.horizontal = -1; input.fine = true; panel.update(width, height, input);
         require(panel.pending().view_distance == 5975, "fine adjustment did not use small distance step");
+        input = {}; input.mouse = {rect.x+26,slider.y}; input.pressed = input.down = true;
+        panel.update(width,height,input);
+        require(panel.pending().view_distance==100,"view-distance slider cannot select 100 m");
+        input = {}; input.horizontal = -1; panel.update(width,height,input);
+        require(panel.pending().view_distance==100,"view distance fell below the 100 m minimum");
         panel.close();
         require(!panel.visible() && panel.update(width, height, input) == GraphicsPanelAction::None, "closed panel consumes input");
         std::filesystem::remove_all(folder);

@@ -1,6 +1,7 @@
 #include "environment_renderer.hpp"
 #include "police.hpp"
 #include "ui_font.hpp"
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
@@ -18,6 +19,174 @@ bool equal(Image a, Image b) {
     for (int y = 0; y < a.height; ++y) for (int x = 0; x < a.width; ++x)
         if (!same(GetImageColor(a, x, y), GetImageColor(b, x, y))) return false;
     return true;
+}
+Camera3D city_camera(forza::Vec3 focus) {
+    return {{focus.GetX(), forza::City::level + 200, focus.GetZ()},
+        {focus.GetX(), forza::City::level, focus.GetZ()}, {0, 0, -1}, 100, CAMERA_ORTHOGRAPHIC};
+}
+Image render_city(forza::EnvironmentRenderer& scenery, RenderTexture2D texture, Camera3D camera, const char* time = "12:00") {
+    forza::DayNight clock; clock.set_time(time);
+    forza::SceneLighting lighting;
+    forza::GraphicsSettings settings; settings.shadows = 0; settings.local_lights = false;
+    BeginTextureMode(texture); ClearBackground(BLACK); BeginMode3D(camera);
+    scenery.draw(camera, 0, clock.lighting(), lighting, settings);
+    EndMode3D(); EndTextureMode();
+    Image image = LoadImageFromTexture(texture.texture); ImageFlipVertical(&image); return image;
+}
+int crossing_pixels(Image image, Camera3D camera, const forza::CityRoadPort& gate, int direction) {
+    using namespace forza;
+    const Vec3 out((direction == 1) - (direction == 3), 0, (direction == 2) - (direction == 0));
+    const Vec3 across = out.Cross(Vec3::sAxisY()), center = gate.center - out * .9f;
+    Vector2 first{float(image.width), float(image.height)}, last{};
+    // Exclude the thin verge lines; only zebra stripes should fill this gate strip.
+    for (float along : {-.7f, .7f}) for (float side : {-1.f, 1.f}) {
+        const Vec3 p = center + out * along + across * (side * (gate.width / 2 - 1.8f));
+        const Vector2 screen = GetWorldToScreenEx({p.GetX(), City::level + .1f, p.GetZ()}, camera, image.width, image.height);
+        first.x = std::min(first.x, screen.x); first.y = std::min(first.y, screen.y);
+        last.x = std::max(last.x, screen.x); last.y = std::max(last.y, screen.y);
+    }
+    int count = 0;
+    for (int y = std::max(0, int(std::ceil(first.y))); y <= std::min(image.height - 1, int(last.y)); ++y)
+        for (int x = std::max(0, int(std::ceil(first.x))); x <= std::min(image.width - 1, int(last.x)); ++x) {
+            const Color color = GetImageColor(image, x, y);
+            count += std::min({color.r, color.g, color.b}) > 190
+                && std::max({color.r, color.g, color.b}) - std::min({color.r, color.g, color.b}) < 24;
+        }
+    return count;
+}
+void city_crosswalks(RenderTexture2D texture) {
+    using namespace forza;
+    City city = City::create("Crosswalk render check"); std::string error;
+    require(city.add_land({56, 58}, {74, 74}, error), "crosswalk island failed");
+    for (const auto& stroke : {City::road_stroke({65, 60}, {65, 66}), City::road_stroke({65, 66}, {72, 66}),
+        City::road_stroke({66, 66}, {66, 72}), City::road_stroke({67, 66}, {67, 72}),
+        City::road_stroke({56, 64}, {59, 61})})
+        require(city.add_road(stroke, error), "crosswalk road failed");
+    const auto network = city.road_network();
+    const auto junction = std::find_if(network.begin(), network.end(), [](const auto& node) { return node.mask == 7 && node.edges.size() == 3; });
+    require(junction != network.end() && junction->outline().size() >= 3, "unequal T did not produce a junction outline");
+    Environment map(city); EnvironmentRenderer scenery(map);
+    auto camera = city_camera(City::center({67, 66}));
+    Image image = render_city(scenery, texture, camera);
+    ExportImage(image, "city-unequal-crosswalks.png");
+    for (int d = 0; d < 3; ++d) {
+        const auto& gate = junction->ports[d];
+        require(gate.width > 0, "junction lost an actual road gate");
+        const int pixels = crossing_pixels(image, camera, gate, d);
+        if (pixels <= gate.width * 5) std::cerr << "Crosswalk gate " << d << ": " << pixels << " bright pixels\n";
+        require(pixels > gate.width * 5, "crosswalk missing at an unequal junction gate");
+    }
+    UnloadImage(image);
+    const auto bend = std::find_if(network.begin(), network.end(), [](const auto& node) { return node.mask == 9 && node.edges.size() == 2; });
+    require(bend != network.end() && !bend->path().empty(), "simple corner did not produce a road path");
+    camera = city_camera(bend->center()); image = render_city(scenery, texture, camera);
+    for (int d : {0, 3})
+        require(crossing_pixels(image, camera, bend->ports[d], d) < 20, "simple bend acquired an intersection crosswalk");
+    UnloadImage(image);
+    const auto street = std::find_if(network.begin(), network.end(), [](const auto& node) {
+        return node.mask == 5 && node.first.z == 63 && node.ports[0].width == City::block;
+    });
+    require(street != network.end(), "crosswalk fixture lost its single road");
+    camera = city_camera(street->center()); camera.fovy = 32;
+    image = render_city(scenery, texture, camera);
+    // Resolve subpixel markings in a close-up, without relying on the game's MSAA.
+    for (float fraction : {0.f, .5f, 1.f}) {
+        const auto path = street->path(fraction, fraction == 0 ? 1.26f : fraction == 1 ? -1.26f : 0);
+        const Vec3 p = (path.front() + path.back()) / 2;
+        const Vector2 point = GetWorldToScreenEx({p.GetX(), City::level + .1f, p.GetZ()}, camera, image.width, image.height);
+        int pixels = 0;
+        const int reach = int(4 * image.height / camera.fovy);
+        for (int y = int(point.y) - reach; y <= int(point.y) + reach; ++y)
+            for (int x = int(point.x) - 3; x <= int(point.x) + 3; ++x) {
+                const Color color = GetImageColor(image, x, y);
+                pixels += fraction == .5f ? color.r > 170 && color.g > 160 && color.r > color.b + 30 && color.g > color.b + 20
+                    : std::min({color.r, color.g, color.b}) > 190
+                        && std::max({color.r, color.g, color.b}) - std::min({color.r, color.g, color.b}) < 24;
+            }
+        require(pixels > 30, "single road lost a verge or centerline");
+    }
+    UnloadImage(image);
+}
+void elevated_road_pixels(RenderTexture2D texture) {
+    using namespace forza;
+    bool passed = true;
+    for (bool diagonal : {false, true}) {
+        City city = City::create("Elevated road render"); std::string error;
+        require(city.add_land({58,58},{70,70},error)
+            && city.change_elevation(diagonal ? CityCell{60,60} : CityCell{64,58},{70,70},1,error)
+            && city.add_road(City::road_stroke(diagonal ? CityCell{60,60} : CityCell{60,64},
+                diagonal ? CityCell{68,68} : CityCell{68,64},false,diagonal),error),"elevated road fixture failed");
+        const auto network = city.road_network();
+        const auto node = std::find_if(network.begin(),network.end(),[&](const auto& n) {
+            const auto path = n.path();
+            return n.first.x==(diagonal ? 64 : 63) && n.edges.size()==2 && path.size()==2
+                && (!diagonal || std::abs(path[1].GetX()-path[0].GetX())>.001f
+                    && std::abs(path[1].GetZ()-path[0].GetZ())>.001f);
+        });
+        require(node!=network.end(),"elevated render lost its straight or diagonal road");
+        Environment map(city); EnvironmentRenderer scenery(map);
+        auto camera = city_camera(node->center()); camera.fovy = 32;
+        Image image = render_city(scenery,texture,camera);
+        ExportImage(image,diagonal ? "city-elevated-diagonal-road.png" : "city-elevated-cardinal-road.png");
+        // Cardinal streets traverse a straight ramp; diagonals stay on a flat raised terrace.
+        for (float fraction : {0.f,.25f,.75f,1.f}) {
+            const bool verge = fraction==0 || fraction==1;
+            const auto path = node->path(fraction,fraction==0 ? 1.26f : fraction==1 ? -1.26f : 0);
+            for (float t : {.25f,.5f,.75f}) {
+                Vec3 p = path.front()+(path.back()-path.front())*t;
+                p.SetY(city.height(p.GetX(),p.GetZ())+.1f);
+                const Vector2 point = GetWorldToScreenEx({p.GetX(),p.GetY(),p.GetZ()},camera,image.width,image.height);
+                int pixels = 0;
+                for (int y = int(point.y)-2; y <= int(point.y)+2; ++y)
+                    for (int x = int(point.x)-2; x <= int(point.x)+2; ++x) {
+                        const Color color = GetImageColor(image,x,y);
+                        const int low = std::min({color.r,color.g,color.b}), high = std::max({color.r,color.g,color.b});
+                        pixels += verge ? low>170 && high-low<24
+                            : low>20 && high<165 && high-low<30;
+                    }
+                if (pixels<(verge ? 3 : 16)) {
+                    const Color color = GetImageColor(image,int(point.x),int(point.y));
+                    std::cerr << (diagonal ? "Diagonal terrace" : "Cardinal ramp") << " fraction " << fraction << " t " << t
+                        << ": " << pixels << " matching pixels at " << point.x << ',' << point.y << "; center RGB "
+                        << int(color.r) << ',' << int(color.g) << ',' << int(color.b) << '\n';
+                    passed = false;
+                }
+            }
+        }
+        UnloadImage(image);
+    }
+    require(passed,"elevated ramp hides road pavement or a white verge marking");
+}
+void single_square_ramps(RenderTexture2D texture) {
+    using namespace forza;
+    City flat = City::create("Single square ramps"); std::string error;
+    require(flat.add_land({59,59},{69,69},error),"single-square island failed");
+    City raised = flat;
+    require(raised.change_elevation({64,64},{64,64},1,error),"single-square raise failed");
+    const auto top = raised.ground_patch({64,64});
+    for (const auto& p : top) require(std::abs(p.GetY()-City::level-City::elevation_step)<.001f,"raised square lost its flat top");
+    for (CityCell cell : {CityCell{63,64},CityCell{65,64},CityCell{64,63},CityCell{64,65}}) {
+        const auto patch = raised.ground_patch(cell);
+        int high = 0, low = 0;
+        for (const auto& p : patch) {
+            high += std::abs(p.GetY()-City::level-City::elevation_step)<.001f;
+            low += std::abs(p.GetY()-City::level)<.001f;
+        }
+        require(high==2 && low==2,"neighbor square did not become a straight ramp");
+    }
+    const Vec3 focus = City::center({64,64});
+    Camera3D camera{{focus.GetX()+70,focus.GetY()+65,focus.GetZ()+70},
+        {focus.GetX(),focus.GetY(),focus.GetZ()},{0,1,0},65,CAMERA_ORTHOGRAPHIC};
+    Environment flat_map(flat), raised_map(raised);
+    EnvironmentRenderer flat_renderer(flat_map), raised_renderer(raised_map);
+    // Morning light makes the separate planar ramp faces easy to inspect.
+    Image before = render_city(flat_renderer,texture,camera,"09:00"), after = render_city(raised_renderer,texture,camera,"09:00");
+    ExportImage(after,"city-single-square-ramps.png");
+    int changed = 0;
+    for (int y = 0; y<after.height; ++y) for (int x = 0; x<after.width; ++x)
+        changed += !same(GetImageColor(before,x,y),GetImageColor(after,x,y));
+    require(changed>1000,"corner-height ramps did not appear in the isometric renderer");
+    UnloadImage(before); UnloadImage(after);
 }
 void sharp_map_edges(const forza::EnvironmentRenderer& scenery, RenderTexture2D texture, bool in_vehicle = false) {
     using namespace forza;
@@ -60,14 +229,46 @@ void sharp_map_edges(const forza::EnvironmentRenderer& scenery, RenderTexture2D 
         require(blurred == 0, "map edges still interpolate enlarged texture pixels");
     }
 }
+void diagonal_bridge_pixels(RenderTexture2D texture) {
+    using namespace forza;
+    City city = City::create("Diagonal bridge render"); std::string error;
+    require(city.add_road(City::road_stroke({60,60},{68,68},false,true),error),"diagonal render stroke failed");
+    const auto network = city.road_network();
+    const auto node = std::find_if(network.begin(),network.end(),[](const auto& n) {
+        const auto path = n.path();
+        return n.edges.size()==2 && path.size()==2 && std::abs(path[1].GetX()-path[0].GetX())>.001f
+            && std::abs(path[1].GetZ()-path[0].GetZ())>.001f;
+    });
+    require(node!=network.end(),"diagonal render has no bridge section");
+    Environment map(city); EnvironmentRenderer scenery(map);
+    auto camera = city_camera(node->center()); camera.fovy = 32;
+    Image image = render_city(scenery,texture,camera);
+    const Vec3 shoulder = node->center()+Vec3(node->half_size().GetX()-.8f,0,-node->half_size().GetZ()+.8f);
+    const Vector2 point = GetWorldToScreenEx({shoulder.GetX(),City::level,shoulder.GetZ()},camera,image.width,image.height);
+    const Color color = GetImageColor(image,int(point.x),int(point.y));
+    require(color.b>color.r+50 && color.g>color.r+30,"diagonal bridge still shows square deck blocks outside its pavement");
+    UnloadImage(image);
+}
 }
 
-int main() {
+int main(int argc, char** argv) {
     SetTraceLogLevel(LOG_WARNING);
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
     InitWindow(640, 480, "Map marker regression check");
     try {
         using namespace forza;
+        if (argc == 4 && std::string(argv[1]) == "--city-preview") {
+            City city; std::string error;
+            if (!City::load(argv[2], city, error)) throw std::runtime_error(error);
+            const auto texture = LoadRenderTexture(1920, 1440);
+            {
+                Environment map(city); EnvironmentRenderer scenery(map);
+                Image image = render_city(scenery, texture, city_camera(City::center({67, 66})));
+                const bool saved = ExportImage(image, argv[3]); UnloadImage(image);
+                require(saved, "city preview export failed");
+            }
+            UnloadRenderTexture(texture); CloseWindow(); return 0;
+        }
         ui::FontResource font;
         const Environment map;
         PhysicsWorld world(map);
@@ -85,6 +286,10 @@ int main() {
         auto& unit = const_cast<PoliceUnit&>(police.units()[0]);
         const Vec3 car_position = player + Vec3(35, 0, -25), foot_position = player + Vec3(-30, 0, -25);
         const auto texture = LoadRenderTexture(640, 480);
+        city_crosswalks(texture);
+        elevated_road_pixels(texture);
+        single_square_ramps(texture);
+        diagonal_bridge_pixels(texture);
         sharp_map_edges(scenery, texture);
         sharp_map_edges(scenery, texture, true);
         const auto tall_texture = LoadRenderTexture(640, 720);

@@ -1,4 +1,5 @@
 #include "tuning_panel.hpp"
+#include "ui_font.hpp"
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -142,6 +143,9 @@ void panel_input() {
     require(panel.update(car, width, height, input).reset_car, "reset car action did not reach game controls");
     input.mouse.x = rect.x + 290;
     require(panel.update(car, width, height, input).close, "close action did not reach game controls");
+    const auto close = forza::ui::window_close(rect);
+    input.mouse = {close.x+close.width/2,close.y+close.height/2};
+    require(panel.update(car,width,height,input).close,"title-bar close button did not close tuning");
     require(!panel.contains({100, 200}, width, height), "panel consumes camera interaction outside its bounds");
     std::cout << "Panel input: dragging, release, focus loss, precision, tabs, reset and close passed\n";
 }
