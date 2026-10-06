@@ -482,6 +482,40 @@ City ground_paint(const std::filesystem::path& directory) {
     require(city.save(directory,error),"restoring painted fixture failed");
     return city;
 }
+void custom_ground_textures(const std::filesystem::path& directory) {
+    City city = City::create("Custom ground"); std::string error;
+    require(city.add_land({60,60},{68,68},error) && city.add_road(City::road_stroke({60,64},{68,64}),error),error.c_str());
+    require(city.paint_ground({65,65},{63,63},"paving custom.PNG",error)
+        && city.ground_textures.size()==9 && city.ground_texture({64,64})=="paving custom.PNG"
+        && city.ground_texture({62,62})=="soil.png", "custom rectangle did not retain filenames on land and roads");
+    const auto painted = city.ground_textures;
+    for (const auto& filename : {"../outside.png","bad\\path.png","not-an-image.txt",""})
+        require(!city.paint_ground({63,63},{65,65},filename,error) && city.ground_textures==painted,"invalid filename changed painted ground");
+    require(!city.paint_ground({-1,63},{65,65},"brick.png",error) && city.ground_textures==painted,"invalid custom rectangle changed ground");
+    require(city.erase(CityCell{64,64},error) && city.ground_texture({64,64})=="paving custom.PNG","removing a road lost its custom ground");
+    require(city.erase(CityCell{63,63},error) && !city.ground_textures.count(City::index({63,63}))
+        && city.add_land({63,63},{63,63},error) && city.ground_texture({63,63})=="soil.png","recreated land inherited custom paint");
+    require(city.paint_ground({65,65},{65,65},"grass.png",error)
+        && !city.ground_textures.count(City::index({65,65})) && city.ground[City::index({65,65})]==CityGround::Grass,"built-in repaint did not clear custom paint");
+    CityVehicle vehicle{CityVehicleKind::Car,City::center({66,66}),3};
+    vehicle.car = CarDesign{}; vehicle.car->body="body.glb"; vehicle.car->wheel="wheel.glb"; vehicle.car->offset={.2f,.1f,-.3f};
+    require(city.add_vehicle(vehicle,error) && city.add_building({{67,62},1,12},error) && city.save(directory,error),error.c_str());
+    const auto path = directory/(city.id+".city"); City loaded;
+    require(City::load(path,loaded,error) && loaded.ground_textures==city.ground_textures && loaded.ground==city.ground
+        && loaded.vehicles.size()==1 && loaded.vehicles[0].car && loaded.vehicles[0].car->offset==vehicle.car->offset && loaded.vehicles[0].rotation==3
+        && loaded.buildings.size()==1,"custom ground, buildings and car settings did not round-trip");
+    City invalid = city; invalid.ground_textures[0]="paving.png";
+    require(!invalid.save(directory,error) && City::load(path,loaded,error) && loaded.ground_textures==city.ground_textures,"invalid custom paint replaced the previous save");
+    std::ifstream saved(path); std::ostringstream contents; contents << saved.rdbuf(); saved.close();
+    const std::string current = contents.str();
+    const auto filename = current.find("paving custom.PNG");
+    std::string bad = current; bad.replace(filename,17,"../outside.png"); std::ofstream(path) << bad;
+    require(!City::load(path,loaded,error),"unsafe saved ground filename accepted");
+    std::ofstream(path) << current.substr(0,filename);
+    require(!City::load(path,loaded,error),"truncated ground filename data accepted");
+    require(city.save(directory,error),"restoring custom ground fixture failed");
+    std::cout << "Custom ground: filename painting, bounds, repainting, demolition, save compatibility and validation passed\n";
+}
 City terraced_ground(const std::filesystem::path& directory) {
     std::string error;
     require(City::elevation_step==2.f && City::corner_width==City::width+1,"elevation is not a two-meter shared corner grid");
@@ -1114,6 +1148,95 @@ void dead_ends() {
     for (int i = 0; i<120*8; ++i) { pursued.character().revive(); pursued.step({},{}); }
     require(std::count_if(police.units().begin(),police.units().end(),[](const auto& u){return u.active;})>=2,"police could not reinforce on a small island");
 }
+void car_designs(const std::filesystem::path& directory) {
+    std::string error; CarDesign design; design.name="Custom patrol"; design.body="body.GLB"; design.wheel="wheel.glb";
+    design.type=CarType::Police; design.width=2.4f; design.height=1.6f; design.length=4.8f;
+    design.offset={.35f,.2f,-.65f};
+    design.tuning.wheelbase=3.1f; design.tuning.track_width=1.8f; design.tuning.top_speed=40;
+    require(design.save(directory,error),error.c_str());
+    CarDesign loaded; require(CarDesign::load(directory/"car-Custom patrol.car",loaded,error),error.c_str());
+    require(loaded.body==design.body && loaded.wheel==design.wheel && loaded.type==CarType::Police
+        && loaded.length==design.length && loaded.offset==design.offset && loaded.tuning.top_speed==40 && loaded.tuning.wheelbase==3.1f,"Saved car settings changed");
+    auto bad=design; bad.width=std::numeric_limits<float>::quiet_NaN();
+    require(!bad.save(directory,error) && CarDesign::load(directory/"car-Custom patrol.car",loaded,error) && loaded.width==2.4f,"Invalid car replaced its saved file");
+    bad=design; bad.body="../body.glb"; require(!bad.validate(error),"Car model traversal accepted");
+    bad=design; bad.type=CarType(4); require(!bad.validate(error),"Unsupported car type accepted");
+    bad=design; bad.tuning.travel=.45f; bad.tuning.rest_length=.3f; require(!bad.validate(error),"Impossible suspension accepted");
+    bad=design; bad.offset[1]=std::numeric_limits<float>::quiet_NaN(); require(!bad.save(directory,error),"Nonfinite body offset accepted");
+    bad=design; bad.offset[2]=4.01f; require(!bad.validate(error),"Out-of-range body offset accepted");
+    std::stringstream truncated; design.write(truncated); std::stringstream broken(truncated.str().substr(0,40));
+    require(!CarDesign::read(broken,loaded,error) && loaded.body==design.body,"Corrupt car mutated the output");
+    std::ofstream(directory/"body.GLB") << "model discovery";
+    require(car_models(directory,error)==std::vector<std::string>{"body.GLB"},"GLB discovery missed an uppercase extension");
+    std::ofstream(directory/"wheel.glb") << "model discovery";
+    require(car_models(directory,error).size()==2 && saved_cars(directory,error).size()==1,"Adding a model did not refresh discovery");
+    std::ostringstream legacy; legacy << std::setprecision(std::numeric_limits<float>::max_digits10)
+        << std::quoted(design.name) << ' ' << std::quoted(design.body) << ' ' << std::quoted(design.wheel) << ' '
+        << int(design.type) << ' ' << design.width << ' ' << design.height << ' ' << design.length << '\n';
+    for (const auto& c:tuning_controls) legacy << design.tuning.*c.value << ' ';
+    legacy << '\n'; std::ofstream(directory/"legacy.car") << "AMBARETTO_CAR 1\n" << legacy.str();
+    require(CarDesign::load(directory/"legacy.car",loaded,error) && loaded.offset==std::array<float,3>{} && loaded.tuning.wheelbase==3.1f,"Version 1 car did not migrate to zero offsets");
+    std::filesystem::remove(directory/"legacy.car");
+    City city=City::create("Custom cars"); require(city.add_land({50,50},{75,75},error),error.c_str());
+    CityVehicle placed{CityVehicleKind::Car,City::center({60,60}),1}; placed.car=design;
+    require(city.add_vehicle(placed,error),error.c_str()); placed.position=City::center({62,60});
+    require(city.add_vehicle(placed,error),error.c_str()); require(city.save(directory,error),error.c_str());
+    std::ifstream header(directory/(city.id+".city")); std::string magic; int version; header>>magic>>version;
+    require(version==11,"City did not embed car offsets in version 11");
+    City copy; require(City::load(directory/(city.id+".city"),copy,error),error.c_str());
+    require(copy.vehicles.size()==2 && copy.vehicles[0].car && copy.vehicles[0].car->tuning.track_width==1.8f
+        && copy.vehicles[0].rotation==1 && copy.vehicles[0].car->offset==design.offset,"Embedded car, offset or rotation was lost");
+    std::ifstream saved_city(directory/(city.id+".city")); std::string old_city((std::istreambuf_iterator<char>(saved_city)),{});
+    old_city.replace(0,std::string("AMBARETTO_CITY 11").size(),"AMBARETTO_CITY 10");
+    const auto legacy_id=City::create("Legacy car").id; old_city.replace(old_city.find(city.id),city.id.size(),legacy_id);
+    std::ostringstream modern; design.write(modern);
+    for (std::size_t pos=old_city.find(modern.str());pos!=std::string::npos;pos=old_city.find(modern.str())) old_city.replace(pos,modern.str().size(),legacy.str());
+    std::ofstream(directory/(legacy_id+".city")) << old_city;
+    City migrated; require(City::load(directory/(legacy_id+".city"),migrated,error),error.c_str());
+    require(migrated.vehicles[0].car->offset==std::array<float,3>{}
+        && migrated.vehicles[0].car->tuning.track_width==1.8f,"Version 10 city did not migrate its car offsets");
+    auto resized=design; resized.width=3; resized.tuning.acceleration=12;
+    require(resized.save(directory,error),error.c_str());
+    const auto positions=copy.vehicles;
+    require(copy.update_car_designs(saved_cars(directory,error),error)==2 && copy.vehicles[1].car->width==3
+        && copy.vehicles[0].car->offset==design.offset && copy.vehicles[1].car->tuning.acceleration==12,"Library edits did not update all placed copies");
+    for (int i=0;i<2;++i) require(copy.vehicles[i].position==positions[i].position && copy.vehicles[i].rotation==positions[i].rotation,"Refreshing a car design moved its placed copies");
+    require(copy.update_car_designs({resized},error)==0 && error.empty(),"Unchanged designs marked the city as edited");
+    require(copy.update_car_designs({},error)==0 && copy.vehicles[0].car->width==3,"Missing library discarded the embedded design");
+    auto unrelated=resized; unrelated.name="Another car";
+    require(copy.update_car_designs({unrelated},error)==0 && copy.vehicles[0].car->name==design.name,"Refreshing an unrelated design replaced a placed car");
+    resized.width=4; resized.length=8; copy.vehicles[1].position=copy.vehicles[0].position+Vec3(0,0,5);
+    require(copy.update_car_designs({resized},error)==0 && !error.empty() && copy.vehicles[0].car->width==3,"Overlapping library edits partially updated the map");
+    auto offset_only=*copy.vehicles[0].car; offset_only.offset[0]=4;
+    require(copy.update_car_design(offset_only,error)==-1 && copy.vehicles[0].car->offset==design.offset && copy.vehicles[1].car->offset==design.offset,"Overlapping body offset partially updated placed cars");
+    PhysicsWorld world(false); Car car(world,design); car.reset({0,car.ride_height(),0});
+    GroundHit hit;
+    for (float yaw:{0.f,1.57079633f}) {
+        car.reset({0,car.ride_height(),0},yaw); const auto center=car.position()+car.rotate(car.body_offset()), axis=car.rotate(Vec3::sAxisX());
+        require(world.cast_ray(center-axis*5,axis,10,hit) && (hit.point-(center-axis*(design.width/2))).Length()<.01f,"Offset/rotated body does not match collision");
+    }
+    const auto original_half=placed.half_size(); auto shifted=design; shifted.offset[0]=-4; shifted.offset[2]=4;
+    CityVehicle expanded=placed; expanded.car=shifted;
+    require(expanded.half_size().GetX()>original_half.GetX() && expanded.half_size().GetZ()>original_half.GetZ(),"Body offsets did not expand the placement footprint");
+    const auto position=car.position(); const auto mounts=car.wheels(); car.set_design(shifted);
+    require((car.position()-position).Length()<.001f && car.wheels()[0].mount==mounts[0].mount,"Body offset moved the wheel reference frame");
+    require(car.type()==CarType::Police && car.tuning().wheelbase==3.1f && std::abs(car.wheels()[0].mount.GetZ()+1.55f)<.001f,"Saved role or wheel fitting was not applied");
+    auto tuning=car.tuning(); tuning.wheel_radius=.4f; car.set_tuning(tuning);
+    require(car.design()->tuning.wheel_radius==.4f,"Live wheel size differs from the rendered design");
+    City streets=fixture(); Environment environment(streets); PhysicsWorld traffic_world(environment);
+    const std::vector<CarDesign> empty;
+    Traffic none(traffic_world,environment,&empty); require(none.cars().empty(),"Empty car library spawned stock cars");
+    std::vector<CarDesign> regular{design}; regular[0].type=CarType::Civilian; regular[0].name="Regular car";
+    Traffic traffic(traffic_world,environment,&regular);
+    require(!traffic.cars().empty() && std::all_of(traffic.cars().begin(),traffic.cars().end(),[](const auto& v){return v.car->design() && v.car->type()==CarType::Civilian && v.car->tuning().top_speed==40;}),"Traffic did not use regular saved designs");
+    const std::vector<CarDesign> patrol{design}; Police police(traffic_world,environment,nullptr,nullptr,&patrol);
+    require(std::all_of(police.units().begin(),police.units().end(),[](const auto& u){return u.car->design() && u.car->type()==CarType::Police && u.car->tuning().wheelbase==3.1f;}),"Patrol cars did not use saved police designs");
+    Car starter(traffic_world); Police no_patrol(traffic_world,environment,&traffic,nullptr,&regular);
+    Player player(traffic_world,starter,environment,nullptr,&traffic,nullptr,nullptr,&no_patrol);
+    no_patrol.crime(Crime::OfficerAssault,player.position(),no_patrol.units()[0].officers[0].character.get());
+    for(int i=0;i<240;++i) player.step({},{});
+    require(no_patrol.wanted().stars()>=3 && std::none_of(no_patrol.units().begin(),no_patrol.units().end(),[](const auto& u){return u.active;}),"Regular-only library spawned stock police cars");
+}
 void gameplay() {
     City city = fixture(); Environment map(city); PhysicsWorld world(map);
     require(map.land_islands().size()==1 && map.trees().size()==city.trees.size() && map.ports().empty() && map.bridge_segments().empty(),"legacy city objects leaked into new city");
@@ -1174,7 +1297,7 @@ int main(int argc,char** argv) {
             std::cout << (std::filesystem::path(argv[2])/(city.id+".city")).string() << '\n'; return 0;
         }
         const auto directory = std::filesystem::temp_directory_path()/("ambaretto-city-test-"+City::create("test").id);
-        data_and_saves(directory); building_meshes(directory); building_mesh_editing(directory); building_design_updates(directory); building_rotation(directory); generated_terrain(directory); trees_and_time(directory); ground_paint(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay();
+        data_and_saves(directory); building_meshes(directory); building_mesh_editing(directory); building_design_updates(directory); building_rotation(directory); generated_terrain(directory); trees_and_time(directory); ground_paint(directory); custom_ground_textures(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay(); car_designs(directory);
         // Remove only files in this run's unique test directory; no recursive deletion.
         for (const auto& entry : std::filesystem::directory_iterator(directory)) std::filesystem::remove(entry.path());
         std::filesystem::remove(directory);

@@ -1129,14 +1129,14 @@ bool Character::touching(const Car& car) const {
 void Character::hit_by(const Car& car, float dt) {
     if (!impl_->enabled || impl_->swimming || impl_->rig || impl_->hit_cooldown > 0 || !car.simulated() || car.velocity().LengthSq() < 2.25f) return;
     const Quat inverse = car.rotation().Conjugated();
-    const Vec3 origin = inverse * (position() + Vec3(0, .9f, 0) - car.position()) - Vec3(0, chassis_offset, 0);
+    const Vec3 origin = inverse * (position() + Vec3(0, .9f, 0) - car.position()) - car.body_offset();
     // The virtual controller may already be pushed along by a predictive car contact.
     // Measure the impact against intended walking velocity, before that correction.
     Vec3 walking_velocity = impl_->desired_velocity;
     walking_velocity.SetY(velocity().GetY());
     const Vec3 relative = car.velocity() - walking_velocity;
     const Vec3 sweep = inverse * (-relative * dt);
-    const Vec3 half(1.35f, 1.15f, 2.28f); // Includes CharacterVirtual's 0.1 m predictive contact margin.
+    const Vec3 half = car.design() ? car.body_size()/2+Vec3(.42f,.93f,.43f) : Vec3(1.35f, 1.15f, 2.28f);
     float first = 0, last = 1;
     for (int axis = 0; axis < 3; ++axis) {
         if (std::abs(sweep[axis]) < .00001f) {
@@ -1431,6 +1431,20 @@ Car::~Car() {
     auto& cars = world_.impl_->cars;
     cars.erase(std::remove(cars.begin(), cars.end(), this), cars.end());
 }
+Car::Car(PhysicsWorld& world,const CarDesign& design) : Car(world,design.type) { set_design(design); }
+void Car::set_design(const CarDesign& design) {
+    std::string error; if (!design.validate(error)) throw std::invalid_argument(error);
+    const Vec3 center = position(); const Quat orientation = rotation();
+    design_ = design; type_ = design.type;
+    JPH::RefConst<JPH::Shape> box = new JPH::BoxShape(body_size()/2,.04f);
+    JPH::RefConst<JPH::Shape> shape = new JPH::OffsetCenterOfMassShape(box,-body_offset());
+    // ponytail: retain the existing 1100 kg mass/inertia; expose mass if heavier vehicle classes are added.
+    auto& physics = world_.impl_->system.GetBodyInterface();
+    const auto activation = simulated_ ? JPH::EActivation::Activate : JPH::EActivation::DontActivate;
+    physics.SetShape(body_,shape,false,activation);
+    physics.SetPositionAndRotation(body_,center+orientation*body_offset(),orientation,activation);
+    set_tuning(design.tuning);
+}
 
 void VehicleDamage::take_damage(float amount, Vec3 position, bool by_player) {
     if (health <= 0 || !std::isfinite(amount) || amount <= 0) return;
@@ -1466,7 +1480,7 @@ void Car::update_wheel_mounts() {
 void Car::reset(const Vec3& center_of_mass, float yaw) {
     auto& physics = world_.impl_->system.GetBodyInterface();
     const Quat rotation = Quat::sRotation(Vec3::sAxisY(), yaw);
-    physics.SetPositionAndRotation(body_, center_of_mass + rotation * Vec3(0, chassis_offset, 0),
+    physics.SetPositionAndRotation(body_, center_of_mass + rotation * body_offset(),
         rotation, simulated_ ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
     physics.SetLinearAndAngularVelocity(body_, Vec3::sZero(), Vec3::sZero());
     steer_ = 0;
@@ -1498,6 +1512,7 @@ void Car::set_tuning(CarTuning tuning) {
     // rest length and travel in either order.
     tuning.travel = std::min(tuning.travel, tuning.rest_length - .05f);
     tuning_ = tuning;
+    if (design_) design_->tuning = tuning;
     steer_ = clamp(steer_, -tuning_.max_steer, tuning_.max_steer);
     update_wheel_mounts();
     refresh_wheel_contacts();

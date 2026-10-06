@@ -36,7 +36,7 @@ FetchContent_Declare(Jolt
 )
 FetchContent_MakeAvailable(Jolt)
 
-add_library(vehicle_physics src/vehicle.cpp src/environment.cpp src/city.cpp src/building_mesh.cpp src/player.cpp src/traffic.cpp src/pedestrians.cpp src/third_person_camera.cpp src/weapons.cpp src/police.cpp)
+add_library(vehicle_physics src/vehicle.cpp src/environment.cpp src/city.cpp src/building_mesh.cpp src/car_design.cpp src/character_design.cpp src/player.cpp src/traffic.cpp src/pedestrians.cpp src/third_person_camera.cpp src/weapons.cpp src/police.cpp)
 target_include_directories(vehicle_physics PUBLIC include)
 target_include_directories(vehicle_physics SYSTEM PUBLIC $<TARGET_PROPERTY:Jolt,INTERFACE_INCLUDE_DIRECTORIES>)
 target_link_libraries(vehicle_physics PUBLIC Jolt)
@@ -44,7 +44,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vehicle_physics PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_executable(Ambaretto src/main.cpp src/city_editor.cpp src/environment_renderer.cpp src/car_renderer.cpp src/tuning_panel.cpp src/ui_font.cpp src/controller_mapping.cpp src/menu_bar.cpp src/graphics_settings.cpp src/graphics_panel.cpp src/scene_lighting.cpp src/vehicle_audio.cpp)
+add_executable(Ambaretto src/main.cpp src/city_editor.cpp src/environment_renderer.cpp src/car_renderer.cpp src/character_renderer.cpp src/tuning_panel.cpp src/ui_font.cpp src/controller_mapping.cpp src/menu_bar.cpp src/graphics_settings.cpp src/graphics_panel.cpp src/scene_lighting.cpp src/vehicle_audio.cpp)
 target_link_libraries(Ambaretto PRIVATE vehicle_physics PkgConfig::RAYLIB PkgConfig::GLFW)
 # Keep runtime assets beside the executable, including after model/texture edits.
 add_custom_target(Ambaretto_assets ALL
@@ -60,6 +60,9 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(character_tests tests/character_tests.cpp src/character_renderer.cpp src/car_renderer.cpp src/scene_lighting.cpp)
+    target_link_libraries(character_tests PRIVATE vehicle_physics PkgConfig::RAYLIB)
+    add_test(NAME character_designs COMMAND character_tests)
     add_executable(menu_tests tests/menu_tests.cpp src/menu_bar.cpp src/controller_mapping.cpp src/ui_font.cpp)
     target_include_directories(menu_tests PRIVATE include)
     target_link_libraries(menu_tests PRIVATE PkgConfig::RAYLIB PkgConfig::GLFW)

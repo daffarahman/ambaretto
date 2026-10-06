@@ -32,7 +32,7 @@ struct TrafficCar {
 // Claimed cars stay physical. Inputs precede the shared PhysicsWorld step.
 class Traffic {
 public:
-    Traffic(PhysicsWorld& world, const Environment& environment);
+    Traffic(PhysicsWorld& world, const Environment& environment, const std::vector<CarDesign>* designs = nullptr, const std::vector<CharacterDesign>* characters = nullptr);
     const std::vector<TrafficCar>& cars() const { return cars_; }
     bool is_npc(const Car* car) const;
     bool steal(Car& car);
@@ -53,6 +53,7 @@ private:
                          const Plane* plane, Vec3 player_position) const;
     PhysicsWorld& world_;
     const Environment& environment_;
+    std::vector<CharacterDesign> driver_designs_;
     std::vector<std::vector<Vec3>> routes_;
     std::vector<TrafficCar> cars_;
     float stream_time_ = 0;

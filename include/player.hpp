@@ -2,6 +2,7 @@
 #include "vehicle.hpp"
 #include "plane.hpp"
 #include "weapons.hpp"
+#include "character_design.hpp"
 
 namespace ambaretto {
 class Traffic;
@@ -70,6 +71,8 @@ public:
     bool raycast(Vec3 origin, Vec3 direction, float& distance, BodyPart& part) const;
     float yaw() const { return yaw_; }
     float gait() const { return gait_; }
+    void set_design(const CharacterDesign& design);
+    const std::optional<CharacterDesign>& design() const { return design_; }
     Vec3 forward() const { return Quat::sRotation(Vec3::sAxisY(), yaw_) * Vec3(0, 0, -1); }
 private:
     bool cover_wall(Vec3 feet, Vec3 direction, float range, GroundHit& wall, float& height) const;
@@ -81,6 +84,7 @@ private:
     std::unique_ptr<Impl> impl_;
     float yaw_ = 0, gait_ = 0;
     float health_ = 100;
+    std::optional<CharacterDesign> design_;
 };
 
 enum class Interaction { Entered, Exited, TooFast, TooFar, Blocked };

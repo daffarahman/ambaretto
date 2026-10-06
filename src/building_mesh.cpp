@@ -60,6 +60,7 @@ void erase_faces(BuildingMesh& mesh,const std::set<int>& removed) {
     }),mesh.decals.end());
 }
 }
+bool valid_texture_filename(const std::string& filename) { return !filename.empty() && texture_name(filename); }
 std::vector<std::array<int,3>> triangulate_polygon(const std::vector<Vec3>& p) {
     if (p.size()<3) return {};
     const Vec3 normal = polygon_normal(p);

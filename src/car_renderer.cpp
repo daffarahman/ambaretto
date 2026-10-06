@@ -4,71 +4,21 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
+#include <fstream>
+#include <cstdint>
+#include <set>
 #include <string>
 
 namespace ambaretto {
 namespace {
-// raylib bakes the GLB node translation into the imported vertices. Undo that
-// export pivot before mirroring the half-body about its original X = 0 seam.
-constexpr Vector3 export_translation{0.055822067f, -0.075678185f, 0.068677470f};
-constexpr float front_axle_z = 1.19f, rear_axle_z = -1.40f;
-constexpr float axle_y = -0.145f;
-constexpr float scale = 2.5f / (front_axle_z - rear_axle_z);
-constexpr float axle_midpoint = (front_axle_z + rear_axle_z) / 2;
-constexpr float resting_axle_y = -0.15f; // Relative to the physics center of mass.
-
-std::string model_path(const char* filename) {
-    const std::string relative = std::string("assets/models/") + filename;
-    const std::string bundled = std::string(GetApplicationDirectory()) + relative;
-    return FileExists(bundled.c_str()) ? bundled : relative;
-}
-
-Vector3 fit_position(Vector3 p, bool mirrored) {
-    p = Vector3Subtract(p, export_translation);
-    // The asset faces +Z; the physics car faces -Z.
-    return {(mirrored ? p.x : -p.x) * scale,
-            (p.y - axle_y) * scale + resting_axle_y,
-            -(p.z - axle_midpoint) * scale};
-}
-
-Mesh complete_body(const Mesh& source) {
-    Mesh mesh{};
-    // Expand the indexed primitives, duplicating each triangle for the other
-    // half. Reversing mirrored winding and normals keeps lighting/culling valid.
-    mesh.vertexCount = source.triangleCount * 6;
-    mesh.triangleCount = source.triangleCount * 2;
-    mesh.vertices = static_cast<float*>(MemAlloc(mesh.vertexCount * 3 * sizeof(float)));
-    mesh.normals = static_cast<float*>(MemAlloc(mesh.vertexCount * 3 * sizeof(float)));
-    mesh.texcoords = static_cast<float*>(MemAlloc(mesh.vertexCount * 2 * sizeof(float)));
-    if (source.colors) mesh.colors = static_cast<unsigned char*>(MemAlloc(mesh.vertexCount * 4));
-    for (int half = 0; half < 2; ++half) {
-        for (int triangle = 0; triangle < source.triangleCount; ++triangle) {
-            for (int corner = 0; corner < 3; ++corner) {
-                const int index = triangle * 3 + (half == 1 ? 2 - corner : corner);
-                const int src = source.indices ? source.indices[index] : index;
-                const int dst = half * source.triangleCount * 3 + triangle * 3 + corner;
-                const Vector3 p = fit_position({source.vertices[src * 3], source.vertices[src * 3 + 1],
-                                               source.vertices[src * 3 + 2]}, half == 1);
-                mesh.vertices[dst * 3] = p.x;
-                mesh.vertices[dst * 3 + 1] = p.y;
-                mesh.vertices[dst * 3 + 2] = p.z;
-                const Vector3 n = source.normals
-                    ? Vector3{source.normals[src * 3], source.normals[src * 3 + 1], source.normals[src * 3 + 2]}
-                    : Vector3{0, 1, 0};
-                mesh.normals[dst * 3] = half == 1 ? n.x : -n.x;
-                mesh.normals[dst * 3 + 1] = n.y;
-                mesh.normals[dst * 3 + 2] = -n.z;
-                for (int uv = 0; uv < 2; ++uv)
-                    mesh.texcoords[dst * 2 + uv] = source.texcoords ? source.texcoords[src * 2 + uv] : 0;
-                if (source.colors) std::memcpy(mesh.colors + dst * 4, source.colors + src * 4, 4);
-            }
-        }
+void unload_model(Model model) {
+    std::set<unsigned int> textures;
+    for (int i=0;i<model.materialCount;++i) for (int map=0;map<=MATERIAL_MAP_BRDF;++map) {
+        const auto texture=model.materials[i].maps[map].texture;
+        if (texture.id && texture.id!=rlGetTextureIdDefault() && textures.insert(texture.id).second) UnloadTexture(texture);
     }
-    UploadMesh(&mesh, false);
-    return mesh;
+    UnloadModel(model);
 }
-
 const char* vertex_shader = R"glsl(#version 330
 in vec3 vertexPosition;
 in vec3 vertexNormal;
@@ -97,6 +47,7 @@ uniform sampler2D texture0;
 uniform vec4 colDiffuse;
 uniform vec3 cameraPosition;
 uniform vec3 emissionColor;
+uniform int mirrored;
 uniform vec3 sunDirection;
 uniform vec3 sunColor;
 uniform vec3 ambientLight;
@@ -106,7 +57,7 @@ uniform float daylight;
 out vec4 finalColor;
 void main() {
     vec3 n = normalize(normal);
-    if (!gl_FrontFacing) n = -n;
+    if (gl_FrontFacing == (mirrored == 1)) n = -n;
     vec3 light = sunDirection;
     vec3 view = normalize(cameraPosition - worldPosition);
     float shadow = scene_shadow(worldPosition, n, light);
@@ -151,106 +102,69 @@ CarRenderer::CarRenderer() {
     shader_.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(shader_, "matNormal");
     camera_location_ = GetShaderLocation(shader_, "cameraPosition");
     emission_location_ = GetShaderLocation(shader_, "emissionColor");
+    mirrored_location_ = GetShaderLocation(shader_, "mirrored");
     damage_shader_ = LoadShaderFromMemory(nullptr, damage_fragment);
     damage_time_location_ = GetShaderLocation(damage_shader_, "effectTime");
     damage_fire_location_ = GetShaderLocation(damage_shader_, "fire");
-    load_body();
-    load_wheel();
 }
 
-void CarRenderer::load_body() {
-    const std::string path = model_path("trueno.glb");
-    if (!FileExists(path.c_str())) {
-        TraceLog(LOG_WARNING, "CAR: Trueno body missing; using the procedural body");
-        return;
-    }
-    body_ = LoadModel(path.c_str());
-    if (body_.meshCount != 9 || !body_.meshes || !body_.materials || !body_.meshMaterial) {
-        TraceLog(LOG_WARNING, "CAR: Unexpected Trueno mesh layout; using the procedural body");
-        return;
-    }
-    // The export leaves paint, trim and glass at default white. Give those
-    // slots the Trueno's white paint, dark trim and tinted glass.
-    constexpr Color palette[9] = {{235, 235, 224, 255}, {32, 35, 39, 255},
-        {236, 146, 41, 255}, {157, 163, 166, 255}, BLACK,
-        {43, 66, 79, 255}, BLACK, {27, 30, 34, 255}, BLACK};
-    // raylib only imports emissiveFactor when there is an emission texture.
-    // This GLB has no textures, so restore its three lamp factors explicitly.
-    constexpr Color lamp_colors[9] = {BLANK, BLANK, BLANK, BLANK,
-        {240, 255, 128, 255}, BLANK, {255, 189, 27, 255}, BLANK, {255, 0, 1, 255}};
-    for (int i = 0; i < body_.meshCount; ++i) {
-        Mesh complete = complete_body(body_.meshes[i]);
-        UnloadMesh(body_.meshes[i]);
-        body_.meshes[i] = complete;
-        auto& material = body_.materials[body_.meshMaterial[i]];
-        material.shader = shader_;
-        if (i != 4 && i != 6 && i != 8) material.maps[MATERIAL_MAP_DIFFUSE].color = palette[i];
-        material.maps[MATERIAL_MAP_EMISSION].color = lamp_colors[i];
-    }
-    ready_ = true;
-    TraceLog(LOG_INFO, "CAR: Loaded complete mirrored Trueno body, aligned to existing wheels");
+std::filesystem::path car_asset_directory(const char* folder) {
+    const auto source = std::filesystem::path("assets")/folder;
+    std::error_code ec;
+    return std::filesystem::is_directory(source,ec) ? source : std::filesystem::path(GetApplicationDirectory())/source;
 }
-
-void CarRenderer::load_wheel() {
-    const std::string path = model_path("trueno-wheel.glb");
-    if (!FileExists(path.c_str())) {
-        TraceLog(LOG_WARNING, "CAR: Trueno wheel missing; using the procedural wheels");
-        return;
-    }
-    wheel_ = LoadModel(path.c_str());
-    if (wheel_.meshCount != 3 || !wheel_.meshes || !wheel_.materials || !wheel_.meshMaterial) {
-        TraceLog(LOG_WARNING, "CAR: Unexpected Trueno wheel layout; using the procedural wheels");
-        return;
-    }
-    for (int i = 0; i < wheel_.meshCount; ++i) {
-        const auto& mesh = wheel_.meshes[i];
-        const int material = wheel_.meshMaterial[i];
-        if (!mesh.vertices || mesh.vertexCount <= 0 || material < 0 || material >= wheel_.materialCount) {
-            TraceLog(LOG_WARNING, "CAR: Invalid Trueno wheel geometry; using the procedural wheels");
-            return;
+const CarRenderer::Asset* CarRenderer::asset(const std::string& name,const std::string& folder) const {
+    const bool wheel=folder=="wheels";
+    const std::string key = folder+"/"+name;
+    if (auto found = assets_.find(key); found!=assets_.end()) return found->second.model.meshCount ? &found->second : nullptr;
+    Asset result; const auto path = car_asset_directory(folder.c_str())/name;
+    std::ifstream file(path,std::ios::binary); std::uint32_t header[5]{};
+    std::error_code ec; const auto size = std::filesystem::file_size(path,ec);
+    if (!name.empty() && !ec && size>=24 && size<=128*1024*1024 && file.read(reinterpret_cast<char*>(header),sizeof(header))
+        && header[0]==0x46546c67 && header[1]==2 && header[2]==size && header[3]>0 && header[3]<=size-20 && header[4]==0x4e4f534a) {
+        result.model = LoadModel(path.string().c_str());
+        bool valid = result.model.meshCount>0 && result.model.meshes && result.model.materials && result.model.meshMaterial;
+        for (int i = 0; valid && i<result.model.meshCount; ++i) {
+            const auto& mesh = result.model.meshes[i]; const int material = result.model.meshMaterial[i];
+            valid = mesh.vertices && mesh.vertexCount>0 && material>=0 && material<result.model.materialCount;
+            for (int j = 0; valid && j<mesh.vertexCount*3; ++j) valid = std::isfinite(mesh.vertices[j]);
         }
-    }
-    // The GLB was exported at a rear wheel's position. Recenter the entire
-    // assembly, then fit its circular YZ cross-section to the raycast radius.
-    const auto bounds = GetModelBoundingBox(wheel_);
-    const Vector3 center = Vector3Scale(Vector3Add(bounds.min, bounds.max), 0.5f);
-    float radius = 0;
-    for (int i = 0; i < wheel_.meshCount; ++i) {
-        const auto& mesh = wheel_.meshes[i];
-        for (int v = 0; v < mesh.vertexCount; ++v)
-            radius = std::max(radius, std::hypot(mesh.vertices[v * 3 + 1] - center.y,
-                                               mesh.vertices[v * 3 + 2] - center.z));
-    }
-    if (!std::isfinite(radius) || radius < 0.0001f) {
-        TraceLog(LOG_WARNING, "CAR: Invalid Trueno wheel radius; using the procedural wheels");
-        return;
-    }
-    const float wheel_scale = wheel_radius / radius;
-    // Rim, tire, and tread slots are default white in this export.
-    constexpr Color wheel_colors[3] = {{186, 193, 201, 255}, {22, 24, 27, 255}, {37, 39, 43, 255}};
-    for (int i = 0; i < wheel_.meshCount; ++i) {
-        auto& mesh = wheel_.meshes[i];
-        for (int v = 0; v < mesh.vertexCount; ++v) {
-            mesh.vertices[v * 3] = (mesh.vertices[v * 3] - center.x) * wheel_scale;
-            mesh.vertices[v * 3 + 1] = (mesh.vertices[v * 3 + 1] - center.y) * wheel_scale;
-            mesh.vertices[v * 3 + 2] = (mesh.vertices[v * 3 + 2] - center.z) * wheel_scale;
+        if (valid) {
+            const auto bounds = GetModelBoundingBox(result.model);
+            result.center = Vector3Scale(Vector3Add(bounds.min,bounds.max),.5f);
+            result.size = Vector3Subtract(bounds.max,bounds.min);
+            result.axis = result.size.y<result.size.x ? 1 : 0;
+            if (result.size.z<(result.axis==0 ? result.size.x : result.size.y)) result.axis = 2;
+            const Matrix align = result.axis==1 ? MatrixRotateZ(-PI/2) : result.axis==2 ? MatrixRotateY(PI/2) : MatrixIdentity();
+            for (int i = 0; wheel && i<result.model.meshCount; ++i) for (int v = 0; v<result.model.meshes[i].vertexCount; ++v) {
+                const float* p = result.model.meshes[i].vertices+v*3;
+                const auto q = Vector3Transform(Vector3Subtract({p[0],p[1],p[2]},result.center),align);
+                result.radius = std::max(result.radius,std::hypot(q.y,q.z));
+            }
+            valid = std::isfinite(result.center.x) && std::isfinite(result.center.y) && std::isfinite(result.center.z)
+                && std::isfinite(result.size.x) && std::isfinite(result.size.y) && std::isfinite(result.size.z)
+                && (wheel ? std::isfinite(result.radius) && result.radius>.0001f : std::min({result.size.x,result.size.y,result.size.z})>.0001f);
+            if (valid) for (int i = 0; i<result.model.materialCount; ++i) result.model.materials[i].shader = shader_;
         }
-        UpdateMeshBuffer(mesh, 0, mesh.vertices, mesh.vertexCount * 3 * sizeof(float), 0);
-        auto& material = wheel_.materials[wheel_.meshMaterial[i]];
-        material.shader = shader_;
-        material.maps[MATERIAL_MAP_DIFFUSE].color = wheel_colors[i];
-        material.maps[MATERIAL_MAP_EMISSION].color = BLANK;
+        if (!valid) { if (result.model.meshes || result.model.materials) unload_model(result.model); result = {}; }
     }
-    wheel_ready_ = true;
-    TraceLog(LOG_INFO, "CAR: Loaded Trueno wheel, radius %.3f m, width %.3f m", wheel_radius,
-             (bounds.max.x - bounds.min.x) * wheel_scale);
+    auto& stored = assets_.emplace(key,result).first->second;
+    return stored.model.meshCount ? &stored : nullptr;
 }
-
+bool CarRenderer::available(const CarDesign& design,std::string& error) const {
+    if (!design.validate(error)) return false;
+    if (!asset(design.body,"cars")) { error = "Missing or invalid body GLB: "+design.body; return false; }
+    if (!asset(design.wheel,"wheels")) { error = "Missing or invalid wheel GLB: "+design.wheel; return false; }
+    return true;
+}
 CarRenderer::~CarRenderer() {
-    if (body_.meshes || body_.materials) UnloadModel(body_);
-    if (wheel_.meshes || wheel_.materials) UnloadModel(wheel_);
+    refresh();
     if (shader_.id != 0) UnloadShader(shader_);
     if (damage_shader_.id != 0) UnloadShader(damage_shader_);
+}
+void CarRenderer::refresh() {
+    for (const auto& entry : assets_) if (entry.second.model.meshCount) unload_model(entry.second.model);
+    assets_.clear();
 }
 
 void CarRenderer::draw_damage(const Camera3D& camera, Vec3 center, bool wreck, float age, float size, float time) const {
@@ -298,35 +212,59 @@ void CarRenderer::draw_damage(const Camera3D& camera, Vec3 center, bool wreck, f
     EndShaderMode();
 }
 
-bool CarRenderer::draw_body(const Car& car, const Camera3D& camera, Color paint, Shader override_shader) const {
-    if (!ready_) return false;
-    const auto q = car.rotation();
-    const auto p = car.position();
-    const Matrix transform = MatrixMultiply(QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()}),
-        MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
-    draw_model(body_, transform, camera, paint, override_shader, !car.destroyed());
-    return true;
+bool CarRenderer::body(const CarDesign& design,Vec3 position,Quat rotation,const Camera3D& camera,Shader override_shader,bool intact) const {
+    const auto* source = asset(design.body,"cars"); if (!source) return false;
+    Matrix transform = MatrixMultiply(MatrixTranslate(-source->center.x,-source->center.y,-source->center.z),
+        MatrixScale(design.width/source->size.x,design.height/source->size.y,design.length/source->size.z));
+    // glTF fronts face +Z; cars drive toward -Z in this world.
+    transform = MatrixMultiply(transform,MatrixRotateY(PI));
+    transform = MatrixMultiply(transform,MatrixTranslate(design.offset[0],design.height/2-.15f+design.offset[1],design.offset[2]));
+    transform = MatrixMultiply(transform,QuaternionToMatrix({rotation.GetX(),rotation.GetY(),rotation.GetZ(),rotation.GetW()}));
+    transform = MatrixMultiply(transform,MatrixTranslate(position.GetX(),position.GetY(),position.GetZ()));
+    draw_model(source->model,transform,camera,override_shader,intact); return true;
+}
+bool CarRenderer::tire(const CarDesign& design,Vec3 position,Quat rotation,const Camera3D& camera,Shader override_shader,bool intact) const {
+    const auto* source = asset(design.wheel,"wheels"); if (!source) return false;
+    const Matrix align = source->axis==1 ? MatrixRotateZ(-PI/2) : source->axis==2 ? MatrixRotateY(PI/2) : MatrixIdentity();
+    Matrix transform = MatrixMultiply(MatrixTranslate(-source->center.x,-source->center.y,-source->center.z),align);
+    const float scale = design.tuning.wheel_radius/source->radius;
+    transform = MatrixMultiply(transform,MatrixScale(scale,scale,scale));
+    transform = MatrixMultiply(transform,QuaternionToMatrix({rotation.GetX(),rotation.GetY(),rotation.GetZ(),rotation.GetW()}));
+    transform = MatrixMultiply(transform,MatrixTranslate(position.GetX(),position.GetY(),position.GetZ()));
+    draw_model(source->model,transform,camera,override_shader,intact); return true;
+}
+bool CarRenderer::draw_body(const Car& car,const Camera3D& camera,Shader override_shader) const {
+    return car.design() && body(*car.design(),car.position(),car.rotation(),camera,override_shader,!car.destroyed());
+}
+bool CarRenderer::draw_wheel(const Car& car,const Wheel& wheel,const Camera3D& camera,Shader override_shader) const {
+    if (!car.design()) return false;
+    const Quat side = Quat::sRotation(Vec3::sAxisY(),wheel.mount.GetX()<0 ? PI : 0);
+    const Quat spin = Quat::sRotation(Vec3::sAxisX(),-std::remainder(wheel.spin,2*PI));
+    const Quat steering = Quat::sRotation(Vec3::sAxisY(),wheel.front ? car.steering() : 0);
+    return tire(*car.design(),car.wheel_center(wheel),car.rotation()*steering*spin*side,camera,override_shader,!car.destroyed());
+}
+void CarRenderer::draw_design(const CarDesign& design,Vec3 ground,float yaw,const Camera3D& camera) const {
+    const Quat rotation = Quat::sRotation(Vec3::sAxisY(),yaw);
+    const float ride = design.tuning.rest_length+design.tuning.wheel_radius-design.tuning.mount_height;
+    body(design,ground+Vec3(0,ride,0),rotation,camera);
+    for (int i = 0; i<4; ++i) {
+        const Vec3 position = ground+rotation*Vec3((i%2 ? 1 : -1)*design.tuning.track_width/2,design.tuning.wheel_radius,(i<2 ? -1 : 1)*design.tuning.wheelbase/2);
+        tire(design,position,rotation*Quat::sRotation(Vec3::sAxisY(),i%2 ? 0 : PI),camera);
+    }
 }
 
-bool CarRenderer::draw_wheel(const Car& car, const Wheel& wheel, const Camera3D& camera, Shader override_shader) const {
-    if (!wheel_ready_) return false;
-    // Orient the detailed rim outward on each side. Spin about chassis +X
-    // after this turn so both sides roll in the same physical direction.
-    const Quat side = Quat::sRotation(Vec3::sAxisY(), wheel.mount.GetX() < 0 ? PI : 0);
-    const Quat spin = Quat::sRotation(Vec3::sAxisX(), -std::remainder(wheel.spin, 2 * PI));
-    const Quat steering = Quat::sRotation(Vec3::sAxisY(), wheel.front ? car.steering() : 0);
-    const Quat q = car.rotation() * steering * spin * side;
-    const auto p = car.wheel_center(wheel);
-    const float size = car.tuning().wheel_radius / wheel_radius;
-    const Matrix transform = MatrixMultiply(MatrixMultiply(MatrixScale(size, size, size),
-        QuaternionToMatrix({q.GetX(), q.GetY(), q.GetZ(), q.GetW()})), MatrixTranslate(p.GetX(), p.GetY(), p.GetZ()));
-    draw_model(wheel_, transform, camera, BLANK, override_shader, !car.destroyed());
-    return true;
+bool CarRenderer::model_bounds(const std::string& folder, const std::string& name, Vector3& center, Vector3& size) const {
+    const auto* source=asset(name,folder); if (!source) return false;
+    center=source->center; size=source->size; return true;
 }
-
-void CarRenderer::draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Color paint, Shader override_shader, bool intact) const {
+void CarRenderer::draw_imported(const std::string& folder, const std::string& name, const Matrix& transform, const Camera3D& camera, Shader override_shader, bool mirrored) const {
+    if (const auto* source=asset(name,folder)) draw_model(source->model,transform,camera,override_shader,true,mirrored);
+}
+void CarRenderer::draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Shader override_shader, bool intact, bool mirrored) const {
     if (!override_shader.id) SetShaderValue(shader_, camera_location_, &camera.position, SHADER_UNIFORM_VEC3);
-    // Both source GLBs mark every material as double-sided.
+    const int mirror=mirrored ? 1 : 0;
+    if (!override_shader.id) SetShaderValue(shader_,mirrored_location_,&mirror,SHADER_UNIFORM_INT);
+    // Imported cars may contain thin, double-sided body panels.
     rlDrawRenderBatchActive();
     rlDisableBackfaceCulling();
     for (int i = 0; i < model.meshCount; ++i) {
@@ -335,7 +273,6 @@ void CarRenderer::draw_model(const Model& model, const Matrix& transform, const 
         if (override_shader.id) material.shader = override_shader;
         const Color original = material.maps[MATERIAL_MAP_DIFFUSE].color;
         if (!intact) material.maps[MATERIAL_MAP_DIFFUSE].color = {18, 18, 18, 255};
-        else if (i == 0 && paint.a != 0) material.maps[MATERIAL_MAP_DIFFUSE].color = paint;
         const auto color = intact ? material.maps[MATERIAL_MAP_EMISSION].color : BLANK;
         const Vector3 emission{color.r / 255.0f, color.g / 255.0f, color.b / 255.0f};
         if (!override_shader.id) SetShaderValue(shader_, emission_location_, &emission, SHADER_UNIFORM_VEC3);

@@ -1,10 +1,12 @@
 #pragma once
 #include "vehicle.hpp"
 #include "building_mesh.hpp"
+#include "character_design.hpp"
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -38,6 +40,7 @@ struct CityVehicle {
     CityVehicle(CityVehicleKind kind, Vec3 position, int rotation = 0) : kind(kind), position(position), rotation(rotation) {}
     CityVehicle(CityVehicleKind kind, CityCell cell, int rotation = 0);
     Vec3 half_size() const;
+    std::optional<CarDesign> car;
 };
 struct CityRoadPort {
     Vec3 center = Vec3::sZero();
@@ -78,6 +81,7 @@ struct City {
     std::string id, name = "New city";
     std::array<CityTile, width * width> tiles{};
     std::array<CityGround, width * width> ground{};
+    std::map<int,std::string> ground_textures;
     std::array<unsigned char, corner_width * corner_width> elevation{};
     // Stroke axes: 1 = north/south, 2 = east/west, 3 = crossing or bend.
     std::array<unsigned char, width * width> road_axes{};
@@ -86,6 +90,9 @@ struct City {
     std::vector<Tree> trees;
     int start_minutes = 12 * 60;
     std::optional<CityCell> spawn;
+    std::optional<CharacterDesign> player_character;
+    bool playable() const { std::string error; return spawn && player_character && player_character->type==CharacterType::Player && player_character->validate(error); }
+    bool update_player_character(const std::vector<CharacterDesign>& designs);
     static bool contains(CityCell p) { return p.x >= 0 && p.z >= 0 && p.x < width && p.z < width; }
     static int index(CityCell p) { return p.z * width + p.x; }
     static int corner_index(CityCell p) { return p.z * corner_width + p.x; }
@@ -117,9 +124,14 @@ struct City {
     bool add_building(CityBuilding building, std::string& error, int replace = -1);
     // Returns updated instances, 0 for no change, or -1 if the whole design update is rejected.
     int update_building_design(const BuildingMesh& mesh, std::string& error, int replace = -1);
+    int update_car_design(const CarDesign& design, std::string& error, int replace = -1);
+    // Returns updated instances; error lists designs rejected by the map's placement checks.
+    int update_car_designs(const std::vector<CarDesign>& designs, std::string& error);
     bool add_vehicle(CityVehicle vehicle, std::string& error, int replace = -1);
     bool set_spawn(CityCell p, std::string& error);
     bool paint_ground(CityCell a, CityCell b, CityGround texture, std::string& error);
+    bool paint_ground(CityCell a, CityCell b, const std::string& texture, std::string& error);
+    std::string ground_texture(CityCell p) const;
     bool change_elevation(CityCell a, CityCell b, int direction, std::string& error);
     bool tree_clear(Vec3 p) const;
     void clear_trees();

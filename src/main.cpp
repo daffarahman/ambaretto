@@ -3,6 +3,7 @@
 #include "environment.hpp"
 #include "environment_renderer.hpp"
 #include "car_renderer.hpp"
+#include "character_renderer.hpp"
 #include "tuning_panel.hpp"
 #include "menu_bar.hpp"
 #include "graphics_settings.hpp"
@@ -36,13 +37,15 @@ Vector3 lerp(Vector3 a, Vector3 b, float t) {
 struct SkidMark { ambaretto::Vec3 from, to; };
 struct Scene {
     const ambaretto::Environment& environment;
+    std::vector<ambaretto::CarDesign> designs;
+    std::vector<ambaretto::CharacterDesign> characters;
     ambaretto::PhysicsWorld world;
     ambaretto::Car car{world};
     ambaretto::Plane plane{world};
     std::vector<std::unique_ptr<ambaretto::Plane>> aircraft = ambaretto::parked_aircraft(world, environment);
-    ambaretto::Traffic traffic{world, environment};
-    ambaretto::Pedestrians pedestrians{world, environment};
-    ambaretto::Police police{world, environment, &traffic, &pedestrians};
+    ambaretto::Traffic traffic{world, environment, &designs, &characters};
+    ambaretto::Pedestrians pedestrians{world, environment, &characters};
+    ambaretto::Police police{world, environment, &traffic, &pedestrians, &designs, &characters};
     ambaretto::Player player{world, car, environment, &plane, &traffic, &pedestrians, &aircraft, &police};
     std::vector<SkidMark> marks;
     std::size_t next_mark = 0;
@@ -51,9 +54,14 @@ struct Scene {
     const ambaretto::Car* skid_car = nullptr;
     static constexpr std::size_t max_marks = 2400;
 
-    explicit Scene(const ambaretto::Environment& map) : environment(map), world(map) {
+    Scene(const ambaretto::Environment& map,std::vector<ambaretto::CarDesign> cars,std::vector<ambaretto::CharacterDesign> people) : environment(map), designs(std::move(cars)), characters(std::move(people)), world(map) {
+        if (map.city() && map.city()->player_character) player.character().set_design(*map.city()->player_character);
         marks.reserve(max_marks);
         if (map.city()) { plane.set_simulated(false); plane.reset({-9000,-8,-9000}); }
+        if (!map.city()) {
+            if (!designs.empty()) car.set_design(designs.front());
+            else { car.set_simulated(false); player.respawn_on_foot(map.spawn()-ambaretto::Vec3(0,.48f,0)); }
+        }
         reset();
     }
     void reset() {
@@ -147,47 +155,14 @@ void draw_box(const ambaretto::Vec3& center, const ambaretto::Quat& rotation,
     if (outline) for (const auto& edge : edges) DrawLine3D(p[edge[0]], p[edge[1]], MAROON);
 }
 
-Color traffic_paint(std::size_t index) {
-    constexpr Color colors[] = {{193, 65, 53, 255}, {64, 127, 161, 255}, {219, 174, 64, 255},
-        {83, 139, 100, 255}, {176, 183, 195, 255}, {149, 93, 157, 255}};
-    return colors[index % std::size(colors)];
-}
-
 void draw_car(const ambaretto::Car& car, const ambaretto::CarRenderer& renderer, const Camera3D& camera,
-              Color paint = {235, 235, 224, 255}, Shader override_shader = {}, bool emergency = false) {
-    if (car.type() == ambaretto::CarType::Police) paint = {30, 36, 48, 255};
-    if (car.destroyed()) paint = {18, 18, 18, 255};
-    emergency &= !car.destroyed();
-    const bool model_body = renderer.draw_body(car, camera, paint, override_shader);
-    if (!model_body) {
-        const auto basis = car.rotation();
-        draw_box(car.position() + car.rotate(ambaretto::Vec3(0, ambaretto::chassis_offset, 0)), basis,
-                 ambaretto::Vec3(float(1.85), float(0.5), float(3.7)), paint);
-        draw_box(car.position() + car.rotate(ambaretto::Vec3(0, float(0.93), float(0.25))), basis,
-                 ambaretto::Vec3(float(1.45), float(0.55), float(1.7)), car.destroyed() ? paint : Color{39, 58, 73, 255});
-    }
-    if (car.type() == ambaretto::CarType::Police) {
-        const auto box = [&](ambaretto::Vec3 p, ambaretto::Vec3 size, Color color) {
-            draw_box(car.position() + car.rotate(p), car.rotation(), size, car.destroyed() ? paint : color, false);
-        };
-        const float roof = model_body ? .88f : 1.205f;
-        box({0, roof + .04f, .18f}, {.95f, .07f, .23f}, BLACK);
-        const bool blink = int(GetTime() * 7) % 2 == 0;
-        box({-.28f, roof + .11f, .18f}, {.36f, .12f, .22f}, emergency && blink ? RED : Color{94, 24, 36, 255});
-        box({.28f, roof + .11f, .18f}, {.36f, .12f, .22f}, emergency && !blink ? SKYBLUE : Color{26, 46, 98, 255});
-    }
+              Shader override_shader = {}) {
+    if (!car.design() || !renderer.draw_body(car,camera,override_shader)) return;
     for (const auto& wheel : car.wheels()) {
         const auto mount = car.position() + car.rotate(wheel.mount);
         const auto center = car.wheel_center(wheel);
         DrawLine3D(render_vector(mount), render_vector(center), LIGHTGRAY);
-        if (renderer.draw_wheel(car, wheel, camera, override_shader)) continue;
-        auto axis = car.rotate(ambaretto::Vec3(1, 0, 0));
-        if (wheel.front) axis = ambaretto::Quat::sRotation(car.rotate(ambaretto::Vec3(0, 1, 0)), car.steering()) * axis;
-        const float radius = car.tuning().wheel_radius, size = radius / ambaretto::wheel_radius;
-        DrawCylinderEx(render_vector(center - axis * (0.13f * size)),
-                       render_vector(center + axis * (0.13f * size)), radius, radius, 16, BLACK);
-        DrawCylinderEx(render_vector(center - axis * (0.14f * size)),
-                       render_vector(center + axis * (0.14f * size)), radius * .5f, radius * .5f, 16, DARKGRAY);
+        renderer.draw_wheel(car, wheel, camera, override_shader);
     }
 }
 
@@ -200,53 +175,6 @@ void draw_vehicle_damage(const Vehicle& vehicle, const ambaretto::CarRenderer& r
     const auto center = wreck ? vehicle.explosion_position() : vehicle.position() + vehicle.rotate(smoke);
     if ((center - ambaretto::Vec3(camera.position.x, camera.position.y, camera.position.z)).LengthSq() > draw_distance * draw_distance) return;
     renderer.draw_damage(camera, center, wreck, age, scale, float(GetTime()));
-}
-
-void draw_character(const ambaretto::Character& character, const ambaretto::Environment& environment, std::size_t appearance = 0, bool police = false) {
-    const auto feet = character.position();
-    const float ground = environment.surface_height(feet);
-    const float radius = std::clamp(0.33f - (feet.GetY() - ground) * 0.08f, 0.18f, 0.33f);
-    const auto shadow_point = [&](float x, float z) { return Vector3{x, environment.surface_height(ambaretto::Vec3(x, feet.GetY(), z)) + 0.085f, z}; };
-    for (int i = 0; !character.swimming() && i < 24; ++i) {
-        const float a = i * 6.2831853f / 24, b = (i + 1) * 6.2831853f / 24;
-        DrawTriangle3D(shadow_point(feet.GetX(), feet.GetZ()),
-            shadow_point(feet.GetX() + std::cos(b) * radius, feet.GetZ() + std::sin(b) * radius),
-            shadow_point(feet.GetX() + std::cos(a) * radius, feet.GetZ() + std::sin(a) * radius), {15, 23, 29, 100});
-    }
-    constexpr Color shirts[]{{38, 97, 133, 255}, {160, 58, 49, 255}, {219, 174, 62, 255}, {59, 121, 82, 255},
-        {168, 164, 156, 255}, {97, 70, 134, 255}, {42, 131, 145, 255}, {219, 115, 69, 255}};
-    constexpr Color skins[]{{211, 155, 113, 255}, {129, 83, 60, 255}, {235, 185, 148, 255}, {173, 118, 78, 255}};
-    const Color shirt = police ? Color{25, 38, 65, 255} : shirts[appearance % std::size(shirts)], skin = skins[appearance % std::size(skins)];
-    const Color pants{39, 48, 66, 255}, shoes = police ? Color{24, 26, 29, 255} : Color{214, 221, 222, 255};
-    const auto parts = character.body_parts();
-    using Part = ambaretto::BodyPart;
-    for (std::size_t i = 0; i < parts.size(); ++i) {
-        const auto kind = Part(i);
-        const auto& part = parts[i];
-        Color color = pants;
-        if (kind == Part::Torso || kind == Part::LeftUpperArm || kind == Part::RightUpperArm) color = shirt;
-        if (kind == Part::Head || kind == Part::LeftForearm || kind == Part::RightForearm
-            || kind == Part::LeftHand || kind == Part::RightHand) color = skin;
-        if (kind == Part::LeftFoot || kind == Part::RightFoot) color = shoes;
-        if (kind == Part::Head) {
-            DrawSphereEx(render_vector(part.position), part.size.GetY() / 2, 10, 12, skin);
-            draw_box(part.position + part.rotation * ambaretto::Vec3(0, .14f, .02f), part.rotation,
-                ambaretto::Vec3(.28f, .08f, .26f), police ? shirt : Color{44, 35, 31, 255}, false);
-            if (police) draw_box(part.position + part.rotation * ambaretto::Vec3(0, .1f, -.13f), part.rotation, {.31f, .035f, .18f}, shirt, false);
-            DrawSphereEx(render_vector(part.position + part.rotation * ambaretto::Vec3(0, -.02f, -.16f)), .045f, 6, 8, skin);
-        } else if (kind == Part::Pelvis || kind == Part::Torso || kind == Part::LeftHand || kind == Part::RightHand
-            || kind == Part::LeftFoot || kind == Part::RightFoot) {
-            draw_box(part.position, part.rotation, part.size, color, false);
-            if (police && kind == Part::Torso) {
-                draw_box(part.position + part.rotation * ambaretto::Vec3(-.075f, .1f, -.116f), part.rotation, {.06f, .075f, .02f}, GOLD, false);
-                draw_box(part.position + part.rotation * ambaretto::Vec3(0, -.15f, 0), part.rotation, {.37f, .055f, .245f}, BLACK, false);
-            }
-        } else {
-            const float radius = part.size.GetX() / 2;
-            const auto axis = part.rotation * ambaretto::Vec3(0, part.size.GetY() / 2 - radius, 0);
-            DrawCapsule(render_vector(part.position - axis), render_vector(part.position + axis), radius, 6, 8, color);
-        }
-    }
 }
 
 void draw_weapon_model(const ambaretto::BodyPartPose& hand, ambaretto::WeaponType type, float flash = 0) {
@@ -455,7 +383,7 @@ int main(int argc, char** argv) {
     std::string time_override;
     std::string screenshot;
     std::string city_path;
-    bool preview_editor = false, preview_building = false;
+    bool preview_editor = false, preview_building = false, preview_car = false, preview_character = false;
     bool performance_tuning = false;
     bool start_controllers = false, start_menu = false, start_help = false;
     bool start_graphics = false;
@@ -466,6 +394,8 @@ int main(int argc, char** argv) {
         if (arg == "--city" && i + 1 < argc) city_path = argv[++i];
         if (arg == "--editor") preview_editor = true;
         if (arg == "--building-builder") preview_building = true;
+        if (arg == "--car-editor") preview_car = true;
+        if (arg == "--character-creator") preview_character = true;
         if (arg == "--overview") { map_open = true; start_region_map = true; }
         if (arg == "--map") map_open = true;
         if (arg == "--tuning") tuning_open = true;
@@ -505,6 +435,8 @@ int main(int argc, char** argv) {
             EnableCursor();
             ambaretto::building_builder({},cities_directory.parent_path()/"buildings",screenshot);
         }
+        if (preview_car) { EnableCursor(); ambaretto::car_builder({},cities_directory.parent_path()/"cars",screenshot); }
+        if (preview_character) { EnableCursor(); ambaretto::character_builder({},cities_directory.parent_path()/"characters",screenshot); }
         ambaretto::ControllerMapping controls;
         const auto mapping_path = std::filesystem::path(GetApplicationDirectory()) / "controller-mappings.ini";
         std::string mapping_error;
@@ -527,9 +459,9 @@ int main(int argc, char** argv) {
         if (direct_city) {
             std::string error;
             if (!ambaretto::City::load(city_path,selected_city,error)) { TraceLog(LOG_ERROR,"%s",error.c_str()); direct_city = false; }
-            else if (!selected_city.spawn) preview_editor = true;
+            else if (!selected_city.playable()) preview_editor = true;
         }
-        while (!preview_building && !WindowShouldClose()) {
+        while (!preview_building && !preview_car && !preview_character && !WindowShouldClose()) {
         if (!direct_city || preview_editor || start_graphics || start_controllers) {
             const auto settings = start_graphics ? ambaretto::MenuCommand::Graphics : start_controllers ? ambaretto::MenuCommand::Controllers : ambaretto::MenuCommand::None;
             if (!ambaretto::city_menu(selected_city,cities_directory,controls,graphics,preview_editor && direct_city,
@@ -543,9 +475,22 @@ int main(int argc, char** argv) {
         captured = screenshot.empty() && !map_open && !start_menu && !start_controllers && !start_help && !start_graphics;
         if (captured) DisableCursor(); else EnableCursor();
         ambaretto::VehicleAudio vehicle_audio;
+        ambaretto::CarRenderer car_renderer;
+        ambaretto::CharacterRenderer character_renderer;
+        std::string character_error;
+        auto characters=ambaretto::saved_characters(cities_directory.parent_path()/"characters",character_error);
+        selected_city.update_player_character(characters);
+        if (!character_renderer.available(selected_city,character_error)) {
+            TraceLog(LOG_WARNING,"%s",character_error.c_str());
+            if (!screenshot.empty()) break;
+            direct_city=true; preview_editor=true; continue;
+        }
+        characters.erase(std::remove_if(characters.begin(),characters.end(),[&](const auto& design){return !character_renderer.available(design,character_error);}),characters.end());
+        std::string car_error, car_update_error;
+        auto cars = ambaretto::saved_cars(cities_directory.parent_path()/"cars",car_error);
+        selected_city.update_car_designs(cars,car_update_error);
         const ambaretto::Environment environment(selected_city);
         ambaretto::EnvironmentRenderer scenery(environment);
-        ambaretto::CarRenderer car_renderer;
         ambaretto::TuningPanel tuning_panel;
         ambaretto::SceneLighting lighting;
         using ambaretto::Action;
@@ -554,7 +499,12 @@ int main(int argc, char** argv) {
         if (start_help) menu.show(MenuCommand::Controls);
         else if (start_menu) menu.open();
         if (performance_tuning) tuning_panel.select_tab(2);
-        auto scene = std::make_unique<Scene>(environment);
+        // Cities embed their car settings so shared maps retain their designs.
+        for (const auto& vehicle : selected_city.vehicles) if (vehicle.car && std::none_of(cars.begin(),cars.end(),[&](const auto& d) {
+            return d.name==vehicle.car->name && d.body==vehicle.car->body && d.wheel==vehicle.car->wheel;
+        })) cars.push_back(*vehicle.car);
+        cars.erase(std::remove_if(cars.begin(),cars.end(),[&](const auto& design){return !car_renderer.available(design,car_error);}),cars.end());
+        auto scene = std::make_unique<Scene>(environment,std::move(cars),std::move(characters));
         ambaretto::ThirdPersonCamera orbit;
         ambaretto::AimAssist aim_assist;
         ambaretto::ThirdPersonCamera saved_orbit = orbit;
@@ -603,6 +553,8 @@ int main(int argc, char** argv) {
         double accumulator = 0;
         float notice_time = mapping_error.empty() ? 0 : 8;
         std::string notice = mapping_error;
+        if (scene->designs.empty()) { notice="No cars available. Create a car in the map editor's Objects menu."; notice_time=10; }
+        if (!car_update_error.empty()) { notice="Map car update rejected: "+car_update_error; notice_time=10; }
         if (!graphics_status.empty()) { notice = "Graphics defaults in use: " + graphics_status; notice_time = 8; TraceLog(LOG_WARNING, "%s", notice.c_str()); }
         bool jump_pending = false, discard_mouse = true, orbit_dragging = false, map_dragging = false, flaps = false;
         bool fire_pending = false, suppress_fire = true;
@@ -967,10 +919,11 @@ int main(int argc, char** argv) {
                 int light_count = 0;
                 if (graphics.local_lights && daylight.night > .01f) {
                     const auto headlights = [&](const ambaretto::Car& car) {
-                        if (!car.simulated()) return;
+                        if (!car.simulated() || !car.design()) return;
                         if (car.destroyed() || light_count + 2 > ambaretto::SceneLighting::max_lights) return;
                         for (float side : {-1.0f, 1.0f}) nearby_lights[light_count++] = {
-                            render_vector(car.position() + car.rotate(ambaretto::Vec3(side * .65f, .40f, -1.83f))),
+                            render_vector(car.position() + car.rotate(car.body_offset()+ambaretto::Vec3(side * car.body_size().GetX()*.35f,
+                                0,-car.body_size().GetZ()/2))),
                             {2.6f * daylight.night, 2.3f * daylight.night, 1.8f * daylight.night}, 48,
                             render_vector((car.forward() + ambaretto::Vec3(0, -.13f, 0)).Normalized()), .87f};
                     };
@@ -1001,29 +954,33 @@ int main(int argc, char** argv) {
                     const auto shader = lighting.shadow_shader();
                     // Include tall, sunward casters throughout the light's depth volume.
                     scenery.draw_shadow(shader, shadow_focus, graphics.shadow_distance * 3 + 250);
-                    if (scene->car.simulated()) draw_car(scene->car, car_renderer, view, {235, 235, 224, 255}, shader);
+                    if (scene->car.simulated()) draw_car(scene->car, car_renderer, view, shader);
                     for (std::size_t i = 0; i < scene->traffic.cars().size(); ++i) {
                         const auto& vehicle = scene->traffic.cars()[i];
                         if (vehicle.car->simulated() && (vehicle.car->position() - scene->player.position()).LengthSq() <
                             (graphics.shadow_distance + 15) * (graphics.shadow_distance + 15))
-                            draw_car(*vehicle.car, car_renderer, view, traffic_paint(i), shader);
+                            draw_car(*vehicle.car, car_renderer, view, shader);
                     }
                     for (const auto& unit : scene->police.units()) if (unit.active
                         && (unit.car->position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
-                        draw_car(*unit.car, car_renderer, view, WHITE, shader);
+                        draw_car(*unit.car, car_renderer, view, shader);
                     if ((scene->plane.position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
                         draw_plane(scene->plane, scene->player.flying() && &scene->player.plane() == &scene->plane);
                     for (const auto& other : scene->aircraft) if ((other->position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
                         draw_plane(*other, scene->player.flying() && &scene->player.plane() == other.get());
-                    if (scene->player.on_foot()) draw_character(scene->player.character(), environment);
+                    if (scene->player.on_foot()) character_renderer.draw(scene->player.character(),view,shader);
                     for (const auto& pedestrian : scene->pedestrians.people()) if (pedestrian.enabled
                         && (pedestrian.character->position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
-                        draw_character(*pedestrian.character, environment, pedestrian.appearance + 1);
+                        character_renderer.draw(*pedestrian.character,view,shader);
                     for (std::size_t i = 0; i < scene->traffic.cars().size(); ++i) {
                         const auto& driver = scene->traffic.cars()[i].driver;
                         if (driver && (driver->position() - scene->player.position()).LengthSq() < graphics.shadow_distance * graphics.shadow_distance)
-                            draw_character(*driver, environment, i + 1);
+                            character_renderer.draw(*driver,view,shader);
                     }
+                    for (const auto& unit:scene->police.units()) if (unit.active)
+                        for (const auto& officer:unit.officers) if (!officer.seated
+                            && (officer.character->position()-scene->player.position()).LengthSq()<graphics.shadow_distance*graphics.shadow_distance)
+                            character_renderer.draw(*officer.character,view,shader);
                     lighting.end_shadow();
                 }
             }
@@ -1045,6 +1002,7 @@ int main(int argc, char** argv) {
                 const float nearby_distance = std::min(160.f, graphics.view_distance);
                 scenery.draw_sky(view, daylight, float(GetTime()), graphics);
                 car_renderer.set_lighting(lighting, view, daylight, graphics);
+                character_renderer.set_lighting(lighting, view, daylight, graphics);
                 BeginMode3D(view);
                 scenery.draw(view, float(GetTime()), daylight, lighting, graphics);
                 BeginShaderMode(scenery.object_shader());
@@ -1055,28 +1013,28 @@ int main(int argc, char** argv) {
                     if (!vehicle.car->simulated()) continue;
                     const auto delta = vehicle.car->position() - ambaretto::Vec3(view.position.x, view.position.y, view.position.z);
                     if (delta.GetX() * delta.GetX() + delta.GetZ() * delta.GetZ() > graphics.view_distance * graphics.view_distance) continue;
-                    draw_car(*vehicle.car, car_renderer, view, traffic_paint(i));
+                    draw_car(*vehicle.car, car_renderer, view);
                 }
                 if (scene->plane.simulated()) draw_plane(scene->plane, scene->player.flying() && &scene->player.plane() == &scene->plane);
                 for (const auto& other : scene->aircraft) if ((other->position() - scene->player.position()).LengthSq() < graphics.view_distance * graphics.view_distance)
                     draw_plane(*other, scene->player.flying() && &scene->player.plane() == other.get());
                 if (scene->player.on_foot()) {
-                    draw_character(scene->player.character(), environment);
+                    character_renderer.draw(scene->player.character(),view);
                     draw_weapon(scene->player.character(), scene->player.weapons().selected(), shot_flash);
                     if (shot_flash > 0) DrawLine3D(render_vector(last_shot.from), render_vector(last_shot.to), {255, 223, 151, 175});
                 }
                 for (const auto& pedestrian : scene->pedestrians.people()) if (pedestrian.enabled
                     && (pedestrian.character->position() - scene->player.position()).LengthSq() < nearby_distance * nearby_distance)
-                    draw_character(*pedestrian.character, environment, pedestrian.appearance + 1);
+                    character_renderer.draw(*pedestrian.character,view);
                 for (std::size_t i = 0; i < scene->traffic.cars().size(); ++i) {
                     const auto& driver = scene->traffic.cars()[i].driver;
                     if (driver && (driver->position() - scene->player.position()).LengthSq() < nearby_distance * nearby_distance)
-                        draw_character(*driver, environment, i + 1);
+                        character_renderer.draw(*driver,view);
                 }
                 for (const auto& unit : scene->police.units()) if (unit.active && (unit.car->position() - scene->player.position()).LengthSq() < graphics.view_distance * graphics.view_distance) {
-                    draw_car(*unit.car, car_renderer, view, WHITE, {}, scene->police.wanted().stars() > 0 && !unit.claimed);
+                    draw_car(*unit.car, car_renderer, view);
                     for (const auto& officer : unit.officers) if (!officer.seated) {
-                        draw_character(*officer.character, environment, 0, true);
+                        character_renderer.draw(*officer.character,view);
                         if (scene->police.wanted().stars()) draw_weapon(*officer.character, officer.weapon, officer.flash);
                     }
                 }

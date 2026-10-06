@@ -894,11 +894,24 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
 
 void EnvironmentRenderer::load_city(const Environment& env) {
     MeshBuilder ground, grass, sand, roads, buildings, markings, water;
+    const City& city = *env.city();
+    std::map<std::string,MeshBuilder> painted;
     soil_texture_ = load_terrain_texture("soil.png");
     grass_texture_ = load_terrain_texture("grass.png");
     sand_texture_ = load_terrain_texture("beach-sand.png");
     asphalt_texture_ = load_terrain_texture("asphalt.png");
     for (const auto& t : env.triangles()) if (t.surface != Surface::Seabed && !t.deck) {
+        const Vec3 center = (env.vertices()[t.a]+env.vertices()[t.b]+env.vertices()[t.c])/3;
+        const auto p = City::cell(center.GetX(),center.GetZ());
+        const auto custom = city.ground_textures.find(City::index(p));
+        if (city.land(p) && custom!=city.ground_textures.end()) {
+            const auto& name = custom->second;
+            if (!ground_textures_.count(name)) ground_textures_[name] = load_terrain_texture(name.c_str());
+            if (ground_textures_[name].id) {
+                painted[name].triangle(env.vertices()[t.a],env.vertices()[t.b],env.vertices()[t.c],WHITE);
+                continue;
+            }
+        }
         MeshBuilder& mesh = t.surface == Surface::Grass ? grass : t.surface == Surface::Sand ? sand : t.surface == Surface::Road ? roads : ground;
         const Color tint = t.surface == Surface::Grass ? (grass_texture_.id ? WHITE : surface_color(t.surface))
             : t.surface == Surface::Sand ? (sand_texture_.id ? WHITE : surface_color(t.surface))
@@ -906,7 +919,6 @@ void EnvironmentRenderer::load_city(const Environment& env) {
             : soil_texture_.id ? WHITE : surface_color(t.surface);
         mesh.triangle(env.vertices()[t.a],env.vertices()[t.b],env.vertices()[t.c],tint);
     }
-    const City& city = *env.city();
     if (std::any_of(city.elevation.begin(),city.elevation.end(),[](auto h){return h>0;})) {
         roads.ground_city = markings.ground_city = &city;
         roads.ground_lift = .065f; markings.ground_lift = .09f;
@@ -1000,6 +1012,12 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     sky_shader_ = LoadShaderFromMemory(nullptr,sky_fragment);
     light_shader_ = LoadShaderFromMemory(land_vertex,light_fragment);
     for (Model* model : {&terrain_,&grass_,&sand_,&roads_}) if (model->materials) model->materials[0].shader = land_shader_;
+    for (const auto& batch : painted) for (auto model : batch.second.upload_chunks()) {
+        model.materials[0].shader = land_shader_;
+        const auto texture = ground_textures_.at(batch.first);
+        if (texture.id) SetMaterialTexture(&model.materials[0],MATERIAL_MAP_DIFFUSE,texture);
+        ground_chunks_.push_back(chunk(model));
+    }
     for (auto& part : city_chunks_) part.model.materials[0].shader = land_shader_;
     if (terrain_.materials && soil_texture_.id) SetMaterialTexture(&terrain_.materials[0],MATERIAL_MAP_DIFFUSE,soil_texture_);
     if (grass_.materials && grass_texture_.id) SetMaterialTexture(&grass_.materials[0],MATERIAL_MAP_DIFFUSE,grass_texture_);
@@ -1188,6 +1206,7 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     UnloadModel(lights_); UnloadModel(glows_);
     for (auto& part : city_chunks_) UnloadModel(part.model);
     for (auto& part : tree_chunks_) UnloadModel(part.model);
+    for (auto& part : ground_chunks_) UnloadModel(part.model);
     if (trees_.meshes || trees_.materials) UnloadModel(trees_);
     if (tree_texture_.id != 0 && tree_texture_.id != rlGetTextureIdDefault()) UnloadTexture(tree_texture_);
     if (soil_texture_.id != 0) UnloadTexture(soil_texture_);
@@ -1196,6 +1215,7 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     if (asphalt_texture_.id != 0) UnloadTexture(asphalt_texture_);
     if (sign_texture_.id) UnloadTexture(sign_texture_);
     for (const auto& texture : building_textures_) if (texture.second.id) UnloadTexture(texture.second);
+    for (const auto& texture : ground_textures_) if (texture.second.id) UnloadTexture(texture.second);
     UnloadModel(map_);
     UnloadShader(minimap_shader_);
     UnloadShader(land_shader_); UnloadShader(water_shader_);
@@ -1232,6 +1252,7 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Dayligh
     DrawModel(terrain_, {0, 0, 0}, 1, WHITE);
     DrawModel(grass_, {0, 0, 0}, 1, WHITE);
     DrawModel(sand_, {0, 0, 0}, 1, WHITE);
+    for (const auto& part : ground_chunks_) if (nearby(part,camera.position,settings.view_distance)) DrawModel(part.model,{0,0,0},1,WHITE);
     // Native depth bias keeps thin pavement and markings clear of the terrain at long distances.
     static const auto enable = reinterpret_cast<void (*)(unsigned int)>(rlGetProcAddress("glEnable"));
     static const auto disable = reinterpret_cast<void (*)(unsigned int)>(rlGetProcAddress("glDisable"));

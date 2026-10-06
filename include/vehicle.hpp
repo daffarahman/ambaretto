@@ -1,5 +1,5 @@
 #pragma once
-#include "car_tuning.hpp"
+#include "car_design.hpp"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Math/Vec3.h>
@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace ambaretto {
@@ -88,10 +89,10 @@ private:
     JPH::BodyID create_chassis();
 };
 
-enum class CarType { Civilian, Police };
 class Car {
 public:
     explicit Car(PhysicsWorld& world, CarType type = CarType::Civilian);
+    Car(PhysicsWorld& world, const CarDesign& design);
     ~Car();
     CarType type() const { return type_; }
     void step(Input input, float dt = fixed_step);
@@ -110,6 +111,11 @@ public:
     JPH::BodyID body_id() const { return body_; }
     const CarTuning& tuning() const { return tuning_; }
     void set_tuning(CarTuning tuning);
+    void set_design(const CarDesign& design);
+    const std::optional<CarDesign>& design() const { return design_; }
+    Vec3 body_size() const { return design_ ? Vec3(design_->width,design_->height,design_->length) : Vec3(1.86f,.44f,3.7f); }
+    Vec3 body_offset() const { return design_ ? Vec3(design_->offset[0],design_->height/2-.15f+design_->offset[1],design_->offset[2]) : Vec3(0,chassis_offset,0); }
+    float ride_height() const { return design_ ? tuning_.rest_length+tuning_.wheel_radius-tuning_.mount_height : .56f; }
     void set_simulated(bool simulated);
     bool simulated() const { return simulated_; }
     static constexpr float max_health = VehicleDamage::max_health;
@@ -132,6 +138,7 @@ private:
     int drive_direction_ = 0;
     float direction_change_time_ = 0;
     CarTuning tuning_{};
+    std::optional<CarDesign> design_;
     CarType type_;
     bool simulated_ = true;
     bool player_controlled_ = false;

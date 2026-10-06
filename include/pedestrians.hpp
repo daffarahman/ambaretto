@@ -16,7 +16,7 @@ struct Pedestrian {
 
 class Pedestrians {
 public:
-    Pedestrians(PhysicsWorld& world, const Environment& environment);
+    Pedestrians(PhysicsWorld& world, const Environment& environment, const std::vector<CharacterDesign>* designs = nullptr);
     // Impact detection precedes the shared world step; walking follows it.
     void prepare(const Car& starter, const Traffic* traffic, Vec3 player_position, float dt = fixed_step);
     void step(const Car& starter, const Traffic* traffic, Vec3 player_position, float dt = fixed_step);

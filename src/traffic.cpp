@@ -96,14 +96,19 @@ std::vector<Vec3> lane_route(std::vector<Vec3> corners, bool reverse = false, fl
 }
 } // namespace
 
-Traffic::Traffic(PhysicsWorld& world, const Environment& environment) : world_(world), environment_(environment) {
+Traffic::Traffic(PhysicsWorld& world, const Environment& environment,const std::vector<CarDesign>* designs, const std::vector<CharacterDesign>* characters) : world_(world), environment_(environment) {
+    if (characters) for (const auto& design:*characters) if (design.type==CharacterType::NPC) driver_designs_.push_back(design);
+    std::vector<CarDesign> civilian;
+    if (designs) for (const auto& design : *designs) if (design.type==CarType::Civilian) civilian.push_back(design);
+    const bool ambient = (!designs || !civilian.empty()) && (!characters || !driver_designs_.empty()); std::size_t design_index = 0;
+    const auto create = [&]() { auto car = std::make_unique<Car>(world); if (!civilian.empty()) car->set_design(civilian[design_index++%civilian.size()]); return car; };
     if (environment.city()) {
         const City& city = *environment.city();
         routes_ = city.traffic_routes();
         for (const auto& node : city.road_network()) if (node.edges.size()>=3) intersections_.push_back({node.center(),node.half_size()});
         // ponytail: at most 200 NPCs, with the existing 48-car physics pool; spatial route indexing can raise this later.
         int remaining = 200;
-        for (std::size_t r = 0; r < routes_.size(); ++r) {
+        for (std::size_t r = 0; ambient && r < routes_.size(); ++r) {
             const auto& route = routes_[r]; float length = 0;
             for (std::size_t j = 0; j < route.size(); ++j) length += (route[(j+1)%route.size()]-route[j]).Length();
             const int count = std::min(remaining,std::max(1,int(length/75)));
@@ -117,17 +122,20 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment) : world_(w
                 }
                 if (city.spawn && flat(City::center(*city.spawn)-location.point).LengthSq()<10*10) occupied = true;
                 if (occupied) continue;
-                TrafficCar vehicle; vehicle.car = std::make_unique<Car>(world);
+                TrafficCar vehicle; vehicle.car = create();
                 vehicle.car->set_simulated(false); vehicle.route = r; vehicle.route_name = "CITY STREET";
                 vehicle.segment = location.segment; vehicle.point = location.point; vehicle.cruise_speed = 4.2f;
-                auto tuning = vehicle.car->tuning(); tuning.max_steer = .75f; vehicle.car->set_tuning(tuning);
-                vehicle.car->reset(location.point+Vec3(0,.56f,0),yaw(ahead(route,location,2)-location.point));
+                if (!vehicle.car->design()) { auto tuning = vehicle.car->tuning(); tuning.max_steer = .75f; vehicle.car->set_tuning(tuning); }
+                vehicle.car->reset(location.point+Vec3(0,vehicle.car->ride_height(),0),yaw(ahead(route,location,2)-location.point));
                 cars_.push_back(std::move(vehicle)); --remaining;
             }
         }
         for (auto v : city.vehicles) if (v.kind == CityVehicleKind::Car) {
-            TrafficCar vehicle; vehicle.car = std::make_unique<Car>(world); vehicle.npc = false;
-            vehicle.car->reset(v.position+Vec3(0,.56f,0),v.rotation*1.57079633f);
+            if (designs && !v.car) continue;
+            if (designs && v.car && std::none_of(designs->begin(),designs->end(),[&](const auto& d){return d.name==v.car->name && d.body==v.car->body && d.wheel==v.car->wheel;})) continue;
+            TrafficCar vehicle; vehicle.car = create(); vehicle.npc = false;
+            if (v.car) vehicle.car->set_design(*v.car);
+            vehicle.car->reset(v.position+Vec3(0,vehicle.car->ride_height(),0),v.rotation*1.57079633f);
             cars_.push_back(std::move(vehicle));
         }
         stream(environment.spawn(),nullptr,nullptr); return;
@@ -140,13 +148,13 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment) : world_(w
         for (auto& p : points) p.SetY(environment.surface_height(p));
         routes_.push_back(std::move(points));
         const auto& route = routes_.back();
-        for (int i = 0; i < count; ++i) {
+        for (int i = 0; ambient && i < count; ++i) {
             std::size_t start = (route.size() * (i * 2 + 1) / (count * 2) + r * 17) % route.size();
             if (r == 0 && i == 0) start = locate(route, Vec3(lane_offset, environment.ground_height(lane_offset, 88) + .56f, 88)).segment;
-            auto car = std::make_unique<Car>(world);
+            auto car = create();
             car->set_simulated(false);
             const Vec3 p = route[start];
-            car->reset(p + Vec3(0, .56f, 0), yaw(route[(start + 1) % route.size()] - p));
+            car->reset(p + Vec3(0, car->ride_height(), 0), yaw(route[(start + 1) % route.size()] - p));
             TrafficCar vehicle;
             vehicle.car = std::move(car); vehicle.route = r; vehicle.route_name = name;
             vehicle.cruise_speed = speed; vehicle.segment = start; vehicle.point = p;
@@ -180,6 +188,7 @@ bool Traffic::steal(Car& car) {
     for (auto& vehicle : cars_) if (vehicle.car.get() == &car && vehicle.npc) {
         if (car.simulated()) {
             auto driver = std::make_unique<Character>(world_, &environment_);
+            if (!driver_designs_.empty()) driver->set_design(driver_designs_[std::size_t(&vehicle-cars_.data())%driver_designs_.size()]);
             if (!driver->pull_from(car)) return false;
             vehicle.driver = std::move(driver);
         }
@@ -195,6 +204,7 @@ void Traffic::finish(Vec3 player_position, float dt) {
             vehicle.npc = false;
             clear_driver(vehicle);
             vehicle.driver = std::make_unique<Character>(world_, &environment_);
+            if (!driver_designs_.empty()) vehicle.driver->set_design(driver_designs_[std::size_t(&vehicle-cars_.data())%driver_designs_.size()]);
             if (!vehicle.driver->pull_from(*vehicle.car)) vehicle.driver->reset(vehicle.car->position() + Vec3(0, 2, 0));
             vehicle.driver->take_damage(100);
             if (vehicle.car->player_destroyed()) world_.notify_player_kill();
@@ -301,7 +311,7 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         if (!car.simulated()) {
             const auto location = advance(route, {vehicle.segment, vehicle.point, 0}, dt * vehicle.cruise_speed);
             vehicle.segment = location.segment; vehicle.point = location.point;
-            if (sync) car.reset(location.point + Vec3(0, .56f, 0), yaw(ahead(route, location, 2) - location.point));
+            if (sync) car.reset(location.point + Vec3(0, car.ride_height(), 0), yaw(ahead(route, location, 2) - location.point));
             continue;
         }
         vehicle.plan_time -= dt;
@@ -503,8 +513,8 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         if (vehicle.stuck_time > 8 && flat(position - player_position).LengthSq() > 35 * 35) {
             const Vec3 recovery = ahead(route, location, 18);
             if (space_available(recovery, car, starter_car, plane, player_position)) {
-                car.reset(recovery + Vec3(0, .56f, 0),
-                    yaw(ahead(route, locate(route, recovery + Vec3(0, .56f, 0)), 2) - recovery));
+                car.reset(recovery + Vec3(0, car.ride_height(), 0),
+                    yaw(ahead(route, locate(route, recovery + Vec3(0, car.ride_height(), 0)), 2) - recovery));
                 vehicle.stuck_time = 0;
                 clear_driver(vehicle);
             }

@@ -6,8 +6,14 @@
 #include "police.hpp"
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace ambaretto {
+void Character::set_design(const CharacterDesign& design) {
+    std::string error;
+    if (!design.validate(error)) throw std::invalid_argument(error);
+    design_=design;
+}
 Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane, Traffic* traffic, Pedestrians* pedestrians,
     const std::vector<std::unique_ptr<Plane>>* aircraft, Police* police)
     : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world, &environment, true), plane_(plane), traffic_(traffic),
@@ -22,6 +28,7 @@ void Player::reset() {
         return;
     }
     Vec3 spawn = environment_.spawn();
+    if (car_->design()) spawn.SetY(environment_.surface_height(spawn)+car_->ride_height());
     // A stolen car must not recover on top of the starter or another car
     // still parked downtown. Search along the paved main avenue.
     const auto occupied = [&](Vec3 position) {
@@ -39,12 +46,12 @@ void Player::reset() {
             const auto origin = *city->spawn;
             const CityCell candidate{origin.x+i%5-2,origin.z+i/5-3};
             if (city->tile(candidate)==CityTile::Water || city->building_at(candidate)>=0) continue;
-            Vec3 point = City::center(candidate); point.SetY(environment_.height(point.GetX(),point.GetZ())+.56f);
+            Vec3 point = City::center(candidate); point.SetY(environment_.height(point.GetX(),point.GetZ())+car_->ride_height());
             if (!occupied(point)) spawn = point;
             continue;
         }
         const float z = environment_.spawn().GetZ() + (i % 2 == 0 ? 1 : -1) * (i / 2 + 1) * 8;
-        spawn = Vec3(0, environment_.height(0, z) + .56f, z);
+        spawn = Vec3(0, environment_.height(0, z) + car_->ride_height(), z);
     }
     car_->set_simulated(true);
     car_->reset(spawn);

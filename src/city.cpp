@@ -20,6 +20,7 @@
 
 namespace ambaretto {
 namespace {
+constexpr const char* ground_files[] = {"soil.png","grass.png","beach-sand.png","asphalt.png"};
 float coast_height(const City& city,float x,float z) {
     const auto cell = City::cell(x,z);
     if (city.land(cell)) return city.height(x,z);
@@ -351,6 +352,11 @@ CityVehicle::CityVehicle(CityVehicleKind kind, CityCell cell, int rotation) : ki
 Vec3 CityVehicle::half_size() const {
     constexpr float widths[] = {1.1f,5.6f,6.3f,32.4f}, lengths[] = {2.2f,3.5f,9,35.5f};
     if (int(kind) < 0 || int(kind) > 3) return Vec3::sZero();
+    if (kind==CityVehicleKind::Car && car) {
+        const float x = std::max(car->width/2+std::abs(car->offset[0]),car->tuning.track_width/2+car->tuning.wheel_radius);
+        const float z = std::max(car->length/2+std::abs(car->offset[2]),car->tuning.wheelbase/2+car->tuning.wheel_radius);
+        return rotation%2 ? Vec3(z,0,x) : Vec3(x,0,z);
+    }
     return rotation%2 ? Vec3(lengths[int(kind)],0,widths[int(kind)]) : Vec3(widths[int(kind)],0,lengths[int(kind)]);
 }
 Vec3 CityRoadNode::center() const { return (City::center(first,height)+City::center(last,height))/2; }
@@ -441,8 +447,22 @@ bool City::paint_ground(CityCell a, CityCell b, CityGround texture, std::string&
     if (!contains(a) || !contains(b) || int(texture)>3) return fail(error,"Draw ground inside the map using a valid texture.");
     for (int z = std::min(a.z,b.z); z <= std::max(a.z,b.z); ++z)
         for (int x = std::min(a.x,b.x); x <= std::max(a.x,b.x); ++x)
-            if (land({x,z})) ground[index({x,z})] = texture;
+            if (land({x,z})) { ground[index({x,z})] = texture; ground_textures.erase(index({x,z})); }
     return true;
+}
+bool City::paint_ground(CityCell a, CityCell b, const std::string& texture, std::string& error) {
+    error.clear();
+    if (!contains(a) || !contains(b) || !valid_texture_filename(texture)) return fail(error,"Draw ground inside the map using a valid texture filename.");
+    for (int i = 0; i < 4; ++i) if (texture==ground_files[i]) return paint_ground(a,b,CityGround(i),error);
+    for (int z = std::min(a.z,b.z); z <= std::max(a.z,b.z); ++z)
+        for (int x = std::min(a.x,b.x); x <= std::max(a.x,b.x); ++x)
+            if (land({x,z})) ground_textures[index({x,z})] = texture;
+    return true;
+}
+std::string City::ground_texture(CityCell p) const {
+    if (!contains(p)) return {};
+    const auto found = ground_textures.find(index(p));
+    return found!=ground_textures.end() ? found->second : ground_files[int(ground[index(p)])];
 }
 bool City::change_elevation(CityCell a, CityCell b, int direction, std::string& error) {
     error.clear();
@@ -712,8 +732,35 @@ int City::update_building_design(const BuildingMesh& mesh, std::string& error, i
     }
     return changed;
 }
+int City::update_car_design(const CarDesign& design,std::string& error,int replace) {
+    if (!design.validate(error)) return -1;
+    if (replace < -1 || replace>=int(vehicles.size())) { error = "Invalid selected car."; return -1; }
+    City next = *this; int changed = 0;
+    const auto encoded = [](const CarDesign& value) { std::ostringstream stream; value.write(stream); return stream.str(); };
+    for (int i = 0; i<int(next.vehicles.size()); ++i) {
+        auto& vehicle = next.vehicles[i];
+        if (vehicle.kind!=CityVehicleKind::Car || (i!=replace && (!vehicle.car || vehicle.car->name!=design.name))) continue;
+        if (vehicle.car && encoded(*vehicle.car)==encoded(design)) continue;
+        vehicle.car = design; ++changed;
+    }
+    if (changed) { next.clear_trees(); if (!next.validate(error)) return -1; *this = std::move(next); }
+    return changed;
+}
+int City::update_car_designs(const std::vector<CarDesign>& designs,std::string& error) {
+    error.clear(); int changed = 0;
+    for (const auto& design : designs) {
+        std::string problem; const int count = update_car_design(design,problem);
+        if (count>=0) changed += count;
+        else {
+            if (!error.empty()) error += " / ";
+            error += design.name+": "+problem;
+        }
+    }
+    return changed;
+}
 bool City::add_vehicle(CityVehicle v, std::string& error, int replace) {
     error.clear();
+    if (v.car && (v.kind!=CityVehicleKind::Car || !v.car->validate(error))) return fail(error,"Invalid placed car design.");
     if (int(v.kind) < 0 || int(v.kind) > 3 || v.rotation < 0 || v.rotation > 3
         || !std::isfinite(v.position.GetX()) || !std::isfinite(v.position.GetY()) || !std::isfinite(v.position.GetZ())
         || std::abs(v.position.GetY()-height(v.position.GetX(),v.position.GetZ()))>.001f || std::abs(v.position.GetX())>=extent || std::abs(v.position.GetZ())>=extent)
@@ -760,7 +807,7 @@ bool City::erase(CityCell p, std::string& error) {
         const City before = *this; const auto previous = tile(p);
         tiles[index(p)] = previous == CityTile::Road ? CityTile::Land : CityTile::Water;
         road_axes[index(p)] = 0;
-        if (tile(p) == CityTile::Water) ground[index(p)] = CityGround::Soil;
+        if (tile(p) == CityTile::Water) { ground[index(p)] = CityGround::Soil; ground_textures.erase(index(p)); }
         clear_trees();
         sync_elevation(*this);
         if (!validate(error)) { *this = before; return false; }
@@ -774,8 +821,13 @@ bool City::erase(Vec3 p, std::string& error) {
 }
 bool City::validate(std::string& error) const {
     error.clear();
+    if (player_character && (!player_character->validate(error) || player_character->type!=CharacterType::Player))
+        return fail(error,"City player must be a valid Player character design.");
     if (!valid_id(id) || !valid_name(name)) return fail(error, "Invalid city name or identifier.");
     if (start_minutes < 0 || start_minutes >= 1440 || trees.size() > 8192) return fail(error,"Invalid starting time or tree count.");
+    for (const auto& texture : ground_textures)
+        if (texture.first<0 || texture.first>=width*width || !land({texture.first%width,texture.first/width})
+            || !valid_texture_filename(texture.second)) return fail(error,"Invalid ground texture filename or tile.");
     for (int i = 0; i < width*width; ++i) {
         const CityCell p{i%width,i/width};
         if (int(tiles[i]) > 3 || int(ground[i]) > 3
@@ -910,6 +962,13 @@ bool City::generate_terrain(int tiles_x,int tiles_z,std::uint32_t seed,std::stri
     if (!next.validate(error)) return false;
     *this = std::move(next); return true;
 }
+bool City::update_player_character(const std::vector<CharacterDesign>& designs) {
+    if (player_character) for (const auto& design:designs)
+        if (design.name==player_character->name && design.type==CharacterType::Player && !(design==*player_character)) {
+            player_character=design; return true;
+        }
+    return false;
+}
 bool City::save(const std::filesystem::path& directory, std::string& error) const {
     if (!validate(error)) return false;
     std::error_code ec; std::filesystem::create_directories(directory,ec);
@@ -917,7 +976,8 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
     const auto path = directory/(id+".city"); auto temporary = path; temporary += ".tmp";
     std::ofstream file(temporary,std::ios::trunc);
     if (!file) return fail(error,"Cannot write this city. Your previous save is intact.");
-    const int version = std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.rotation!=0;}) ? 9
+    const int version = player_character ? 13 : !ground_textures.empty() ? 12 : std::any_of(vehicles.begin(),vehicles.end(),[](const auto& v){return v.car.has_value();}) ? 11
+        : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.rotation!=0;}) ? 9
         : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh.has_value();}) ? 8 : 6;
     file << "AMBARETTO_CITY " << version << '\n' << id << '\n' << std::quoted(name) << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10);
     for (auto t : tiles) file << char('0'+int(t));
@@ -930,7 +990,11 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
         if (b.mesh) b.mesh->write(file);
     }
     file << vehicles.size() << '\n';
-    for (auto v : vehicles) file << int(v.kind) << ' ' << v.position.GetX() << ' ' << v.position.GetZ() << ' ' << v.rotation << '\n';
+    for (const auto& v : vehicles) {
+        file << int(v.kind) << ' ' << v.position.GetX() << ' ' << v.position.GetZ() << ' ' << v.rotation;
+        if (version>=10) file << ' ' << int(v.car.has_value());
+        file << '\n'; if (v.car) v.car->write(file);
+    }
     file << int(spawn.has_value()) << ' ' << (spawn ? spawn->x : 0) << ' ' << (spawn ? spawn->z : 0) << '\n';
     file << start_minutes << '\n' << trees.size() << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10);
     for (auto t : trees) file << t.base.GetX() << ' ' << t.base.GetZ() << ' ' << t.height << ' ' << t.yaw << '\n';
@@ -940,6 +1004,11 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
     file << '\n';
     for (auto height : elevation) file << char('0'+height);
     file << '\n';
+    if (version>=12) {
+        file << ground_textures.size() << '\n';
+        for (const auto& texture : ground_textures) file << texture.first << ' ' << std::quoted(texture.second) << '\n';
+    }
+    if (version>=13) { file << int(player_character.has_value()) << '\n'; if (player_character) player_character->write(file); }
     file.close();
     if (!file) return fail(error,"Cannot finish saving. Your previous save is intact.");
     if (std::filesystem::file_size(temporary,ec)>64*1024*1024 || ec)
@@ -956,7 +1025,7 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
     std::error_code ec;
     if (std::filesystem::file_size(path,ec) > 64*1024*1024 || ec) return fail(error,"City save is missing or too large.");
     std::ifstream file(path); City read; std::string magic, terrain; int version = 0;
-    if (!(file >> magic >> version >> read.id >> std::quoted(read.name) >> terrain) || magic != "AMBARETTO_CITY" || version<1 || version>9
+    if (!(file >> magic >> version >> read.id >> std::quoted(read.name) >> terrain) || magic != "AMBARETTO_CITY" || version<1 || version>13
         || terrain.size() != read.tiles.size()) return fail(error,"Invalid or unsupported city save.");
     for (std::size_t i = 0; i < terrain.size(); ++i) {
         if (terrain[i] < '0' || terrain[i] > (version>=3 ? '3' : '2')) return fail(error,"Invalid city terrain.");
@@ -988,7 +1057,12 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
             v.position = center(p);
         }
         if (kind<0 || kind>3) return fail(error,"Invalid vehicle data.");
-        v.kind = CityVehicleKind(kind); read.vehicles.push_back(v);
+        v.kind = CityVehicleKind(kind);
+        if (version>=10) {
+            int custom; if (!(file>>custom) || custom<0 || custom>1) return fail(error,"Invalid car design flag.");
+            if (custom) { v.car.emplace(); if (!CarDesign::read(file,*v.car,error,version>=11 ? 2 : 1)) return false; }
+        }
+        read.vehicles.push_back(v);
     }
     CityCell spawn; if (!(file >> count >> spawn.x >> spawn.z) || count<0 || count>1) return fail(error,"Invalid spawn data.");
     if (count) read.spawn = spawn;
@@ -1060,6 +1134,18 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
                 if (changed) constrain_elevation(read,1);
             } while (changed);
         }
+    }
+    if (version>=12) {
+        if (!(file>>count) || count<0 || count>width*width) return fail(error,"Invalid ground texture count.");
+        for (int i = 0; i < count; ++i) {
+            int tile; std::string texture;
+            if (!(file>>tile>>std::quoted(texture)) || !valid_texture_filename(texture)
+                || !read.ground_textures.emplace(tile,texture).second) return fail(error,"Invalid or duplicate ground texture data.");
+        }
+    }
+    if (version>=13) {
+        if (!(file>>count) || count<0 || count>1) return fail(error,"Invalid player character flag.");
+        if (count) { read.player_character.emplace(); if (!CharacterDesign::read(file,*read.player_character,error)) return false; }
     }
     for (auto& v : read.vehicles) {
         if (!std::isfinite(v.position.GetX()) || !std::isfinite(v.position.GetZ())

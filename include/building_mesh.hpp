@@ -59,5 +59,6 @@ struct BuildingMesh {
     static bool load(const std::filesystem::path& path, BuildingMesh& mesh, std::string& error);
 };
 std::vector<std::string> building_textures(const std::filesystem::path& directory, std::string& error);
+bool valid_texture_filename(const std::string& filename);
 std::vector<BuildingMesh> saved_buildings(const std::filesystem::path& directory, std::string& error);
 } // namespace ambaretto

@@ -46,9 +46,18 @@ int main(int argc, char** argv) {
         };
         dispatch(1,3,MenuCommand::SelectTool); dispatch(1,4,MenuCommand::BulldozeTool);
         const MenuCommand tile_actions[] = {MenuCommand::LandTool,MenuCommand::RoadBend,MenuCommand::RoadDiagonal,
-            MenuCommand::GroundSoil,MenuCommand::GroundGrass,MenuCommand::GroundSand,MenuCommand::GroundAsphalt,MenuCommand::RaiseGround,MenuCommand::LowerGround};
+            MenuCommand::GroundTool,MenuCommand::RaiseGround,MenuCommand::LowerGround};
         for (int i = 0; i<int(std::size(tile_actions)); ++i) dispatch(2,i,tile_actions[i]);
         dispatch(3,0,MenuCommand::BuildingTool); dispatch(3,1,MenuCommand::BuildingCreator);
+        dispatch(4,11,MenuCommand::CarEditor);
+        dispatch(4,13,MenuCommand::CharacterCreator); dispatch(4,14,MenuCommand::ChoosePlayerCharacter);
+        MenuBar character_creator(MenuMode::CharacterCreator); character_creator.open(); input={}; input.vertical=1; character_creator.update({},input); input={}; input.enter=true;
+        require(character_creator.update({},input)==MenuCommand::SaveCharacter,"Character creator Save menu is missing");
+        state.car_selection=true; dispatch(4,12,MenuCommand::EditCar); state.car_selection=false;
+        editor.open(4); input={}; input.vertical=12; editor.update(state,input); input={}; input.enter=true;
+        require(editor.update(state,input)==MenuCommand::None,"Car edit enabled without a selected car");
+        MenuBar car_creator(MenuMode::CarCreator); car_creator.open(); input={}; input.vertical=1; car_creator.update({},input); input={}; input.enter=true;
+        require(car_creator.update({},input)==MenuCommand::SaveCar,"Car creator Save menu is missing");
         editor.open(3); input = {}; input.vertical = 2; editor.update(state,input); input = {}; input.enter = true;
         require(editor.update(state,input)==MenuCommand::None && editor.blocking(),"Building edit enabled without a selected building");
         state.building_selection = true; require(editor.update(state,input)==MenuCommand::EditBuilding,"Selected building edit was not available");

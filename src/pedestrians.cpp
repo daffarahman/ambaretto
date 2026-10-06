@@ -36,7 +36,8 @@ bool Pedestrians::walkable(Vec3 p) const {
     return true;
 }
 
-Pedestrians::Pedestrians(PhysicsWorld& world, const Environment& environment) : world_(world), environment_(environment) {
+Pedestrians::Pedestrians(PhysicsWorld& world, const Environment& environment, const std::vector<CharacterDesign>* designs) : world_(world), environment_(environment) {
+    if (designs && !character_for_type(*designs,CharacterType::NPC)) return;
     if (environment.city()) for (const auto& road : environment.road_segments()) {
         const Vec3 side = flat(road.b-road.a).Normalized().Cross(Vec3::sAxisY())*(road.width/2);
         for (float sign : {-1.f,1.f}) {
@@ -101,6 +102,7 @@ Pedestrians::Pedestrians(PhysicsWorld& world, const Environment& environment) : 
     for (unsigned i = 0; i < 64; ++i) {
         Pedestrian person;
         person.character = std::make_unique<Character>(world);
+        if (designs) person.character->set_design(*character_for_type(*designs,CharacterType::NPC,i));
         person.character->set_enabled(false);
         person.appearance = i;
         person.walking_speed = 1.25f + float(i % 9) * .09f;

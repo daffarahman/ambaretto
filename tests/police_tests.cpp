@@ -8,6 +8,53 @@
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void saved_patrols() {
+    using namespace ambaretto;
+    City city = City::create("Saved police cars");
+    std::string error;
+    require(city.add_land({46,62}, {82,66}, error)
+        && city.add_road(City::road_stroke({48,64}, {80,64}), error)
+        && city.set_spawn({64,64}, error), error.c_str());
+    const Environment map(city);
+    PhysicsWorld world(map);
+    Car car(world);
+    CarDesign first;
+    first.name = "Patrol A"; first.body = "patrol.glb"; first.wheel = "wheel.glb";
+    first.type = CarType::Police; first.length = 4.09f; first.offset = {0,0,.14f};
+    first.tuning.rest_length = .445f; first.tuning.wheel_radius = .285f;
+    CarDesign second = first; second.name = "Patrol B"; second.length = 4.6f;
+    second.offset = {.1f,.2f,-.3f}; second.tuning.rest_length = .37f; second.tuning.travel = .27f;
+    CarDesign regular = first; regular.name = "Regular"; regular.type = CarType::Civilian;
+    const std::vector<CarDesign> designs{regular,first,second};
+    Police police(world, map, nullptr, nullptr, &designs);
+    Player player(world, car, map, nullptr, nullptr, nullptr, nullptr, &police);
+    int picks[2]{};
+    const auto check = [&] {
+        int active = 0;
+        for (const auto& unit : police.units()) if (unit.active) {
+            ++active;
+            require(unit.car->design() && unit.car->type() == CarType::Police, "patrol spawned without a saved Police design");
+            const auto& design = *unit.car->design();
+            require(design.name == first.name || design.name == second.name, "civilian design entered the police spawn pool");
+            ++picks[design.name == second.name];
+            const auto& source = design.name == first.name ? first : second;
+            require(design.offset == source.offset && design.length == source.length
+                && unit.car->tuning().rest_length == source.tuning.rest_length, "police spawn lost saved body or tuning settings");
+        }
+        return active;
+    };
+    for (int i = 0; i < 12; ++i) {
+        police.clear(); police.prepare(player, 5);
+        require(check() == 1, "saved police car with a low ride height did not spawn as an ambient patrol");
+    }
+    require(picks[0] && picks[1], "respawning patrol always reused the same saved car instead of choosing randomly");
+    police.clear(); picks[0] = picks[1] = 0;
+    police.crime(Crime::OfficerAssault, player.position(), police.units()[0].officers[0].character.get());
+    require(police.wanted().stars() == 3, "reinforcement check did not raise wanted level");
+    for (int i = 0; i < 5; ++i) police.prepare(player, 3);
+    require(check() == police_response(3).cars && picks[0] && picks[1], "wanted reinforcements did not spawn from all saved Police designs");
+    std::cout << "Saved police cars: low ride height, random patrol selection and wanted reinforcements passed\n";
+}
 void weapon_pickups(const ambaretto::Environment& map) {
     using namespace ambaretto;
     PhysicsWorld world(map);
@@ -223,6 +270,7 @@ int main() {
         std::cout << "Wanted: crime severity, six levels, escalating tactics and escape rules passed\n";
 
         const Environment map;
+        saved_patrols();
         weapon_pickups(map);
         speeding(map);
         PhysicsWorld world(map);

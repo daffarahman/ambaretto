@@ -54,6 +54,45 @@ int crossing_pixels(Image image, Camera3D camera, const ambaretto::CityRoadPort&
         }
     return count;
 }
+void custom_ground_pixels(RenderTexture2D target) {
+    using namespace ambaretto;
+    City city = City::create("Ground rendering"); std::string error;
+    const auto previous = std::filesystem::current_path();
+    const auto root = std::filesystem::temp_directory_path()/("ambaretto-ground-"+city.id);
+    const auto folder = root/"assets/textures"; std::filesystem::create_directories(folder);
+    const std::string red_name = "custom red.png", green_name = "custom green.png";
+    Image red = GenImageColor(16,16,RED), green = GenImageColor(16,16,GREEN);
+    require(ExportImage(red,(folder/red_name).string().c_str()) && ExportImage(green,(folder/green_name).string().c_str()),"ground fixtures could not be written");
+    UnloadImage(red); UnloadImage(green); std::filesystem::current_path(root);
+    const auto files = building_textures(building_texture_directory(),error);
+    require(files.size()==2 && std::find(files.begin(),files.end(),red_name)!=files.end(),"new ground textures were not discovered from the folder");
+    require(city.add_land({62,62},{66,66},error) && city.change_elevation({64,64},{64,64},1,error)
+        && city.paint_ground({62,62},{63,66},red_name,error) && city.paint_ground({65,62},{66,66},green_name,error),error.c_str());
+    const Camera3D camera = city_camera(City::center({64,64}));
+    const auto pixel = [&](Image image,CityCell cell) {
+        Vec3 point = City::center(cell); point.SetY(city.height(point.GetX(),point.GetZ()));
+        const auto screen = GetWorldToScreenEx({point.GetX(),point.GetY(),point.GetZ()},camera,image.width,image.height);
+        return GetImageColor(image,int(screen.x),int(screen.y));
+    };
+    {
+        const Environment map(city); EnvironmentRenderer scenery(map); Image image = render_city(scenery,target,camera);
+        const auto a = pixel(image,{63,64}), b = pixel(image,{65,64});
+        require(a.r>a.g*3 && a.r>a.b*3 && b.g>b.r*3 && b.g>b.b*3,"custom ground textures did not render on the correct ramp tiles");
+        UnloadImage(image);
+    }
+    std::filesystem::remove(folder/red_name); std::filesystem::remove(folder/green_name);
+    {
+        const Environment missing(city); EnvironmentRenderer missing_renderer(missing);
+        Image fallback = render_city(missing_renderer,target,camera);
+        City plain = city; plain.ground_textures.clear(); const Environment map(plain); EnvironmentRenderer scenery(map);
+        Image original = render_city(scenery,target,camera);
+        require(equal(fallback,original),"missing ground image hid terrain or prevented its original texture from rendering");
+        UnloadImage(fallback); UnloadImage(original);
+    }
+    std::filesystem::current_path(previous);
+    for (const auto& path : {folder,root/"assets",root}) std::filesystem::remove(path);
+    std::cout << "Custom ground: folder discovery, multiple textures, slopes and missing-file fallback passed\n";
+}
 void custom_building_pixels(RenderTexture2D target) {
     using namespace ambaretto;
     City city = City::create("Building rendering"); std::string error;
@@ -345,6 +384,7 @@ int main(int argc, char** argv) {
         auto& unit = const_cast<PoliceUnit&>(police.units()[0]);
         const Vec3 car_position = player + Vec3(35, 0, -25), foot_position = player + Vec3(-30, 0, -25);
         const auto texture = LoadRenderTexture(640, 480);
+        custom_ground_pixels(texture);
         custom_building_pixels(texture);
         city_crosswalks(texture);
         elevated_road_pixels(texture);

@@ -50,7 +50,7 @@ struct PoliceUnit {
 
 class Police {
 public:
-    Police(PhysicsWorld& world, const Environment& environment, Traffic* traffic = nullptr, Pedestrians* pedestrians = nullptr);
+    Police(PhysicsWorld& world, const Environment& environment, Traffic* traffic = nullptr, Pedestrians* pedestrians = nullptr, const std::vector<CarDesign>* designs = nullptr, const std::vector<CharacterDesign>* characters = nullptr);
     void crime(Crime type, Vec3 position, Character* victim = nullptr);
     void prepare(Player& player, float dt = fixed_step);
     void finish(Player& player, float dt = fixed_step);
@@ -80,10 +80,12 @@ private:
     Traffic* traffic_;
     Pedestrians* pedestrians_;
     std::vector<RoadNode> roads_;
+    std::vector<CarDesign> patrol_designs_;
     // ponytail: twelve response units plus six reserve slots; recycle distant casualties outside the camera.
     std::array<PoliceUnit, 18> units_;
     std::vector<WeaponPickup> pickups_;
     std::minstd_rand weapon_random_{8147};
+    std::minstd_rand car_random_{2941};
     WantedLevel wanted_;
     std::array<float, int(Crime::Count)> crime_cooldowns_{};
     std::array<float, 64> civilian_health_{};
@@ -92,6 +94,7 @@ private:
     int pending_crime_ = -1;
     Vec3 report_position_{0, 0, 0}, camera_{0, 0, 0}, camera_forward_{0, 0, -1};
     bool view_set_ = false;
+    bool cars_available_ = true;
     unsigned spawn_sequence_ = 0;
 };
 } // namespace ambaretto
