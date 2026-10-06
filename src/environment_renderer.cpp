@@ -40,7 +40,8 @@ std::pair<int, int> cell(Vec3 position) {
 Texture2D load_terrain_texture(const char* filename) {
     const std::string relative = std::string("assets/textures/") + filename;
     const std::string bundled = std::string(GetApplicationDirectory()) + relative;
-    const std::string path = FileExists(bundled.c_str()) ? bundled : relative;
+    const std::string path = FileExists(relative.c_str()) ? relative : bundled;
+    if (!FileExists(path.c_str())) return {};
     Texture2D texture = LoadTexture(path.c_str());
     if (texture.id != 0) {
         GenTextureMipmaps(&texture);
@@ -76,26 +77,9 @@ struct MeshBuilder {
     }
     void polygon(std::vector<Vec3> points,Color color) {
         Vec3 normal = Vec3::sZero();
-        for (std::size_t i = 0; i < points.size(); ++i) normal += points[i].Cross(points[(i+1)%points.size()]);
-        normal = normal.NormalizedOr(Vec3::sAxisY());
-        if (normal.GetY()<0) { std::reverse(points.begin(),points.end()); normal = -normal; }
-        const auto side = [&](Vec3 a,Vec3 b,Vec3 p) { return (b-a).Cross(p-a).Dot(normal); };
-        // ponytail: ear clipping is quadratic; junction contours have fewer than 64 vertices.
-        while (points.size()>3) {
-            bool clipped = false;
-            for (std::size_t i = 0; i < points.size(); ++i) {
-                const std::size_t before = (i+points.size()-1)%points.size(), after = (i+1)%points.size();
-                const Vec3 a = points[before], b = points[i], c = points[after];
-                if (side(a,b,c)<=.000001f) continue;
-                bool occupied = false;
-                for (std::size_t j = 0; j < points.size(); ++j) if (j!=before && j!=i && j!=after)
-                    if (side(a,b,points[j])>=-.000001f && side(b,c,points[j])>=-.000001f && side(c,a,points[j])>=-.000001f) { occupied = true; break; }
-                if (occupied) continue;
-                triangle(a,b,c,color); points.erase(points.begin()+i); clipped = true; break;
-            }
-            if (!clipped) break;
-        }
-        if (points.size()==3) triangle(points[0],points[1],points[2],color);
+        for (std::size_t i = 0; i<points.size(); ++i) normal += points[i].Cross(points[(i+1)%points.size()]);
+        if (normal.GetY()<0) std::reverse(points.begin(),points.end());
+        for (const auto& t : triangulate_polygon(points)) triangle(points[t[0]],points[t[1]],points[t[2]],color);
     }
     void sign(Vec3 center, Vec3 right, float width, float height, int row) {
         const Vec3 up(0, height / 2, 0), side = right * (width / 2);
@@ -404,6 +388,17 @@ void main() {
 })GLSL";
 }
 
+std::filesystem::path building_texture_directory() {
+    const std::filesystem::path source = "assets/textures";
+    std::error_code ec;
+    return std::filesystem::is_directory(source,ec) ? source : std::filesystem::path(GetApplicationDirectory())/source;
+}
+Texture2D load_building_texture(const std::string& filename) {
+    if (filename.empty()) return {};
+    Texture2D texture = load_terrain_texture(filename.c_str());
+    if (texture.id) SetTextureWrap(texture,TEXTURE_WRAP_CLAMP);
+    return texture;
+}
 EnvironmentRenderer::Chunk EnvironmentRenderer::chunk(Model model) {
     const auto box = GetModelBoundingBox(model);
     const Vector3 center = Vector3Scale(Vector3Add(box.min, box.max), .5f);
@@ -992,7 +987,9 @@ void EnvironmentRenderer::load_city(const Environment& env) {
         }
     }
     for (const auto& b : env.barriers()) buildings.box(b.center,b.size,{197,204,211,255},b.yaw,b.pitch);
-    for (const auto& b : env.buildings()) buildings.box(b.center,b.size,{197,204,211,255});
+    for (std::size_t i = 0; i<env.buildings().size(); ++i) if (!city.buildings[i].mesh) {
+        const auto& b = env.buildings()[i]; buildings.box(b.center,b.size,{197,204,211,255});
+    }
     water.quad({-Environment::extent,0,-Environment::extent},{-Environment::extent,0,Environment::extent},
         {Environment::extent,0,Environment::extent},{Environment::extent,0,-Environment::extent},WHITE);
     terrain_ = ground.upload(); grass_ = grass.upload(); sand_ = sand.upload(); roads_ = roads.upload(); ocean_ = water.upload();
@@ -1018,6 +1015,25 @@ void EnvironmentRenderer::load_city(const Environment& env) {
         tree_camera_ = GetShaderLocation(tree_shader_,"cameraPosition");
     }
     sign_emission_ = GetShaderLocation(tree_shader_,"emissiveStrength");
+    std::map<std::pair<bool,std::string>,MeshBuilder> custom;
+    for (const auto& b : city.buildings) if (b.mesh) {
+        for (const auto& t : b.triangles(city.tile_height(b.cell))) {
+            if (!t.texture.empty() && !building_textures_.count(t.texture)) building_textures_[t.texture] = load_building_texture(t.texture);
+            const bool textured = !t.texture.empty() && building_textures_[t.texture].id;
+            if (t.decal && !textured) continue;
+            auto& mesh = custom[{t.decal,t.texture}]; const auto first = mesh.texcoords.size();
+            mesh.flat_triangle(t.points[0],t.points[1],t.points[2],textured ? WHITE : Color{197,204,211,255});
+            if (mesh.texcoords.size()==first+6) for (int i = 0; i<3; ++i) {
+                mesh.texcoords[first+i*2] = t.uv[i][0]; mesh.texcoords[first+i*2+1] = t.uv[i][1];
+            }
+        }
+    }
+    for (const auto& batch : custom) for (auto model : batch.second.upload_chunks()) {
+        model.materials[0].shader = tree_shader_;
+        const auto texture = building_textures_.find(batch.first.second);
+        if (texture!=building_textures_.end() && texture->second.id) SetMaterialTexture(&model.materials[0],MATERIAL_MAP_DIFFUSE,texture->second);
+        city_chunks_.push_back(chunk(model));
+    }
     load_map(env);
 }
 
@@ -1179,6 +1195,7 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     if (sand_texture_.id != 0) UnloadTexture(sand_texture_);
     if (asphalt_texture_.id != 0) UnloadTexture(asphalt_texture_);
     if (sign_texture_.id) UnloadTexture(sign_texture_);
+    for (const auto& texture : building_textures_) if (texture.second.id) UnloadTexture(texture.second);
     UnloadModel(map_);
     UnloadShader(minimap_shader_);
     UnloadShader(land_shader_); UnloadShader(water_shader_);
@@ -1208,6 +1225,7 @@ void EnvironmentRenderer::draw_sky(const Camera3D& camera, const Daylight& light
 void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Daylight& light, const SceneLighting& lighting, const GraphicsSettings& settings) {
     for (Shader shader : {land_shader_, water_shader_, tree_shader_}) lighting.apply(shader, camera, light, settings);
     SetShaderValue(land_shader_, land_camera_, &camera.position, SHADER_UNIFORM_VEC3);
+    SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(water_shader_, water_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(water_shader_, water_time_, &time, SHADER_UNIFORM_FLOAT);
     DrawModel(ocean_, {0, 0, 0}, 1, WHITE);

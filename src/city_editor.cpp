@@ -9,6 +9,8 @@
 #include <rlgl.h>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <set>
 
 namespace ambaretto {
 namespace {
@@ -16,7 +18,7 @@ constexpr Color background = ui::dos_blue, panel = ui::dos_blue, border = ui::do
 constexpr Color ink = ui::dos_white, muted = ui::dos_white, accent = ui::dos_yellow;
 constexpr int sidebar = 280;
 enum class Tool { Select, Land, Road, Building, Spawn, Vehicle, Bulldoze, Trees, Ground, Elevation };
-const char* tools[] = {"Select / edit", "Island / expand", "Road", "Building block", "Player spawn", "Vehicle", "Bulldoze", "Tree brush", "Ground texture", "Elevation"};
+const char* tools[] = {"Select / edit", "Island / expand", "Road", "Building", "Player spawn", "Vehicle", "Bulldoze", "Tree brush", "Ground texture", "Elevation"};
 const char* ground_names[] = {"Soil", "Grass", "Beach sand", "Asphalt"};
 const char* densities[] = {"Sparse", "Medium", "Dense"};
 const char* vehicle_names[] = {"Car", "Trainer plane", "F-18", "Boeing 747"};
@@ -29,12 +31,12 @@ std::string fit(std::string value,int size,float width) {
 }
 bool hit(Rectangle r) { return CheckCollisionPointRec(GetMousePosition(),r); }
 bool close_clicked(Rectangle r, bool interactive = true) { return interactive && hit(ui::window_close(r)) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT); }
-bool button(Rectangle r, const std::string& label, bool selected = false, bool enabled = true, bool interactive = true) {
+bool button(Rectangle r, const std::string& label, bool selected = false, bool enabled = true, bool interactive = true, int size = 18) {
     const bool hover = interactive && enabled && hit(r);
     DrawRectangleRec({r.x+2,r.y+2,r.width,r.height},border);
     DrawRectangleRec(r,enabled && (selected || hover) ? accent : panel);
     DrawRectangleLinesEx(r,1,border);
-    text(label,r.x+10,r.y+(r.height-18)/2,18,enabled ? (selected || hover ? background : ink) : ui::dos_light_blue);
+    text(fit(label,size,r.width-20),r.x+10,r.y+(r.height-size)/2,size,enabled ? (selected || hover ? background : ink) : ui::dos_light_blue);
     return hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
 }
 void input(std::string& value, Rectangle r) {
@@ -42,7 +44,7 @@ void input(std::string& value, Rectangle r) {
     DrawRectangleRec(r,background); DrawRectangleLinesEx(r,2,accent);
     std::string visible = value+(int(GetTime()*2)%2 ? "_" : "");
     while (!visible.empty() && ui::measure_text(visible.c_str(),21)>r.width-24) visible.erase(visible.begin());
-    text(visible,r.x+12,r.y+13,21);
+    text(visible,r.x+12,r.y+(r.height-21)/2,21);
     for (int c = GetCharPressed(); c; c = GetCharPressed()) if (c>=32 && c<127 && value.size()<48) value += char(c);
     if ((IsKeyPressed(KEY_BACKSPACE)||IsKeyPressedRepeat(KEY_BACKSPACE)) && !value.empty()) value.pop_back();
 }
@@ -148,15 +150,445 @@ void draw_city(const City& city, bool grid) {
         DrawSphere(vector(c+Vec3(0,3.5f,0)),1,accent);
     }
 }
+void building_outline(const CityBuilding& b,float ground,Color color) {
+    const auto shape = b.shape(); const auto p = b.points(ground);
+    for (const auto& edge : shape.edges()) DrawLine3D(vector(p[edge[0]]),vector(p[edge[1]]),color);
+}
+int pick_building(const City& city,Camera3D camera,Vector2 mouse) {
+    const Ray ray = GetScreenToWorldRay(mouse,camera); float distance = 1e9f; int selected = -1;
+    for (std::size_t i = 0; i<city.buildings.size(); ++i) {
+        const auto& b = city.buildings[i];
+        for (const auto& t : b.triangles(city.tile_height(b.cell))) {
+            if (t.decal) continue;
+            const auto hit = GetRayCollisionTriangle(ray,vector(t.points[0]),vector(t.points[1]),vector(t.points[2]));
+            if (hit.hit && hit.distance<distance) { distance = hit.distance; selected = int(i); }
+        }
+    }
+    return selected;
+}
+Vec3 mesh_axis(int axis) { return axis==0 ? Vec3::sAxisX() : axis==1 ? Vec3::sAxisY() : Vec3::sAxisZ(); }
+float mesh_coordinate(Vec3 p,int axis) { return axis==0 ? p.GetX() : axis==1 ? p.GetY() : p.GetZ(); }
+Vector2 project_mesh(Vec3 p,Camera3D camera,Rectangle view) {
+    return Vector2Add(GetWorldToScreenEx(vector(p),camera,int(view.width),int(view.height)),{view.x,view.y});
+}
+float segment_distance(Vector2 p,Vector2 a,Vector2 b) {
+    const auto d = Vector2Subtract(b,a); const float length = Vector2LengthSqr(d);
+    const float t = length>.0001f ? std::clamp(Vector2DotProduct(Vector2Subtract(p,a),d)/length,0.f,1.f) : 0;
+    return Vector2Distance(p,Vector2Add(a,Vector2Scale(d,t)));
+}
+// Handles stay the same size in pixels in the orthographic editor.
+int mesh_gizmo(Vec3 pivot,Camera3D camera,Rectangle view,Vector2 mouse,bool draw,int active = -1) {
+    const Color colors[] = {RED,GREEN,SKYBLUE}; const int planes[3][2] = {{0,1},{0,2},{1,2}};
+    const float length = camera.fovy/view.height*82;
+    const auto origin = project_mesh(pivot,camera,view); int picked = -1;
+    for (int i = 0; i<3; ++i) {
+        const auto a = mesh_axis(planes[i][0])*length, b = mesh_axis(planes[i][1])*length;
+        const Vector2 p[] = {project_mesh(pivot+(a+b)*.18f,camera,view),project_mesh(pivot+a*.38f+b*.18f,camera,view),
+            project_mesh(pivot+(a+b)*.38f,camera,view),project_mesh(pivot+a*.18f+b*.38f,camera,view)};
+        const float area = std::abs((p[1].x-p[0].x)*(p[3].y-p[0].y)-(p[1].y-p[0].y)*(p[3].x-p[0].x));
+        if (area<36) continue;
+        if (CheckCollisionPointTriangle(mouse,p[0],p[1],p[2]) || CheckCollisionPointTriangle(mouse,p[0],p[2],p[3])) picked = i+3;
+        if (draw) {
+            const Color color = active==i+3 ? accent : ColorAlpha(colors[planes[i][0]],.45f);
+            // raylib's 2D triangles use counterclockwise screen winding.
+            for (auto t : {std::array<int,3>{0,1,2},std::array<int,3>{0,2,3}}) {
+                if ((p[t[1]].x-p[t[0]].x)*(p[t[2]].y-p[t[0]].y)-(p[t[1]].y-p[t[0]].y)*(p[t[2]].x-p[t[0]].x)>0) std::swap(t[1],t[2]);
+                DrawTriangle(p[t[0]],p[t[1]],p[t[2]],color);
+            }
+            for (int j = 0; j<4; ++j) DrawLineEx(p[j],p[(j+1)%4],1,colors[planes[i][0]]);
+        }
+    }
+    for (int i = 0; i<3; ++i) {
+        const auto tip = project_mesh(pivot+mesh_axis(i)*length,camera,view);
+        if (Vector2Distance(origin,tip)<15) continue;
+        const auto direction = Vector2Normalize(Vector2Subtract(tip,origin)); const Vector2 side{-direction.y,direction.x};
+        if (segment_distance(mouse,Vector2Add(origin,Vector2Scale(direction,12)),tip)<8) picked = i;
+        if (draw) {
+            const Color color = active==i ? accent : colors[i];
+            DrawLineEx(origin,tip,3,color);
+            const auto base = Vector2Subtract(tip,Vector2Scale(direction,12));
+            DrawTriangle(tip,Vector2Subtract(base,Vector2Scale(side,6)),Vector2Add(base,Vector2Scale(side,6)),color);
+            text(std::string(1,"XYZ"[i]),tip.x+6,tip.y-8,15,color);
+        }
+    }
+    if (draw) DrawCircleV(origin,4,WHITE);
+    return picked;
+}
+Vec3 mesh_drag_delta(Vector2 mouse,Camera3D camera,Rectangle view,int handle) {
+    const Vector3 forward = Vector3Normalize(Vector3Subtract(camera.target,camera.position));
+    const Vector3 right = Vector3Normalize(Vector3CrossProduct(forward,camera.up)), up = Vector3CrossProduct(right,forward);
+    const float scale = camera.fovy/view.height;
+    const auto projected = [&](int axis) { const auto v = vector(mesh_axis(axis)); return Vector2{Vector3DotProduct(v,right),-Vector3DotProduct(v,up)}; };
+    if (handle<3) {
+        const auto axis = projected(handle); const float length = Vector2LengthSqr(axis);
+        return mesh_axis(handle)*(length>.001f ? Vector2DotProduct(mouse,axis)*scale/length : -mouse.y*scale);
+    }
+    if (handle<6) {
+        const int planes[3][2] = {{0,1},{0,2},{1,2}}; const int a = planes[handle-3][0], b = planes[handle-3][1];
+        const auto u = projected(a), v = projected(b); const float det = u.x*v.y-u.y*v.x;
+        if (std::abs(det)<.01f) return Vec3::sZero();
+        return (mesh_axis(a)*((mouse.x*v.y-mouse.y*v.x)/det)+mesh_axis(b)*((u.x*mouse.y-u.y*mouse.x)/det))*scale;
+    }
+    const auto d = Vector3Scale(Vector3Subtract(Vector3Scale(right,mouse.x),Vector3Scale(up,mouse.y)),scale); return Vec3(d.x,d.y,d.z);
+}
+bool mesh_slider(Rectangle r,float& value,float lo,float hi,int id,int& dragging,bool interactive) {
+    if (interactive && hit(r) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) dragging = id;
+    const float old = value;
+    if (interactive && dragging==id && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) value = lo+(hi-lo)*std::clamp((GetMouseX()-r.x)/r.width,0.f,1.f);
+    DrawRectangleRec(r,background); DrawRectangleLinesEx(r,1,border);
+    const float t = hi>lo ? (value-lo)/(hi-lo) : 0;
+    DrawRectangleRec({r.x,r.y,r.width*t,r.height},ColorAlpha(accent,.45f)); DrawRectangleRec({r.x+r.width*t-3,r.y-2,6,r.height+4},accent);
+    return old!=value;
+}
+}
+
+std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesystem::path& directory,const std::string& screenshot,int initial_tab,std::vector<BuildingMesh>* saved_designs) {
+    int tab = initial_tab==4 ? 3 : initial_tab==2 ? 1 : initial_tab==3 ? 2 : 0, mode = 0, decal = 0;
+    int field = -1, scroll = 0, library_selection = -1, frames = 0, slider_drag = -1, handle = -1;
+    std::array<std::vector<int>,3> selected{{{2},{},{4}}}; std::vector<int> moving;
+    std::vector<BuildingMesh> undo, redo; std::optional<BuildingMesh> grab;
+    Vector2 grab_start{}; bool keyboard_grab = false, slice = false, xray = false, interactive = false, decal_texture = false;
+    float yaw = 2.44f, pitch = .5f, zoom = 1, cut_fraction = .5f; int cut_axis = 1;
+    std::string status, buffer;
+    const auto align = [&](BuildingMesh& value) { const auto tiles = value.footprint(); return value.set_footprint(tiles[0],tiles[1],status,true); };
+    if (!align(mesh)) return {};
+    auto textures = building_textures(building_texture_directory(),status);
+    auto library = saved_buildings(directory,status);
+    std::map<std::string,Texture2D> images; RenderTexture2D preview{}; MenuBar menu(MenuMode::Creator);
+    const Shader shader = LoadShaderFromMemory(nullptr,R"GLSL(#version 330
+in vec2 fragTexCoord;
+in vec4 fragColor;
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+out vec4 finalColor;
+void main() {
+    vec4 pixel = texture(texture0,fragTexCoord)*fragColor*colDiffuse;
+    if (pixel.a<0.3) discard;
+    finalColor = pixel;
+})GLSL");
+    std::optional<BuildingMesh> result;
+    const auto image = [&](const std::string& name) {
+        if (name.empty()) return Texture2D{};
+        if (!images.count(name)) images[name] = load_building_texture(name);
+        return images[name];
+    };
+    const auto commit = [&](BuildingMesh next) {
+        if (!next.validate(status)) return false;
+        undo.push_back(mesh); if (undo.size()>32) undo.erase(undo.begin()); redo.clear();
+        mesh = std::move(next); field = -1; status = "Updated"; return true;
+    };
+    while (!WindowShouldClose()) {
+        const float height = float(GetScreenHeight());
+        const Rectangle window{8,44,float(GetScreenWidth()-16),height-108}, view{414,84,float(GetScreenWidth()-438),height-244};
+        MenuState menu_state; menu_state.undo = !undo.empty() && !grab; menu_state.redo = !redo.empty() && !grab;
+        const auto command = interactive && !grab ? menu.update(menu_state) : MenuCommand::None;
+        if (command!=MenuCommand::None) field = -1;
+        const bool can_edit = interactive && !menu.blocking() && !menu.interacted();
+        const bool click = can_edit && IsMouseButtonPressed(MOUSE_BUTTON_LEFT), in_view = can_edit && hit(view);
+        const bool ctrl = IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL), shift = IsKeyDown(KEY_LEFT_SHIFT)||IsKeyDown(KEY_RIGHT_SHIFT);
+        if (can_edit && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) slider_drag = -1;
+        if (command==MenuCommand::CloseCreator || (can_edit && close_clicked(window))) break;
+        if (can_edit && IsKeyPressed(KEY_ESCAPE) && !grab) { if (slice) slice = false; else if (field>=0) field = -1; else break; }
+        if (command==MenuCommand::SavedBuildings) { tab = 3; slice = false; field = -1; }
+        if (command==MenuCommand::NewBuilding) { commit(BuildingMesh{}); selected = {{{2},{},{4}}}; tab = 0; slice = false; }
+        if ((can_edit || command==MenuCommand::Undo || command==MenuCommand::Redo) && !grab && field<0) {
+            if ((command==MenuCommand::Undo || (ctrl && IsKeyPressed(KEY_Z))) && !undo.empty()) { redo.push_back(mesh); mesh = std::move(undo.back()); undo.pop_back(); selected = {}; slice = false; status = "Undone"; }
+            if ((command==MenuCommand::Redo || (ctrl && IsKeyPressed(KEY_Y))) && !redo.empty()) { undo.push_back(mesh); mesh = std::move(redo.back()); redo.pop_back(); selected = {}; slice = false; status = "Redone"; }
+            if (tab==0 && !ctrl) {
+                if (IsKeyPressed(KEY_ONE)) mode = 0;
+                if (IsKeyPressed(KEY_TWO)) mode = 1;
+                if (IsKeyPressed(KEY_THREE)) mode = 2;
+                if (IsKeyPressed(KEY_Z) && (IsKeyDown(KEY_LEFT_ALT)||IsKeyDown(KEY_RIGHT_ALT))) xray = !xray;
+                if (IsKeyPressed(KEY_K)) { slice = !slice; cut_fraction = .5f; }
+            }
+        }
+        auto edges = mesh.edges();
+        for (int m = 0; m<3; ++m) {
+            const int count = m==0 ? int(mesh.vertices.size()) : m==1 ? int(edges.size()) : int(mesh.faces.size());
+            auto& list = selected[m]; list.erase(std::remove_if(list.begin(),list.end(),[&](int i){return i<0 || i>=count;}),list.end());
+        }
+        decal = mesh.decals.empty() ? -1 : std::clamp(decal,0,int(mesh.decals.size())-1);
+        const auto targets = [&]() {
+            if (mode==0) return selected[0];
+            std::set<int> vertices;
+            for (int i : selected[mode]) {
+                if (mode==1) { vertices.insert(edges[i][0]); vertices.insert(edges[i][1]); }
+                else for (int v : mesh.faces[i].vertices) vertices.insert(v);
+            }
+            return std::vector<int>(vertices.begin(),vertices.end());
+        };
+        if (can_edit && tab==0 && !grab && !slice && field<0 && !ctrl && IsKeyPressed(KEY_A)) {
+            const int count = mode==0 ? int(mesh.vertices.size()) : mode==1 ? int(edges.size()) : int(mesh.faces.size());
+            selected[mode].clear(); for (int i = 0; i<count; ++i) selected[mode].push_back(i);
+        }
+        if (in_view && !grab) {
+            zoom = std::clamp(zoom*std::pow(.85f,GetMouseWheelMove()),.2f,5.f);
+            if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) { yaw -= GetMouseDelta().x*.01f; pitch = std::clamp(pitch+GetMouseDelta().y*.01f,-1.45f,1.45f); }
+        }
+        if (preview.texture.width!=int(view.width) || preview.texture.height!=int(view.height)) {
+            if (preview.id) UnloadRenderTexture(preview);
+            preview = LoadRenderTexture(int(view.width),int(view.height));
+        }
+        const auto frame_size = grab ? grab->size : mesh.size;
+        const float radius = frame_size.Length(); const Vector3 target{0,frame_size.GetY()/2,0};
+        Camera3D camera{{std::sin(yaw)*std::cos(pitch)*radius*2,target.y+std::sin(pitch)*radius*2,std::cos(yaw)*std::cos(pitch)*radius*2},
+            target,{0,1,0},radius*1.45f*zoom,CAMERA_ORTHOGRAPHIC};
+        auto vertices = targets(); auto points = mesh.points(); Vec3 pivot = Vec3::sZero(); for (int v : vertices) pivot += points[v]/float(vertices.size());
+        if (grab) {
+            if (keyboard_grab) {
+                if (IsKeyPressed(KEY_X)) handle = 0;
+                if (IsKeyPressed(KEY_Y)) handle = 1;
+                if (IsKeyPressed(KEY_Z)) handle = 2;
+            }
+            BuildingMesh next = *grab;
+            if (next.move_vertices(moving,mesh_drag_delta(Vector2Subtract(GetMousePosition(),grab_start),camera,view,handle),status)) mesh = std::move(next);
+            if (IsKeyPressed(KEY_ESCAPE) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) { mesh = *grab; grab.reset(); status = "Move cancelled"; }
+            else if ((keyboard_grab && (click || IsKeyPressed(KEY_ENTER))) || (!keyboard_grab && IsMouseButtonReleased(MOUSE_BUTTON_LEFT))) {
+                BuildingMesh moved = mesh; mesh = *grab; grab.reset(); commit(std::move(moved));
+            }
+        } else if (can_edit && tab==0 && !slice && field<0 && !ctrl && !vertices.empty() && IsKeyPressed(KEY_G)) {
+            grab = mesh; moving = vertices; grab_start = GetMousePosition(); handle = 6; keyboard_grab = true;
+        } else if (in_view && click && !slice && (tab==0 || tab==2)) {
+            const int gizmo = tab==0 && !shift && !vertices.empty() ? mesh_gizmo(pivot,camera,view,GetMousePosition(),false) : -1;
+            if (gizmo>=0) { grab = mesh; moving = vertices; grab_start = GetMousePosition(); handle = gizmo; keyboard_grab = false; }
+            else {
+                const Vector2 mouse{GetMouseX()-view.x,GetMouseY()-view.y};
+                const Ray ray = GetScreenToWorldRayEx(mouse,camera,int(view.width),int(view.height)); float closest = 1e9f; int face = -1, picked = -1;
+                for (const auto& t : mesh.triangles()) if (!t.decal) {
+                    const auto hit = GetRayCollisionTriangle(ray,vector(t.points[0]),vector(t.points[1]),vector(t.points[2]));
+                    if (hit.hit && hit.distance<closest) { closest = hit.distance; face = t.face; }
+                }
+                const auto visible = [&](Vec3 p) { return xray || Vector3Distance(ray.position,vector(p))<=closest+radius*.02f; };
+                if (tab==2 || mode==2) picked = face;
+                else {
+                    float best = 12;
+                    const int count = mode==0 ? int(points.size()) : int(edges.size());
+                    for (int i = 0; i<count; ++i) {
+                        float distance; Vec3 point;
+                        if (mode==0) { point = points[i]; distance = Vector2Distance(GetMousePosition(),project_mesh(point,camera,view)); }
+                        else {
+                            const Vec3 a = points[edges[i][0]], b = points[edges[i][1]];
+                            const auto sa = project_mesh(a,camera,view), sb = project_mesh(b,camera,view), d = Vector2Subtract(sb,sa);
+                            const float length = Vector2LengthSqr(d), t = length>.0001f ? std::clamp(Vector2DotProduct(Vector2Subtract(GetMousePosition(),sa),d)/length,0.f,1.f) : 0;
+                            point = a+(b-a)*t; distance = segment_distance(GetMousePosition(),sa,sb);
+                        }
+                        if (distance<best && visible(point)) { best = distance; picked = i; }
+                    }
+                }
+                if (tab==2 && picked>=0 && decal>=0) { auto next = mesh; next.decals[decal].face = picked; commit(std::move(next)); }
+                else {
+                    auto& list = selected[mode];
+                    if (!shift) list.clear();
+                    if (picked>=0) { const auto it = std::find(list.begin(),list.end(),picked); if (it==list.end()) list.push_back(picked); else list.erase(it); }
+                }
+                field = -1;
+            }
+        }
+        points = mesh.points(); vertices = targets(); pivot = Vec3::sZero(); for (int v : vertices) pivot += points[v]/float(vertices.size());
+        const auto triangles = mesh.triangles(); const auto tiles = mesh.footprint();
+        const float cut_extent = mesh_coordinate(mesh.size,cut_axis), cut_position = cut_axis==1 ? cut_fraction*cut_extent : (cut_fraction-.5f)*cut_extent;
+        BeginTextureMode(preview); ClearBackground({18,28,45,255}); BeginMode3D(camera); BeginShaderMode(shader);
+        const auto ground = image("soil.png"); const float hx = mesh.size.GetX()/2, hz = mesh.size.GetZ()/2;
+        rlSetTexture(ground.id); rlBegin(RL_QUADS); rlColor4ub(125,145,160,255); rlNormal3f(0,1,0);
+        rlTexCoord2f(0,0); rlVertex3f(-hx,-.04f,-hz); rlTexCoord2f(0,float(tiles[1])); rlVertex3f(-hx,-.04f,hz);
+        rlTexCoord2f(float(tiles[0]),float(tiles[1])); rlVertex3f(hx,-.04f,hz); rlTexCoord2f(float(tiles[0]),0); rlVertex3f(hx,-.04f,-hz); rlEnd(); rlSetTexture(0);
+        for (const auto& t : triangles) {
+            const auto texture = image(t.texture); if (t.decal && !texture.id) continue;
+            const Vec3 normal = (t.points[1]-t.points[0]).Cross(t.points[2]-t.points[0]).NormalizedOr(Vec3::sAxisY());
+            const float shade = .6f+.4f*std::max(0.f,normal.Dot(Vec3(.4f,.8f,.3f).Normalized()));
+            const Color color = ColorBrightness(texture.id ? WHITE : Color{197,204,211,255},shade-1);
+            rlSetTexture(texture.id); rlBegin(RL_TRIANGLES); rlColor4ub(color.r,color.g,color.b,255); rlNormal3f(normal.GetX(),normal.GetY(),normal.GetZ());
+            for (int i = 0; i<3; ++i) { rlTexCoord2f(t.uv[i][0],t.uv[i][1]); rlVertex3f(t.points[i].GetX(),t.points[i].GetY(),t.points[i].GetZ()); }
+            rlEnd(); rlSetTexture(0);
+        }
+        EndShaderMode();
+        rlDisableDepthTest(); rlDisableDepthMask();
+        for (int x = 0; x<=tiles[0]; ++x) DrawLine3D({-hx+x*BuildingMesh::tile_size,.015f,-hz},{-hx+x*BuildingMesh::tile_size,.015f,hz},accent);
+        for (int z = 0; z<=tiles[1]; ++z) DrawLine3D({-hx,.015f,-hz+z*BuildingMesh::tile_size},{hx,.015f,-hz+z*BuildingMesh::tile_size},accent);
+        rlEnableDepthMask(); rlEnableDepthTest();
+        if (tab==0 || tab==2) {
+            if (mode==2 || tab==2) for (const auto& t : triangles) if (!t.decal && (tab==2 ? decal>=0 && t.face==mesh.decals[decal].face : std::find(selected[2].begin(),selected[2].end(),t.face)!=selected[2].end())) {
+                const auto offset = (t.points[1]-t.points[0]).Cross(t.points[2]-t.points[0]).NormalizedOr(Vec3::sAxisY())*.025f;
+                DrawTriangle3D(vector(t.points[0]+offset),vector(t.points[1]+offset),vector(t.points[2]+offset),{255,161,0,90});
+            }
+            if (xray) { rlDisableDepthTest(); rlDisableDepthMask(); }
+            for (int i = 0; i<int(edges.size()); ++i) DrawLine3D(vector(points[edges[i][0]]),vector(points[edges[i][1]]),mode==1 && std::find(selected[1].begin(),selected[1].end(),i)!=selected[1].end() ? ORANGE : accent);
+            if (tab==0 && mode==0) for (int i = 0; i<int(points.size()); ++i) DrawSphere(vector(points[i]),camera.fovy*.007f,std::find(vertices.begin(),vertices.end(),i)!=vertices.end() ? ORANGE : ink);
+            if (xray) { rlEnableDepthMask(); rlEnableDepthTest(); }
+        }
+        if (slice) {
+            rlDisableDepthTest(); rlDisableDepthMask();
+            const int a = cut_axis==0 ? 1 : 0, b = cut_axis==2 ? 1 : 2;
+            Vec3 center = mesh_axis(cut_axis)*cut_position; if (cut_axis!=1) center.SetY(mesh.size.GetY()/2);
+            const auto u = mesh_axis(a)*(mesh_coordinate(mesh.size,a)/2), v = mesh_axis(b)*(mesh_coordinate(mesh.size,b)/2);
+            const Vec3 border_points[] = {center-u-v,center+u-v,center+u+v,center-u+v};
+            for (int i = 0; i<4; ++i) DrawLine3D(vector(border_points[i]),vector(border_points[(i+1)%4]),SKYBLUE);
+            for (const auto& t : triangles) if (!t.decal) {
+                std::vector<Vec3> cut_points;
+                for (int i = 0; i<3; ++i) {
+                    const auto a = t.points[i], b = t.points[(i+1)%3]; const float da = mesh_coordinate(a,cut_axis)-cut_position, db = mesh_coordinate(b,cut_axis)-cut_position;
+                    if (std::abs(da)<1e-5f) cut_points.push_back(a);
+                    else if (da*db<0) cut_points.push_back(a+(b-a)*(da/(da-db)));
+                }
+                if (cut_points.size()>=2) DrawLine3D(vector(cut_points[0]),vector(cut_points[1]),SKYBLUE);
+            }
+            rlEnableDepthMask(); rlEnableDepthTest();
+        }
+        EndMode3D(); EndTextureMode();
+        BeginDrawing(); ui::draw_desktop(); ui::draw_window(window,"Building Creator"); ui::draw_window_close(window);
+        DrawTextureRec(preview.texture,{0,0,float(preview.texture.width),-float(preview.texture.height)},{view.x,view.y},WHITE); DrawRectangleLinesEx(view,1,border);
+        if (tab==0 && !slice && !vertices.empty()) { BeginScissorMode(int(view.x),int(view.y),int(view.width),int(view.height)); mesh_gizmo(pivot,camera,view,GetMousePosition(),true,grab ? handle : -1); EndScissorMode(); }
+        text(std::to_string(tiles[0])+" x "+std::to_string(tiles[1])+" tiles",view.x+10,view.y+10,16,accent);
+        text(slice ? "Slice preview / drag the position slider" : "Drag handles / Shift: select more / G: move",view.x+10,view.y+view.height-28,15,accent);
+        text("Right drag: orbit / Wheel: zoom",view.x,view.y+view.height+10,16);
+        const auto control = [&](Rectangle r,const std::string& label,bool chosen=false,bool enabled=true) { return button(r,label,chosen,enabled,can_edit && !grab,16); };
+        text("Name",20,88,17); const Rectangle name_box{84,80,310,44};
+        if (!grab && click && hit(name_box)) field = 0;
+        if (field==0) { input(mesh.name,name_box); if (IsKeyPressed(KEY_ENTER) || (click && !hit(name_box))) field = -1; }
+        else { DrawRectangleLinesEx(name_box,1,border); text(fit(mesh.name,18,286),96,93); }
+        text("FOOTPRINT",20,132,16,accent);
+        int width = tiles[0], depth = tiles[1]; bool resized = false;
+        const auto stepper = [&](const char* label,int& value,float y,int id) {
+            text(label,20,y+5,17); const Rectangle box{150,y,152,30};
+            if (!grab && click && hit(box)) { field = id; buffer = std::to_string(value); }
+            if (field==id) {
+                input(buffer,box);
+                if (IsKeyPressed(KEY_ENTER) || (click && !hit(box))) {
+                    try { std::size_t used; const int number = std::stoi(buffer,&used); if (used!=buffer.size() || number<1 || number>128) throw std::out_of_range("size"); value = number; resized = true; }
+                    catch (const std::exception&) { status = "Enter a tile count between 1 and 128."; }
+                    field = -1;
+                }
+            } else { DrawRectangleLinesEx(box,1,border); text(std::to_string(value),160,y+5,17); }
+            if (control({312,y,34,30},"-")) { value = std::max(1,value-1); resized = true; field = -1; }
+            if (control({356,y,34,30},"+")) { value = std::min(128,value+1); resized = true; field = -1; }
+        };
+        stepper("Tiles X",width,158,1); stepper("Tiles Z",depth,194,2);
+        if (resized) { auto next = mesh; if (next.set_footprint(width,depth,status,true)) commit(std::move(next)); }
+        const char* tabs[] = {"Mesh","Texture","Decals","Saved"}; const Rectangle tab_boxes[] = {{20,244,82,30},{108,244,108,30},{222,244,90,30},{318,244,78,30}};
+        for (int i = 0; i<4; ++i) if (control(tab_boxes[i],tabs[i],tab==i)) { tab = i; scroll = 0; field = -1; slice = false; if (i==1) decal_texture = false; }
+        BuildingMesh next = mesh; bool changed = false;
+        const bool keys = can_edit && !grab && field<0 && !ctrl;
+        if (tab==0) {
+            if (slice) {
+                for (int i = 0; i<3; ++i) if (control({20+i*126.f,288,118,30},std::string(1,"XYZ"[i])+" slice",cut_axis==i)) cut_axis = i;
+                text("Cut position",20,338,16); mesh_slider({20,366,370,18},cut_fraction,.02f,.98f,0,slider_drag,can_edit);
+                text(TextFormat("%.0f%% / %.2f m",cut_fraction*100,cut_position),20,396,16);
+                if (control({20,434,180,30},"Apply slice",true)) {
+                    const int old = int(next.vertices.size()); changed = next.slice(cut_axis,cut_position,status);
+                    if (changed) { selected = {}; mode = 0; for (int i = old; i<int(next.vertices.size()); ++i) selected[0].push_back(i); slice = false; }
+                }
+                if (control({210,434,180,30},"Cancel slice")) slice = false;
+            } else {
+                const char* modes[] = {"1 Vertex","2 Edge","3 Face"};
+                for (int i = 0; i<3; ++i) if (control({20+i*126.f,288,118,30},modes[i],mode==i)) { mode = i; field = -1; }
+                if (control({20,326,118,26},xray ? "Xray ON" : "Xray OFF",xray)) xray = !xray;
+                text(std::to_string(selected[mode].size())+" selected / "+std::to_string(mesh.vertices.size())+" verts",150,330,15);
+                if (control({20,364,118,30},"Slice K")) { slice = true; cut_fraction = .5f; }
+                const auto faces_action = [&](bool extrude) {
+                    if (mode!=2 || selected[2].empty()) { status = "Select one or more faces."; return false; }
+                    for (int f : selected[2]) if (!(extrude ? next.extrude_face(f,1,status) : next.inset_face(f,.2f,status))) return false;
+                    return true;
+                };
+                if (control({146,364,118,30},"Extrude",false,mode==2 && !selected[2].empty()) || (keys && IsKeyPressed(KEY_E))) changed = faces_action(true);
+                if (control({272,364,118,30},"Inset I",false,mode==2 && !selected[2].empty()) || (keys && IsKeyPressed(KEY_I))) changed = faces_action(false);
+                if (control({20,400,180,30},"+ Add vertex")) { const int v = next.add_vertex(pivot+Vec3(0,1,0),status); if (v>=0) { selected = {}; selected[0] = {v}; mode = 0; changed = true; } }
+                if (control({210,400,180,30},"Make face F",false,mode==0 && selected[0].size()>=3) || (keys && IsKeyPressed(KEY_F))) {
+                    changed = next.add_face(selected[0],status); if (changed) { selected = {}; selected[2] = {int(next.faces.size())-1}; mode = 2; }
+                }
+                if (control({20,436,180,30},"Subdivide")) {
+                    changed = !selected[mode].empty();
+                    if (mode==2) { for (int f : selected[2]) if (!next.subdivide_face(f,status)) { changed = false; break; } }
+                    else if (mode==1) { for (int i : selected[1]) if (next.split_edge(edges[i][0],edges[i][1],status)<0) { changed = false; break; } }
+                    else if (selected[0].size()==2) changed = next.split_edge(selected[0][0],selected[0][1],status)>=0;
+                    else { changed = false; status = "Select edges, faces, or two connected vertices."; }
+                    if (changed) selected = {};
+                }
+                if (control({210,436,180,30},"Delete Del") || (keys && IsKeyPressed(KEY_DELETE))) {
+                    if (mode==0) changed = next.remove_vertices(selected[0],status);
+                    else {
+                        std::vector<int> faces = selected[2];
+                        if (mode==1) {
+                            std::set<int> removed;
+                            for (int e : selected[1]) for (int f = 0; f<int(mesh.faces.size()); ++f) {
+                                const auto& corners = mesh.faces[f].vertices;
+                                for (std::size_t j = 0; j<corners.size(); ++j) if (std::minmax(corners[j],corners[(j+1)%corners.size()])==std::minmax(edges[e][0],edges[e][1])) removed.insert(f);
+                            }
+                            faces = {removed.begin(),removed.end()};
+                        }
+                        changed = next.remove_faces(faces,status);
+                    }
+                    if (changed) selected = {};
+                }
+            }
+        } else if (tab==1) {
+            if (control({20,288,180,30},"No texture",mesh.texture.empty(),!decal_texture)) { next.texture.clear(); changed = true; }
+            if (control({210,288,180,30},"Refresh folder")) { for (const auto& entry : images) if (entry.second.id) UnloadTexture(entry.second); images.clear(); textures = building_textures(building_texture_directory(),status); scroll = 0; }
+            const Rectangle list{20,330,370,height-484}; const int rows = std::max(1,int(list.height/36));
+            if (can_edit && hit(list)) scroll -= int(GetMouseWheelMove());
+            scroll = std::clamp(scroll,0,std::max(0,int(textures.size())-rows));
+            if (textures.empty()) text("Add images to assets/textures",20,340,16);
+            for (int row = 0; row<rows && scroll+row<int(textures.size()); ++row) {
+                const auto& name = textures[scroll+row]; const Rectangle r{20,330+row*36.f,370,32}; const auto thumb = image(name);
+                if (control(r,"      "+fit(name,16,296),decal_texture && decal>=0 ? mesh.decals[decal].texture==name : mesh.texture==name)) {
+                    if (thumb.id) { if (decal_texture && decal>=0) next.decals[decal].texture = name; else next.texture = name; changed = true; }
+                    else status = "Could not load "+name;
+                }
+                if (thumb.id) DrawTexturePro(thumb,{0,0,float(thumb.width),float(thumb.height)},{r.x+4,r.y+2,28,28},{0,0},0,WHITE);
+            }
+        } else if (tab==2) {
+            if (control({20,288,180,28},"+ Add decal",false,!textures.empty() && mesh.decals.size()<64)) { next.decals.push_back({selected[2].empty() ? 0 : selected[2].back(),textures.front()}); decal = int(next.decals.size())-1; changed = true; }
+            if (control({210,288,180,28},"Remove decal",false,decal>=0)) { next.decals.erase(next.decals.begin()+decal); decal = next.decals.empty() ? -1 : std::min(decal,int(next.decals.size())-1); changed = true; }
+            if (decal>=0) {
+                if (control({20,324,370,28},"Decal "+std::to_string(decal+1)+" / "+std::to_string(next.decals.size()))) decal = (decal+1)%int(next.decals.size());
+                auto& d = next.decals[decal]; text("Face "+std::to_string(d.face)+": click preview to change",20,360,14);
+                if (control({20,382,370,28},"Texture: "+fit(d.texture,16,260))) { tab = 1; decal_texture = true; scroll = 0; }
+                const auto uv = [&](const char* label,float& value,float lo,float hi,float y,int id) { text(label,20,y-2,14); changed |= mesh_slider({150,y,236,10},value,lo,hi,id,slider_drag,can_edit); };
+                uv("Left",d.u,0,1-d.width,421,1); uv("Top",d.v,0,1-d.height,436,2); uv("Width",d.width,.01f,1-d.u,451,3); uv("Height",d.height,.01f,1-d.v,466,4);
+            } else text("Add a texture overlay, then click its face.",20,338,14);
+        } else {
+            if (control({20,288,180,30},"Refresh saved")) { library = saved_buildings(directory,status); library_selection = -1; scroll = 0; }
+            if (control({210,288,180,30},"Load selected",false,library_selection>=0)) { next = library[library_selection]; changed = align(next); selected = {}; tab = 0; }
+            const Rectangle list{20,330,370,height-482}; const int rows = std::max(1,int(list.height/34));
+            if (can_edit && hit(list)) scroll -= int(GetMouseWheelMove());
+            scroll = std::clamp(scroll,0,std::max(0,int(library.size())-rows));
+            if (library.empty()) text("Save a design to list it here",20,340,16);
+            for (int row = 0; row<rows && scroll+row<int(library.size()); ++row) if (control({20,330+row*34.f,370,30},fit(library[scroll+row].name,16,345),library_selection==scroll+row)) library_selection = scroll+row;
+        }
+        if (changed) commit(std::move(next));
+        if (control({20,height-122,180,36},"Save building",true) || command==MenuCommand::SaveBuilding || (can_edit && !grab && ctrl && IsKeyPressed(KEY_S))) {
+            if (mesh.save(directory,status)) {
+                if (saved_designs) {
+                    const auto found = std::find_if(saved_designs->begin(),saved_designs->end(),[&](const auto& design){return design.name==mesh.name;});
+                    if (found==saved_designs->end()) saved_designs->push_back(mesh); else *found = mesh;
+                }
+                library = saved_buildings(directory,status); status = "Building saved";
+            }
+        }
+        const bool use = control({210,height-122,180,36},"Use in map",true) || command==MenuCommand::UseBuilding;
+        const bool cancel = control({view.x+view.width-142,height-122,142,36},"Close");
+        text(fit(status,17,GetScreenWidth()-40.f),20,height-49,17,accent); menu.draw(menu_state);
+        text("BUILDING CREATOR",GetScreenWidth()-212.f,8,16,background); EndDrawing(); interactive = true;
+        if (!screenshot.empty() && ++frames>=3) { auto capture = LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break; }
+        if (cancel) break;
+        if (use && mesh.validate(status)) { result = mesh; break; }
+    }
+    if (preview.id) UnloadRenderTexture(preview);
+    for (const auto& entry : images) if (entry.second.id) UnloadTexture(entry.second);
+    UnloadShader(shader); return result;
+}
+
+namespace {
 enum class EditorResult { Back, Play, Quit };
 EditorResult editor(City& city,const std::filesystem::path& directory,const std::string& screenshot) {
     Tool tool = Tool::Land;
-    int building_size = 1, building_height = 12, vehicle_kind = 0, rotation = 0;
+    int building_size = 1, building_height = 12, building_rotation = 0, vehicle_kind = 0, rotation = 0;
     int brush_size = 3, density = 2, ground_texture = 0, elevation_direction = 1, revision = 0, preview_revision = -1;
     int selected_building = -1, selected_vehicle = -1;
+    std::optional<BuildingMesh> building_mesh;
     bool dirty = false, dragging = false, top = false, grid = true, close_failed = false, diagonal_roads = true;
     bool painting = false, stroke_saved = false, brush_remove = false, brush_sampled = false;
     float save_time = 0, preview_time = 0, yaw = .78539816f;
+    int library_scroll = 0;
     Vec3 brush_point = Vec3::sZero(), last_brush = Vec3::sZero();
     std::unique_ptr<Environment> preview_environment;
     std::unique_ptr<EnvironmentRenderer> preview_renderer;
@@ -170,6 +602,15 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
     Vec3 focus = city.spawn ? City::center(*city.spawn,0) : Vec3::sZero();
     Camera3D camera{{0,500,500},vector(focus),{0,1,0},400,CAMERA_ORTHOGRAPHIC};
     CityCell anchor{}, hover{}; std::string status;
+    const auto buildings_directory = directory.parent_path()/"buildings";
+    auto designs = saved_buildings(buildings_directory,status);
+    const auto refresh_designs = [&]() {
+        designs = saved_buildings(buildings_directory,status);
+        if (building_mesh) {
+            const auto found = std::find_if(designs.begin(),designs.end(),[&](const auto& d){return d.name==building_mesh->name;});
+            if (found==designs.end()) designs.insert(designs.begin(),*building_mesh); else *found = *building_mesh;
+        }
+    };
     std::vector<City> undo, redo;
     MenuBar menu(MenuMode::Editor);
     const auto choose_tool = [&](int index) { tool = Tool(index); painting = dragging = false; selected_building = selected_vehicle = -1; };
@@ -194,8 +635,13 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         MenuState menu_state;
         menu_state.undo = !undo.empty(); menu_state.redo = !redo.empty(); menu_state.play = city.spawn.has_value();
         menu_state.selection = selected_building>=0 || selected_vehicle>=0;
+        menu_state.building_selection = selected_building>=0;
+        menu_state.ground = ground_texture; menu_state.vehicle = vehicle_kind; menu_state.density = density;
+        menu_state.diagonal = diagonal_roads; menu_state.elevation = elevation_direction;
         menu_state.top = top; menu_state.grid = grid; menu_state.tool = int(tool);
         const auto command = first_frame ? MenuCommand::None : menu.update(menu_state);
+        const int builder_request = command==MenuCommand::BuildingCreator || command==MenuCommand::EditBuilding ? 0 : -1;
+        const bool edit_building = command==MenuCommand::EditBuilding && selected_building>=0;
         const bool can_edit = !first_frame && !menu.blocking() && !menu.interacted() && IsWindowFocused();
         const Rectangle document{float(sidebar+12),44,float(GetScreenWidth()-sidebar-24),float(GetScreenHeight()-108)};
         if (!can_edit) painting = dragging = false;
@@ -209,11 +655,33 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         if (command==MenuCommand::Quit && finish(EditorResult::Quit)) return EditorResult::Quit;
         if (command==MenuCommand::PlayCity && finish(EditorResult::Play)) return EditorResult::Play;
         const bool ctrl = IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL);
+        if (command==MenuCommand::RotateBuilding || (can_edit && !ctrl && IsKeyPressed(KEY_R) && (tool==Tool::Building || selected_building>=0))) {
+            if (selected_building>=0) {
+                const int index = selected_building; City next = city; auto b = city.buildings[index];
+                b.rotation = (b.rotation+1)%4;
+                if (next.add_building(b,status,index)) { commit(std::move(next)); selected_building = index; }
+            } else building_rotation = (building_rotation+1)%4;
+        }
         if (command==MenuCommand::SaveCity || (can_edit && ctrl && IsKeyPressed(KEY_S))) save(city,directory,status,dirty);
         if ((command==MenuCommand::Undo || (can_edit && ctrl && IsKeyPressed(KEY_Z))) && !undo.empty()) { redo.push_back(city); city = std::move(undo.back()); undo.pop_back(); dirty = true; save_time = 0; ++revision; painting = dragging = false; selected_building = selected_vehicle = -1; }
         if ((command==MenuCommand::Redo || (can_edit && ctrl && IsKeyPressed(KEY_Y))) && !redo.empty()) { undo.push_back(city); city = std::move(redo.back()); redo.pop_back(); dirty = true; save_time = 0; ++revision; painting = dragging = false; selected_building = selected_vehicle = -1; }
         if (command>=MenuCommand::SelectTool && command<=MenuCommand::ElevationTool) choose_tool(int(command)-int(MenuCommand::SelectTool));
-        for (int i = 0; i<10; ++i) if (can_edit && !ctrl && IsKeyPressed(i==9 ? KEY_ZERO : KEY_ONE+i)) choose_tool(i);
+        if (command==MenuCommand::RoadBend || command==MenuCommand::RoadDiagonal) { choose_tool(2); diagonal_roads = command==MenuCommand::RoadDiagonal; }
+        if (command>=MenuCommand::GroundSoil && command<=MenuCommand::GroundAsphalt) { choose_tool(8); ground_texture = int(command)-int(MenuCommand::GroundSoil); }
+        if (command==MenuCommand::RaiseGround || command==MenuCommand::LowerGround) { choose_tool(9); elevation_direction = command==MenuCommand::RaiseGround ? 1 : -1; }
+        if (command>=MenuCommand::PlaceCar && command<=MenuCommand::PlaceBoeing) { choose_tool(5); vehicle_kind = int(command)-int(MenuCommand::PlaceCar); }
+        if (command==MenuCommand::RotateObject) {
+            rotation = (rotation+1)%4;
+            if (selected_vehicle>=0) {
+                City next = city; auto v = next.vehicles[selected_vehicle]; v.rotation = rotation;
+                if (next.add_vehicle(v,status,selected_vehicle)) commit(std::move(next));
+            } else choose_tool(5);
+        }
+        if (command>=MenuCommand::TreesSparse && command<=MenuCommand::TreesDense) { choose_tool(7); density = int(command)-int(MenuCommand::TreesSparse)+1; }
+        if (command==MenuCommand::BrushSmaller || command==MenuCommand::BrushLarger) { choose_tool(7); brush_size = std::clamp(brush_size+(command==MenuCommand::BrushLarger ? 1 : -1),1,12); }
+        for (int i = 0; i<10; ++i) if (can_edit && !ctrl && IsKeyPressed(i==9 ? KEY_ZERO : KEY_ONE+i)) {
+            choose_tool(i); if (i==2) diagonal_roads = false; if (i==5) vehicle_kind = 0; if (i==7) density = 1; if (i==8) ground_texture = 0; if (i==9) elevation_direction = 1;
+        }
         if (command==MenuCommand::TopView || (can_edit && IsKeyPressed(KEY_V))) top = !top;
         if (command==MenuCommand::Grid || (can_edit && IsKeyPressed(KEY_G))) grid = !grid;
         if (command==MenuCommand::RotateLeft || (can_edit && IsKeyPressed(KEY_Q))) yaw -= 1.57079633f;
@@ -244,8 +712,9 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
                 painting = true; stroke_saved = brush_sampled = false; last_brush = brush_point;
                 brush_remove = IsKeyDown(KEY_LEFT_SHIFT)||IsKeyDown(KEY_RIGHT_SHIFT);
             } else if (tool==Tool::Select) {
-                selected_building = city.building_at(hover); selected_vehicle = city.vehicle_at(brush_point);
-                if (selected_building>=0) { building_size = city.buildings[selected_building].size; building_height = city.buildings[selected_building].height; }
+                selected_building = pick_building(city,camera,mouse); selected_vehicle = city.vehicle_at(brush_point);
+                if (selected_building<0) selected_building = city.building_at(hover);
+                if (selected_building>=0) selected_vehicle = -1;
                 if (selected_vehicle>=0) { vehicle_kind = int(city.vehicles[selected_vehicle].kind); rotation = city.vehicles[selected_vehicle].rotation; }
             } else if (tool==Tool::Spawn || tool==Tool::Vehicle || tool==Tool::Bulldoze) {
                 City next = city;
@@ -267,8 +736,8 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
             }
             if (!brush_error.empty()) status = brush_error;
         }
-        CityBuilding preview{{anchor.x,anchor.z},building_size,building_height};
-        if (dragging && tool==Tool::Building && hover!=anchor) {
+        CityBuilding preview{{anchor.x,anchor.z},building_size,building_height,building_mesh,building_rotation};
+        if (dragging && tool==Tool::Building && hover!=anchor && !building_mesh) {
             preview.size = std::clamp(std::max(std::abs(hover.x-anchor.x),std::abs(hover.z-anchor.z))+1,1,8);
             preview.cell = {anchor.x-(hover.x<anchor.x ? preview.size-1 : 0),anchor.z-(hover.z<anchor.z ? preview.size-1 : 0)};
         }
@@ -357,8 +826,9 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
                         tile_outline(city,{x,z},accent);
             } else if (tool==Tool::Building) {
                 if (!dragging) preview.cell = hover;
-                const auto c = City::center(preview.cell,city.tile_height(preview.cell))+Vec3((preview.size-1)*City::half_block,preview.height/2.f,(preview.size-1)*City::half_block);
-                DrawCubeWires(vector(c),preview.size*City::block,float(preview.height),preview.size*City::block,accent);
+                City proposed = city; std::string error;
+                const bool valid = proposed.add_building(preview,error);
+                building_outline(preview,city.tile_height(preview.cell),valid ? accent : RED);
             } else if (tool==Tool::Vehicle) {
                 const CityVehicle v{CityVehicleKind(vehicle_kind),brush_point,rotation};
                 const Vec3 half = v.half_size();
@@ -366,8 +836,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
             } else tile_outline(city,hover,accent);
         }
         if (selected_building>=0) {
-            auto b = city.buildings[selected_building]; const auto c = City::center(b.cell,city.tile_height(b.cell))+Vec3((b.size-1)*City::half_block,b.height/2.f,(b.size-1)*City::half_block);
-            DrawCubeWires(vector(c),b.size*City::block+.1f,b.height+.1f,b.size*City::block+.1f,accent);
+            const auto& b = city.buildings[selected_building]; building_outline(b,city.tile_height(b.cell),accent);
         }
         if (selected_vehicle>=0) {
             const auto& v = city.vehicles[selected_vehicle]; const Vec3 half = v.half_size();
@@ -382,59 +851,34 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         ui::draw_window({8,44,264,float(GetScreenHeight()-108)},"TOOLBOX");
         DrawRectangleLinesEx(document,2,border);
         DrawRectangleLinesEx({document.x+4,document.y+35,document.width-8,document.height-39},1,border);
-        const auto title = fit(city.name,18,document.width-160)+(dirty ? " *" : "");
+        std::string active = tools[int(tool)];
+        if (tool==Tool::Building || selected_building>=0) active += " / "+std::to_string((selected_building>=0 ? city.buildings[selected_building].rotation : building_rotation)*90)+" deg";
+        if (tool==Tool::Road) active += diagonal_roads ? " / diagonal" : " / L-shaped";
+        if (tool==Tool::Ground) active += " / "+std::string(ground_names[ground_texture]);
+        if (tool==Tool::Trees) active += " / "+std::to_string(brush_size*8)+" m / "+densities[density-1];
+        if (tool==Tool::Vehicle) active += " / "+std::string(vehicle_names[vehicle_kind])+" / "+std::to_string(rotation*90);
+        if (tool==Tool::Elevation) active += elevation_direction>0 ? " / +2 m" : " / -2 m";
+        const auto title = fit(city.name+" / "+active+(dirty ? " *" : ""),18,document.width-100);
         ui::draw_window_title(document,title.c_str());
         ui::draw_window_close(document);
-        text("BUILD TOOLS",20,86,17,accent);
-        const auto control = [&](Rectangle r,const std::string& label,bool selected=false,bool enabled=true) { return button(r,label,selected,enabled,can_edit); };
-        for (int i = 0; i<10; ++i) if (control({20.f,112.f+i*27,240,24},std::to_string((i+1)%10)+"  "+tools[i],tool==Tool(i))) choose_tool(i);
-        DrawLine(20,390,260,390,border); text("INSPECTOR",20,400,17,accent);
-        float y = 426;
-        if (tool==Tool::Road) {
-            if (control({20,y-5,240,32},diagonal_roads ? "Straight / diagonal" : "L-shaped")) diagonal_roads = !diagonal_roads;
-            y += 40;
+
+        text("CHOOSE BUILDING",20,86,16,accent);
+        if (button({20,116,240,32},"Plain block 1 x 1",!building_mesh,true,can_edit,16)) { building_mesh.reset(); building_size = 1; building_height = 12; choose_tool(3); }
+        const Rectangle building_list{20,160,240,float(GetScreenHeight()-244)}; const int rows = std::max(1,int(building_list.height/58));
+        if (can_edit && hit(building_list)) library_scroll -= int(GetMouseWheelMove());
+        library_scroll = std::clamp(library_scroll,0,std::max(0,int(designs.size())-rows));
+        for (int row = 0; row<rows && library_scroll+row<int(designs.size()); ++row) {
+            const auto& design = designs[library_scroll+row]; const auto footprint = design.footprint();
+            const Rectangle r{20,160+row*58.f,240,52};
+            const bool chosen = building_mesh && building_mesh->name==design.name;
+            if (button(r,"",chosen,true,can_edit,16)) { building_mesh = design; choose_tool(3); }
+            const Color color = chosen || (can_edit && hit(r)) ? background : ink;
+            text(fit(design.name,16,216),r.x+10,r.y+7,16,color);
+            text(TextFormat("%i x %i tiles / %.0f m",footprint[0],footprint[1],design.size.GetY()),r.x+10,r.y+31,13,color);
         }
-        if (tool==Tool::Trees) {
-            text("Brush "+std::to_string(brush_size*8)+" m",20,y,17);
-            if (control({180,y-5,34,30},"-")) brush_size = std::max(1,brush_size-1);
-            if (control({224,y-5,34,30},"+")) brush_size = std::min(12,brush_size+1);
-            y += 38;
-            if (control({20,y-5,240,32},std::string("Density: ")+densities[density-1])) density = density%3+1;
-            y += 40;
-        }
-        if (tool==Tool::Ground) {
-            if (control({20,y-5,240,32},std::string("Texture: ")+ground_names[ground_texture])) ground_texture = (ground_texture+1)%4;
-            y += 40;
-        }
-        if (tool==Tool::Elevation) {
-            if (control({20,y-5,240,32},elevation_direction>0 ? "Raise +2 m" : "Lower -2 m")) elevation_direction = -elevation_direction;
-            y += 40; text("Shift: reverse",20,y,17);
-        }
-        const bool building_controls = tool==Tool::Building || selected_building>=0;
-        const bool vehicle_controls = tool==Tool::Vehicle || selected_vehicle>=0;
-        if (building_controls) {
-            text("Square "+std::to_string(building_size)+" x "+std::to_string(building_size),20,y,17);
-            if (control({180,y-5,34,30},"-")) building_size = std::max(1,building_size-1);
-            if (control({224,y-5,34,30},"+")) building_size = std::min(8,building_size+1);
-            y += 38; text("Height "+std::to_string(building_height)+" m",20,y,17);
-            if (control({180,y-5,34,30},"-")) building_height = std::max(4,building_height-4);
-            if (control({224,y-5,34,30},"+")) building_height = std::min(120,building_height+4);
-            y += 38;
-        }
-        if (vehicle_controls) {
-            if (control({20,y-5,240,32},vehicle_names[vehicle_kind])) vehicle_kind = (vehicle_kind+1)%4;
-            y += 38;
-            if (control({20,y-5,240,32},"Rotate: "+std::to_string(rotation*90)+" degrees")) rotation = (rotation+1)%4;
-            y += 38;
-        }
-        if (tool==Tool::Select && (selected_building>=0||selected_vehicle>=0)) {
-            if (control({20,y-5,240,32},"Apply to selection",true)) {
-                City next = city; bool okay;
-                if (selected_building>=0) okay = next.add_building({city.buildings[selected_building].cell,building_size,building_height},status,selected_building);
-                else okay = next.add_vehicle({CityVehicleKind(vehicle_kind),city.vehicles[selected_vehicle].position,rotation},status,selected_vehicle);
-                if (okay) commit(std::move(next));
-            }
-            y += 40;
+        if (designs.empty()) {
+            text("No saved buildings",20,174,15);
+            text("Buildings > Creator",20,204,15);
         }
         DrawLine(8,GetScreenHeight()-54,GetScreenWidth()-8,GetScreenHeight()-54,border);
         const std::string clock = TextFormat("%02i:%02i",city.start_minutes/60,city.start_minutes%60);
@@ -445,6 +889,33 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         menu.draw(menu_state);
         text("CITY EDITOR",GetScreenWidth()-150.f,8,16,background);
         EndDrawing();
+        if (builder_request>=0) {
+            const int edited_index = edit_building ? selected_building : -1;
+            const BuildingMesh initial = edit_building ? city.buildings[edited_index].shape() : building_mesh.value_or(preview.shape());
+            std::vector<BuildingMesh> saved;
+            const auto edited = building_builder(initial,buildings_directory,{},0,&saved);
+            City next = city; bool map_changed = false; std::string update_error;
+            const auto update_design = [&](const BuildingMesh& design,int replace = -1) {
+                const int changed = next.update_building_design(design,status,replace);
+                if (changed<0) update_error = design.name+": "+status;
+                else map_changed |= changed>0;
+            };
+            for (const auto& design : saved) {
+                update_design(design,edited_index>=0 && initial.name==design.name ? edited_index : -1);
+                if (building_mesh && building_mesh->name==design.name) building_mesh = design;
+            }
+            if (edited) {
+                building_mesh = *edited;
+                update_design(*edited,edited_index);
+            }
+            if (map_changed) commit(std::move(next));
+            if (edited_index>=0) selected_building = edited_index;
+            else if (edited) choose_tool(3);
+            refresh_designs();
+            if (!update_error.empty()) status = "Map update rejected: "+update_error;
+            else if (map_changed) status = "Placed buildings updated / Ctrl+Z to undo";
+            painting = dragging = false; first_frame = true; continue;
+        }
         first_frame = false;
         if (!screenshot.empty() && ++frames>=3) { auto image = LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); return EditorResult::Quit; }
     }
@@ -457,6 +928,12 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
     if (preview_editor && selected.id.empty()) selected = City::create("New city");
     std::vector<City> cities; std::string status;
     int selection = -1, scroll = 0, modal = 0; std::string name;
+    int new_field = 0; bool generated_terrain = true;
+    std::string terrain_x = "48", terrain_z = "48", terrain_seed;
+    const auto new_city = [&]() {
+        modal = 1; name = "New city"; new_field = 0; generated_terrain = true; status.clear();
+        terrain_x = terrain_z = "48"; terrain_seed = std::to_string(GetRandomValue(1,2147483647));
+    };
     MenuBar menu(MenuMode::Cities);
     GraphicsPanel graphics_panel;
     GraphicsSettings graphics_original = graphics;
@@ -522,7 +999,7 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         if (menu.blocking() || menu.interacted() || graphics_panel.visible()) can_choose = false;
         if (command==MenuCommand::Quit) return false;
         if (command==MenuCommand::Controls || command==MenuCommand::About) { help_dialog(false,command==MenuCommand::About); continue; }
-        if (command==MenuCommand::NewCity) { modal = 1; name = "New city"; }
+        if (command==MenuCommand::NewCity) new_city();
         if (command==MenuCommand::EditCity) { selected = cities[selection]; open_editor = true; continue; }
         if (command==MenuCommand::PlayCity) { selected = cities[selection]; return true; }
         if (command==MenuCommand::RenameCity) { modal = 2; name = cities[selection].name; }
@@ -559,7 +1036,7 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         const float spacing = std::clamp((GetScreenHeight()-160)/560.f,.8f,1.f);
         // Modal drawing happens last; only its own controls can receive input.
         if (modal==0) {
-            if (button({bx,by,280,44},"+ New city",true,true,can_choose)||(can_choose && IsKeyPressed(KEY_INSERT))) { modal = 1; name = "New city"; }
+            if (button({bx,by,280,44},"+ New city",true,true,can_choose)||(can_choose && IsKeyPressed(KEY_INSERT))) new_city();
             if (button({bx,by+64*spacing,280,44},"Edit / build",false,has,can_choose)) { selected = cities[selection]; open_editor = true; }
             if (button({bx,by+124*spacing,280,44},"Play city",true,has && cities[selection].spawn.has_value(),can_choose)) { selected = cities[selection]; EndDrawing(); return true; }
             if (button({bx,by+194*spacing,280,40},"Rename",false,has,can_choose)) { modal = 2; name = cities[selection].name; }
@@ -576,21 +1053,54 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         if (modal) {
             const bool modal_input = modal == previous_modal;
             ui::draw_desktop();
-            Rectangle r{(GetScreenWidth()-620)/2.f,(GetScreenHeight()-236)/2.f,620,236};
+            const float modal_height = modal==1 ? 444.f : 236.f;
+            Rectangle r{(GetScreenWidth()-620)/2.f,(GetScreenHeight()-modal_height)/2.f,620,modal_height};
             ui::draw_window(r,modal==1 ? "Create a city" : modal==2 ? "Rename city" : "Delete this city?");
             ui::draw_window_close(r);
-            if (modal!=3) input(name,{r.x+24,r.y+72,572,52});
+            if (modal==1) {
+                if (modal_input && IsKeyPressed(KEY_TAB)) new_field = (new_field+(IsKeyDown(KEY_LEFT_SHIFT) ? 3 : 1))%(generated_terrain ? 4 : 1);
+                const auto entry = [&](std::string& value,Rectangle box,int id,bool enabled = true) {
+                    if (enabled && modal_input && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && hit(box)) new_field = id;
+                    if (enabled && new_field==id && modal_input) input(value,box);
+                    else { DrawRectangleLinesEx(box,1,enabled ? border : ui::dos_light_blue); text(fit(value,21,box.width-24),box.x+12,box.y+(box.height-21)/2,21,enabled ? ink : ui::dos_light_blue); }
+                };
+                text("Name",r.x+24,r.y+48,16); entry(name,{r.x+24,r.y+72,572,44},0);
+                if (button({r.x+24,r.y+132,278,30},"Perlin terrain",generated_terrain,true,modal_input,16)) generated_terrain = true;
+                if (button({r.x+318,r.y+132,278,30},"Empty water",!generated_terrain,true,modal_input,16)) { generated_terrain = false; new_field = 0; }
+                const auto dimension = [&](const char* label,std::string& value,float x,int id) {
+                    text(label,x,r.y+190,16); entry(value,{x,r.y+218,170,36},id,generated_terrain);
+                    for (int direction : {-1,1}) if (button({x+(direction<0 ? 180.f : 220.f),r.y+218,32,36},direction<0 ? "-" : "+",false,generated_terrain,modal_input,16)) {
+                        int count = 48; try { count = std::stoi(value); } catch (const std::exception&) {}
+                        value = std::to_string(std::clamp(std::clamp(count,1,City::width)+direction,1,City::width)); new_field = id;
+                    }
+                };
+                dimension("Starter tiles X",terrain_x,r.x+24,1); dimension("Starter tiles Z",terrain_z,r.x+318,2);
+                text("Seed",r.x+24,r.y+286,17); entry(terrain_seed,{r.x+120,r.y+278,322,36},3,generated_terrain);
+                if (button({r.x+452,r.y+278,144,36},"New seed",false,generated_terrain,modal_input,16)) terrain_seed = std::to_string(GetRandomValue(1,2147483647));
+                text(generated_terrain ? "1-128 tiles per axis / centered in the 128 x 128 map" : "Start with the original empty water map",r.x+24,r.y+334,15);
+            } else if (modal==2) input(name,{r.x+24,r.y+72,572,52});
             else { text(fit(cities[selection].name,22,r.width-48),r.x+24,r.y+76,22,accent); text("This permanently removes its saved map.",r.x+24,r.y+111,17,muted); }
-            text(fit(status,14,r.width-48),r.x+24,r.y+136,14,accent);
-            const bool accept = button({r.x+24,r.y+162,278,44},modal==3 ? "Delete" : "Save",true,true,modal_input)||(modal_input && IsKeyPressed(KEY_ENTER));
-            if (close_clicked(r,modal_input) || button({r.x+318,r.y+162,278,44},"Cancel",false,true,modal_input)||(modal_input && IsKeyPressed(KEY_ESCAPE))) modal = 0;
+            const float footer = modal==1 ? 386.f : 162.f;
+            text(fit(status,14,r.width-48),r.x+24,r.y+footer-26,14,accent);
+            const bool accept = button({r.x+24,r.y+footer,278,44},modal==3 ? "Delete" : modal==1 ? "Create city" : "Save",true,true,modal_input)||(modal_input && IsKeyPressed(KEY_ENTER));
+            if (close_clicked(r,modal_input) || button({r.x+318,r.y+footer,278,44},"Cancel",false,true,modal_input)||(modal_input && IsKeyPressed(KEY_ESCAPE))) modal = 0;
             else if (accept) {
                 if (modal==3) {
                     std::error_code ec; const bool removed = std::filesystem::remove(directory/(cities[selection].id+".city"),ec);
                     if (removed && !ec) { status = "City deleted"; modal = 0; refresh(); } else status = "Could not delete the city";
                 } else {
                     City next = modal==1 ? City::create(name) : cities[selection]; next.name = name;
-                    if (next.save(directory,status)) {
+                    bool generated = true;
+                    if (modal==1 && generated_terrain) {
+                        try {
+                            for (const auto& value : {terrain_x,terrain_z,terrain_seed})
+                                if (value.empty() || value.find_first_not_of("0123456789")!=std::string::npos) throw std::out_of_range("terrain");
+                            const auto seed = std::stoull(terrain_seed);
+                            if (seed>std::numeric_limits<std::uint32_t>::max()) throw std::out_of_range("seed");
+                            generated = next.generate_terrain(std::stoi(terrain_x),std::stoi(terrain_z),std::uint32_t(seed),status);
+                        } catch (const std::exception&) { generated = false; status = "Use 1-128 tiles and a seed from 0 to 4294967295."; }
+                    }
+                    if (generated && next.save(directory,status)) {
                         selected = next; open_editor = modal==1; modal = 0; refresh(); status = "City saved";
                     }
                 }

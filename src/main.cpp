@@ -455,7 +455,7 @@ int main(int argc, char** argv) {
     std::string time_override;
     std::string screenshot;
     std::string city_path;
-    bool preview_editor = false;
+    bool preview_editor = false, preview_building = false;
     bool performance_tuning = false;
     bool start_controllers = false, start_menu = false, start_help = false;
     bool start_graphics = false;
@@ -465,6 +465,7 @@ int main(int argc, char** argv) {
         const std::string arg = argv[i];
         if (arg == "--city" && i + 1 < argc) city_path = argv[++i];
         if (arg == "--editor") preview_editor = true;
+        if (arg == "--building-builder") preview_building = true;
         if (arg == "--overview") { map_open = true; start_region_map = true; }
         if (arg == "--map") map_open = true;
         if (arg == "--tuning") tuning_open = true;
@@ -500,6 +501,10 @@ int main(int argc, char** argv) {
     {
         const ambaretto::ui::FontResource ui_font;
         const auto cities_directory = std::filesystem::path(GetApplicationDirectory()) / "cities";
+        if (preview_building) {
+            EnableCursor();
+            ambaretto::building_builder({},cities_directory.parent_path()/"buildings",screenshot);
+        }
         ambaretto::ControllerMapping controls;
         const auto mapping_path = std::filesystem::path(GetApplicationDirectory()) / "controller-mappings.ini";
         std::string mapping_error;
@@ -524,7 +529,7 @@ int main(int argc, char** argv) {
             if (!ambaretto::City::load(city_path,selected_city,error)) { TraceLog(LOG_ERROR,"%s",error.c_str()); direct_city = false; }
             else if (!selected_city.spawn) preview_editor = true;
         }
-        while (!WindowShouldClose()) {
+        while (!preview_building && !WindowShouldClose()) {
         if (!direct_city || preview_editor || start_graphics || start_controllers) {
             const auto settings = start_graphics ? ambaretto::MenuCommand::Graphics : start_controllers ? ambaretto::MenuCommand::Controllers : ambaretto::MenuCommand::None;
             if (!ambaretto::city_menu(selected_city,cities_directory,controls,graphics,preview_editor && direct_city,

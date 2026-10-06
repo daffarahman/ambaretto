@@ -1,6 +1,9 @@
 #pragma once
 #include "vehicle.hpp"
+#include "building_mesh.hpp"
 #include <array>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -16,7 +19,16 @@ struct CityCell {
 };
 enum class CityTile : unsigned char { Water, Land, Road, Bridge };
 enum class CityGround : unsigned char { Soil, Grass, Sand, Asphalt };
-struct CityBuilding { CityCell cell; int size = 1, height = 12; };
+struct CityBuilding {
+    CityCell cell; int size = 1, height = 12;
+    std::optional<BuildingMesh> mesh{};
+    int rotation = 0;
+    CityCell footprint() const { if (!mesh) return {size,size}; const auto tiles = mesh->footprint(); return rotation%2 ? CityCell{tiles[1],tiles[0]} : CityCell{tiles[0],tiles[1]}; }
+    BuildingMesh shape() const { BuildingMesh result = mesh.value_or(BuildingMesh{}); if (!mesh) result.size = Vec3(size*11.2f,float(height),size*11.2f); return result; }
+    Vec3 base(float ground) const;
+    std::vector<Vec3> points(float ground) const;
+    std::vector<BuildingTriangle> triangles(float ground) const;
+};
 enum class CityVehicleKind { Car, Trainer, F18, Boeing747 };
 struct CityVehicle {
     CityVehicleKind kind = CityVehicleKind::Car;
@@ -56,7 +68,7 @@ struct Tree {
     float scale() const { return height / model_height; }
 };
 
-// Terraced islands on an 11.2 m grid. Buildings are a single undecorated box.
+// Terraced islands on an 11.2 m grid, with plain blocks or saved building meshes.
 struct City {
     static constexpr int width = 128;
     static constexpr int corner_width = width + 1;
@@ -103,6 +115,8 @@ struct City {
     static std::vector<CityCell> road_stroke(CityCell a, CityCell b, bool z_first = false, bool diagonal = false);
     bool add_road(const std::vector<CityCell>& cells, std::string& error);
     bool add_building(CityBuilding building, std::string& error, int replace = -1);
+    // Returns updated instances, 0 for no change, or -1 if the whole design update is rejected.
+    int update_building_design(const BuildingMesh& mesh, std::string& error, int replace = -1);
     bool add_vehicle(CityVehicle vehicle, std::string& error, int replace = -1);
     bool set_spawn(CityCell p, std::string& error);
     bool paint_ground(CityCell a, CityCell b, CityGround texture, std::string& error);
@@ -118,9 +132,13 @@ struct City {
     bool save(const std::filesystem::path& directory, std::string& error) const;
     static bool load(const std::filesystem::path& path, City& city, std::string& error);
     static City create(std::string name);
+    bool generate_terrain(int tiles_x, int tiles_z, std::uint32_t seed, std::string& error);
 };
 // Returns to the city menu on Escape; returns a saved playable city on Play.
 bool city_menu(City& selected, const std::filesystem::path& directory, ControllerMapping& controls,
                GraphicsSettings& graphics, bool edit_selected = false, const std::string& screenshot = {},
                bool preview_editor = false, MenuCommand initial_settings = {});
+std::optional<BuildingMesh> building_builder(BuildingMesh mesh, const std::filesystem::path& directory,
+                                           const std::string& screenshot = {}, int initial_tab = 0,
+                                           std::vector<BuildingMesh>* saved_designs = nullptr);
 } // namespace ambaretto

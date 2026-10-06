@@ -54,6 +54,65 @@ int crossing_pixels(Image image, Camera3D camera, const ambaretto::CityRoadPort&
         }
     return count;
 }
+void custom_building_pixels(RenderTexture2D target) {
+    using namespace ambaretto;
+    City city = City::create("Building rendering"); std::string error;
+    const auto folder = building_texture_directory();
+    const std::string wall = "test-wall-"+city.id+".png", window = "test-window-"+city.id+".png";
+    Image body = GenImageColor(32,32,{255,0,0,255}), decal = GenImageColor(32,32,BLANK);
+    ImageDrawRectangle(&body,0,0,16,32,{0,0,255,255}); ImageDrawRectangle(&decal,8,8,16,16,{0,255,0,255});
+    require(ExportImage(body,(folder/wall).string().c_str()) && ExportImage(decal,(folder/window).string().c_str()),"building texture fixtures could not be written");
+    UnloadImage(body); UnloadImage(decal);
+    BuildingMesh mesh; mesh.texture = wall; mesh.size = Vec3(20,12,8);
+    mesh.decals.push_back({0,window,0,0,1,1});
+    require(city.add_land({60,60},{68,68},error) && city.add_building({{63,63},1,12,mesh},error),error.c_str());
+    const auto& placed = city.buildings[0]; const Vec3 base = placed.base(City::level);
+    const Camera3D camera{{base.GetX(),base.GetY()+6,base.GetZ()-40},{base.GetX(),base.GetY()+6,base.GetZ()}, {0,1,0},20,CAMERA_ORTHOGRAPHIC};
+    const auto color_at = [&](Image image,float u,float v) {
+        const Vector3 point{base.GetX()-10+20*u,base.GetY()+12*(1-v),base.GetZ()-4};
+        const auto pixel = GetWorldToScreenEx(point,camera,image.width,image.height);
+        return GetImageColor(image,int(pixel.x),int(pixel.y));
+    };
+    for (int rotation = 0; rotation<4; ++rotation) {
+        city.buildings[0].rotation = rotation;
+        const Vec3 origin = city.buildings[0].base(City::level);
+        const float angle = rotation*PI/2;
+        const auto point = [&](Vec3 p) { return origin+Vec3(p.GetX()*std::cos(angle)+p.GetZ()*std::sin(angle),p.GetY(),p.GetZ()*std::cos(angle)-p.GetX()*std::sin(angle)); };
+        const auto vector = [](Vec3 p) { return Vector3{p.GetX(),p.GetY(),p.GetZ()}; };
+        const Camera3D view{vector(point(Vec3(0,6,-40))),vector(point(Vec3(0,6,0))),{0,1,0},20,CAMERA_ORTHOGRAPHIC};
+        Environment map(city); EnvironmentRenderer renderer(map); Image image = render_city(renderer,target,view);
+        const auto sample = [&](float u) {
+            const auto pixel = GetWorldToScreenEx(vector(point(Vec3(-10+20*u,6,-4))),view,image.width,image.height);
+            return GetImageColor(image,int(pixel.x),int(pixel.y));
+        };
+        const Color left = sample(.15f), right = sample(.85f), center = sample(.5f);
+        if (rotation==0) ExportImage(image,"building-textures-decals.png");
+        require(left.b>left.r*2 && right.r>right.b*2,"building texture UVs did not span the edited face");
+        require(center.g>center.r*2 && center.g>center.b*2,"decal was not visible over the wall");
+        require(left.b>left.g*2 && right.r>right.g*2,"transparent decal pixels hid the building texture");
+        UnloadImage(image);
+    }
+    city.buildings[0].rotation = 0;
+    require(mesh.set_footprint(2,1,error,true) && mesh.inset_face(0,.2f,error) && mesh.extrude_face(0,1,error) && mesh.subdivide_face(0,error),"bounded textured face edit failed");
+    city.buildings[0].mesh = mesh;
+    {
+        Environment map(city); EnvironmentRenderer renderer(map); Image image = render_city(renderer,target,camera);
+        const Color left = color_at(image,.15f,.5f), right = color_at(image,.85f,.5f), center = color_at(image,.5f,.5f);
+        ExportImage(image,"building-edited-textures-decals.png");
+        require(left.b>left.r*2 && right.r>right.b*2 && center.g>center.r*2 && center.g>center.b*2,
+            "extrusion, inset or subdivision broke visible texture/decal coverage");
+        UnloadImage(image);
+    }
+    city.buildings[0].mesh->texture = "missing-building-texture.png";
+    for (auto& d : city.buildings[0].mesh->decals) d.texture = "missing-building-decal.png";
+    {
+        Environment map(city); EnvironmentRenderer renderer(map); Image image = render_city(renderer,target,camera);
+        const Color center = color_at(image,.5f,.5f);
+        require(center.r>20 && std::abs(int(center.r)-int(center.g))<30,"missing texture did not leave a visible plain building");
+        UnloadImage(image);
+    }
+    std::filesystem::remove(folder/wall); std::filesystem::remove(folder/window);
+}
 void city_crosswalks(RenderTexture2D texture) {
     using namespace ambaretto;
     City city = City::create("Crosswalk render check"); std::string error;
@@ -286,6 +345,7 @@ int main(int argc, char** argv) {
         auto& unit = const_cast<PoliceUnit&>(police.units()[0]);
         const Vec3 car_position = player + Vec3(35, 0, -25), foot_position = player + Vec3(-30, 0, -25);
         const auto texture = LoadRenderTexture(640, 480);
+        custom_building_pixels(texture);
         city_crosswalks(texture);
         elevated_road_pixels(texture);
         single_square_ramps(texture);

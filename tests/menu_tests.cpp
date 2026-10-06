@@ -39,11 +39,30 @@ int main(int argc, char** argv) {
         require(editor.update(state, input) == MenuCommand::None, "Delete was enabled without a selection");
         state.selection = true;
         require(editor.update(state, input) == MenuCommand::DeleteSelection, "Delete selection did not dispatch");
-        for (int tool = 0; tool < 10; ++tool) {
-            editor.open(2); input = {}; input.vertical = tool; editor.update(state, input);
-            input = {}; input.enter = true;
-            require(int(editor.update(state, input)) == int(MenuCommand::SelectTool) + tool, "Build menu chose the wrong tool");
-        }
+        const auto dispatch = [&](int menu,int item,MenuCommand expected) {
+            editor.open(menu); MenuInput move; move.vertical = item; editor.update(state,move);
+            MenuInput accept; accept.enter = true;
+            require(editor.update(state,accept)==expected,"Editor category dispatched the wrong action");
+        };
+        dispatch(1,3,MenuCommand::SelectTool); dispatch(1,4,MenuCommand::BulldozeTool);
+        const MenuCommand tile_actions[] = {MenuCommand::LandTool,MenuCommand::RoadBend,MenuCommand::RoadDiagonal,
+            MenuCommand::GroundSoil,MenuCommand::GroundGrass,MenuCommand::GroundSand,MenuCommand::GroundAsphalt,MenuCommand::RaiseGround,MenuCommand::LowerGround};
+        for (int i = 0; i<int(std::size(tile_actions)); ++i) dispatch(2,i,tile_actions[i]);
+        dispatch(3,0,MenuCommand::BuildingTool); dispatch(3,1,MenuCommand::BuildingCreator);
+        editor.open(3); input = {}; input.vertical = 2; editor.update(state,input); input = {}; input.enter = true;
+        require(editor.update(state,input)==MenuCommand::None && editor.blocking(),"Building edit enabled without a selected building");
+        state.building_selection = true; require(editor.update(state,input)==MenuCommand::EditBuilding,"Selected building edit was not available");
+        dispatch(3,3,MenuCommand::RotateBuilding);
+        state.building_selection = false; state.tool = 3; dispatch(3,3,MenuCommand::RotateBuilding);
+        state.tool = 0; dispatch(3,3,MenuCommand::None);
+        const MenuCommand object_actions[] = {MenuCommand::SpawnTool,MenuCommand::PlaceCar,MenuCommand::PlaceTrainer,MenuCommand::PlaceF18,
+            MenuCommand::PlaceBoeing,MenuCommand::RotateObject,MenuCommand::TreesSparse,MenuCommand::TreesMedium,MenuCommand::TreesDense,MenuCommand::BrushSmaller,MenuCommand::BrushLarger};
+        for (int i = 0; i<int(std::size(object_actions)); ++i) dispatch(4,i,object_actions[i]);
+        MenuBar creator(MenuMode::Creator); creator.open(); input = {}; input.enter = true;
+        require(creator.update(state,input)==MenuCommand::NewBuilding,"Creator File > New is missing");
+        creator.open(); input = {}; input.vertical = 1; creator.update(state,input); input = {}; input.enter = true;
+        require(creator.update(state,input)==MenuCommand::SaveBuilding,"Creator File > Save is missing");
+        creator.open(1); require(creator.update(state,input)==MenuCommand::Undo,"Creator undo is missing");
         editor.open(); input = {}; input.horizontal = -1; editor.update(state, input);
         input = {}; input.enter = true;
         require(editor.update(state, input) == MenuCommand::Controls, "Left arrow did not wrap to Help");

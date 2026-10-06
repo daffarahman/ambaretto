@@ -188,7 +188,21 @@ PhysicsWorld::PhysicsWorld(const Environment& environment) {
     JPH::BodyCreationSettings ground(result.Get(), Vec3::sZero(), Quat::sIdentity(), JPH::EMotionType::Static, ground_layer);
     ground.mFriction = 0.8f;
     impl_->add_body(ground);
-    for (const auto& building : environment.buildings()) {
+    for (std::size_t i = 0; i<environment.buildings().size(); ++i) {
+        const auto& building = environment.buildings()[i];
+        if (environment.city() && environment.city()->buildings[i].mesh) {
+            const auto& custom = environment.city()->buildings[i];
+            JPH::TriangleList faces;
+            for (const auto& t : custom.triangles(environment.city()->tile_height(custom.cell))) {
+                if (t.decal) continue;
+                const auto point = [](Vec3 p){return JPH::Float3(p.GetX(),p.GetY(),p.GetZ());};
+                faces.emplace_back(point(t.points[0]),point(t.points[1]),point(t.points[2]));
+            }
+            const auto shape = JPH::MeshShapeSettings(faces).Create();
+            if (shape.HasError()) throw std::runtime_error(shape.GetError().c_str());
+            JPH::BodyCreationSettings settings(shape.Get(),Vec3::sZero(),Quat::sIdentity(),JPH::EMotionType::Static,obstacle_layer);
+            impl_->add_body(settings); continue;
+        }
         JPH::RefConst<JPH::Shape> shape = new JPH::BoxShape(building.solid_size() / 2, 0.04f);
         JPH::BodyCreationSettings settings(shape, building.solid_center(), Quat::sIdentity(), JPH::EMotionType::Static, obstacle_layer);
         impl_->add_body(settings);

@@ -31,6 +31,300 @@ City fixture() {
     city.start_minutes = 7*60+30;
     return city;
 }
+void building_meshes(const std::filesystem::path& directory) {
+    BuildingMesh mesh; std::string error;
+    mesh.name = "Textured shop"; mesh.texture = "brick.png"; mesh.size = Vec3(20,16,8);
+    mesh.vertices[2].SetY(.75f); mesh.vertices[6].SetY(.75f);
+    mesh.decals.push_back({0,"window.png",.2f,.1f,.6f,.8f});
+    require(mesh.validate(error),error.c_str());
+    const auto faces = mesh.triangles(); require(faces.size()>12,"decal did not generate a face overlay");
+    float decal_area = 0;
+    for (std::size_t i = 12; i<faces.size(); ++i) {
+        const auto& t = faces[i];
+        const Vec3 normal = (t.points[1]-t.points[0]).Cross(t.points[2]-t.points[0]);
+        require(t.decal && t.texture=="window.png" && normal.GetZ()<0,"decal winding points inside the building");
+        for (const auto& uv : t.uv) require(uv[0]>=-.0001f && uv[0]<=1.0001f && uv[1]>=-.0001f && uv[1]<=1.0001f,"decal UVs escaped the texture");
+        const auto& a = t.uv[0]; const auto& b = t.uv[1]; const auto& c = t.uv[2];
+        decal_area += std::abs((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))/2;
+    }
+    require(std::abs(decal_area-1)<.001f,"decal clipping left a hole or overlapped its diagonal");
+    BuildingMesh resized = mesh; resized.size = Vec3(40,32,16);
+    require((resized.points()[2]-mesh.points()[2]*2).Length()<.001f,"resize lost the edited corner shape");
+    const auto library = directory/"buildings";
+    require(mesh.save(library,error),error.c_str());
+    const auto path = library/("building-"+mesh.name+".building"); BuildingMesh read;
+    require(BuildingMesh::load(path,read,error) && read.texture==mesh.texture && read.vertices==mesh.vertices
+        && read.size==mesh.size && read.decals[0].height==.8f,"building save lost mesh or decal data");
+    require(resized.save(library,error) && BuildingMesh::load(path,read,error) && read.size==resized.size,"building overwrite failed");
+    BuildingMesh invalid = mesh; invalid.vertices[2] = invalid.vertices[1];
+    require(!invalid.save(library,error) && BuildingMesh::load(path,read,error) && read.size==resized.size,"bad vertices damaged the previous building save");
+    invalid = mesh; invalid.texture = "../brick.png"; require(!invalid.validate(error),"texture traversal accepted");
+    invalid = mesh; invalid.decals[0].face = 6; require(!invalid.validate(error),"invalid decal face accepted");
+    invalid = mesh; invalid.decals[0].width = .9f; require(!invalid.validate(error),"decal outside its face accepted");
+    invalid = mesh; invalid.size.SetX(std::numeric_limits<float>::quiet_NaN()); require(!invalid.validate(error),"nonfinite dimensions accepted");
+    const auto textures = directory/"textures"; std::filesystem::create_directory(textures);
+    std::ofstream(textures/"z.PNG"); std::ofstream(textures/"a.jpg"); std::ofstream(textures/"notes.txt"); std::filesystem::create_directory(textures/"fake.png");
+    require(building_textures(textures,error)==std::vector<std::string>{"a.jpg","z.PNG"},"texture discovery includes unsupported files or is unsorted");
+    std::ofstream(textures/"new.png"); require(building_textures(textures,error).size()==3,"new texture was not discovered on refresh");
+    require(saved_buildings(library,error).size()==1,"saved building missing from library");
+    City city = City::create("Custom buildings");
+    require(city.add_land({60,60},{68,68},error),"custom building island failed");
+    CityBuilding placed{{61,61},1,12,mesh}; require(placed.footprint()==CityCell{2,1},"rectangular footprint is still square");
+    require(city.add_building(placed,error) && city.add_building({{65,65},1,12},error),"mixed custom and plain placement failed");
+    require(city.building_at({62,61})==0 && city.building_at({61,62})==-1,"mesh footprint disagrees with selection");
+    require(!city.add_building({{62,61},1,12},error) && !city.add_road({{62,61}},error) && !city.set_spawn({62,61},error),"mesh footprint overlaps structures, roads or spawn");
+    require(!city.add_building({{127,127},1,12,mesh},error),"mesh was placed outside the map");
+    require(city.set_spawn({67,67},error) && city.save(directory,error),error.c_str());
+    City loaded; require(City::load(directory/(city.id+".city"),loaded,error),error.c_str());
+    require(loaded.buildings[0].mesh && !loaded.buildings[1].mesh && loaded.buildings[0].mesh->vertices==mesh.vertices
+        && loaded.buildings[0].mesh->decals[0].texture=="window.png","city lost embedded building geometry or decals");
+    // Collision follows the sloping roof rather than its old enclosing box.
+    Environment map(loaded); PhysicsWorld world(map); GroundHit hit;
+    const Vec3 base = placed.base(City::level), roof = base+Vec3(0,14,0);
+    require(world.cast_ray(roof+Vec3(0,10,0),-Vec3::sAxisY(),20,hit) && (hit.point-roof).Length()<.01f,"edited roof collision still uses a box");
+    const Vec3 wall = base+Vec3(0,6,-4);
+    require(world.cast_ray(wall+Vec3(0,0,-5),Vec3::sAxisZ(),10,hit) && (hit.point-wall).Length()<.01f,"custom wall collision missing");
+    require(loaded.add_building({{61,61},1,12,resized},error,0) && loaded.building_at({64,62})==0,"resized mesh replacement lost its expanded footprint");
+    require(loaded.erase({64,62},error) && loaded.buildings.size()==1,"bulldoze did not remove a custom mesh from its footprint");
+    std::filesystem::remove(path); std::filesystem::remove(library);
+    for (const auto& entry : std::filesystem::directory_iterator(textures)) std::filesystem::remove(entry.path());
+    std::filesystem::remove(textures);
+}
+void building_mesh_editing(const std::filesystem::path& directory) {
+    std::string error;
+    const auto serialized = [](const BuildingMesh& mesh) { std::ostringstream s; mesh.write(s); return s.str(); };
+    const auto decal_area = [](const BuildingMesh& mesh) {
+        float area = 0;
+        for (const auto& t : mesh.triangles()) if (t.decal) {
+            const auto& a = t.uv[0]; const auto& b = t.uv[1]; const auto& c = t.uv[2];
+            area += std::abs((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))/2;
+        }
+        return area;
+    };
+    BuildingMesh mesh; mesh.name = "Mesh editing"; mesh.texture = "brick.png";
+    mesh.size = Vec3(12,10,8); mesh.decals.push_back({4,"window.png",.05f,.05f,.9f,.9f});
+    const BuildingMesh cube = mesh;
+    require(mesh.inset_face(4,.2f,error),error.c_str());
+    require(mesh.vertices.size()==12 && mesh.faces.size()==10 && std::abs(decal_area(mesh)-1)<.001f,
+        "inset lost its ring, original texture coordinates or decal coverage");
+    require(mesh.extrude_face(4,3,error) && mesh.size.GetY()==13 && mesh.vertices.size()==16 && mesh.faces.size()==14,
+        "extrusion did not create a raised cap with connected sides");
+    const auto cap = mesh.faces[4].vertices;
+    const auto before_move = mesh.points();
+    require(mesh.move_vertices(cap,Vec3(4,2,0),error),error.c_str());
+    const auto after_move = mesh.points();
+    require(std::abs(mesh.size.GetY()-15)<.001f && mesh.size.GetX()==12 && std::abs((after_move[cap[0]]-after_move[0]).GetX()
+        -(before_move[cap[0]]-before_move[0]).GetX()-1.2f)<.001f,"moving new vertices escaped the footprint or lost their relative shape");
+    const int a = mesh.faces[4].vertices[0], b = mesh.faces[4].vertices[1];
+    const int split = mesh.split_edge(a,b,error);
+    require(split>=0 && std::count_if(mesh.faces.begin(),mesh.faces.end(),[&](const auto& f) {
+        return std::find(f.vertices.begin(),f.vertices.end(),split)!=f.vertices.end();
+    })==2,"edge split left a T junction in its neighboring face");
+    const float area = decal_area(mesh);
+    require(mesh.subdivide_face(4,error),error.c_str());
+    require(mesh.vertices.size()>17 && mesh.faces.size()>14 && std::abs(decal_area(mesh)-area)<.001f,
+        "face subdivision changed UV/decal coverage or did not add geometry");
+    const std::string stable = serialized(mesh);
+    require(!mesh.extrude_face(-1,1,error) && mesh.split_edge(-1,2,error)<0 && !mesh.move_vertices({9999},Vec3(1,0,0),error)
+        && !mesh.move_vertices({0},Vec3(1000,0,0),error) && serialized(mesh)==stable,"failed mesh edit partially changed geometry");
+    BuildingMesh invalid = mesh; invalid.faces[0].vertices[0] = 9999;
+    require(!invalid.validate(error),"out-of-range face index accepted");
+    invalid = mesh; invalid.faces[0].uv.pop_back(); require(!invalid.validate(error),"incomplete UVs accepted");
+    invalid = mesh; invalid.faces.push_back(invalid.faces[0]); require(!invalid.validate(error),"nonmanifold geometry accepted");
+    const auto path = directory/"building-Mesh editing.building";
+    require(mesh.save(directory,error),error.c_str()); BuildingMesh read;
+    require(BuildingMesh::load(path,read,error) && serialized(read)==stable,"dynamic topology or UVs did not round-trip");
+    std::ofstream(path) << "AMBARETTO_BUILDING 2\n\"bad\" \"\" 1 1 1\n4097 1\n";
+    require(!BuildingMesh::load(path,read,error) && serialized(read)==stable,"invalid mesh count mutated loaded output");
+    require(mesh.save(directory,error),error.c_str());
+    BuildingMesh open = cube;
+    require(open.remove_faces({4},error) && open.add_face({3,7,6,2},error) && open.validate(error),"make face did not close an open roof");
+    const int loose = open.add_vertex(Vec3(0,14,0),error);
+    require(loose==8 && open.remove_vertices({loose},error) && open.vertices.size()==8,"add/delete loose vertex failed");
+    require(open.remove_vertices({2},error) && open.faces.size()==3,"delete vertex did not remove its incident faces");
+    std::vector<int> all; for (int i = 0; i<int(open.faces.size()); ++i) all.push_back(i);
+    const auto open_before = serialized(open);
+    require(!open.remove_faces(all,error) && serialized(open)==open_before,"deleting the last face destroyed the mesh");
+    // A concave L-shaped face must retain its cutout instead of filling it with a triangle fan.
+    BuildingMesh concave; concave.vertices = {Vec3(-.5f,0,-.5f),Vec3(.5f,0,-.5f),Vec3(.5f,0,0),
+        Vec3(0,0,0),Vec3(0,0,.5f),Vec3(-.5f,0,.5f)};
+    concave.faces = {{{5,4,3,2,1,0},{{0,1},{.5f,1},{.5f,.5f},{1,.5f},{1,0},{0,0}}}};
+    concave.size = Vec3(10,1,10);
+    require(concave.validate(error) && concave.triangles().size()==4,"concave face cannot be triangulated");
+    float surface = 0;
+    for (const auto& t : concave.triangles()) surface += (t.points[1]-t.points[0]).Cross(t.points[2]-t.points[0]).Length()/2;
+    require(std::abs(surface-75)<.001f && concave.extrude_face(0,4,error) && concave.validate(error),"concave extrusion filled its cutout");
+    const auto legacy_payload = [&]() {
+        std::ostringstream s; s << std::setprecision(std::numeric_limits<float>::max_digits10)
+            << std::quoted(cube.name) << ' ' << std::quoted(cube.texture) << " 12 10 8\n";
+        for (auto p : cube.vertices) s << p.GetX() << ' ' << p.GetY() << ' ' << p.GetZ() << '\n';
+        s << "1\n4 \"window.png\" " << .05f << ' ' << .05f << ' ' << .9f << ' ' << .9f << '\n'; return s.str();
+    };
+    const auto legacy_path = directory/"legacy.building";
+    std::ofstream(legacy_path) << "AMBARETTO_BUILDING 1\n" << legacy_payload();
+    require(BuildingMesh::load(legacy_path,read,error) && serialized(read)==serialized(cube),"version 1 building did not migrate to polygon faces");
+    City city = City::create("Topology city"); require(city.add_land({60,60},{68,68},error),error.c_str());
+    require(city.add_building({{62,62},1,12,mesh},error) && city.save(directory,error),error.c_str());
+    const auto city_path = directory/(city.id+".city"); City loaded;
+    require(City::load(city_path,loaded,error) && serialized(*loaded.buildings[0].mesh)==stable,"city lost edited topology");
+    Environment map(loaded); PhysicsWorld world(map); GroundHit hit;
+    const auto points = mesh.points(); Vec3 top = Vec3::sZero(); for (int v : cap) top += points[v]/float(cap.size());
+    top += loaded.buildings[0].base(City::level);
+    require(world.cast_ray(top+Vec3(0,5,0),-Vec3::sAxisY(),10,hit) && (hit.point-top).Length()<.01f,
+        "extruded/subdivided geometry and gameplay collision disagree");
+    require(city.add_building({{62,62},1,12,cube},error,0) && city.save(directory,error),error.c_str());
+    std::ifstream file(city_path); std::ostringstream contents; contents << file.rdbuf(); file.close(); auto legacy = contents.str();
+    const auto payload = serialized(cube); const auto offset = legacy.find(payload);
+    require(offset!=std::string::npos,"missing embedded cube payload");
+    legacy.replace(offset,payload.size(),legacy_payload()); legacy.replace(0,16,"AMBARETTO_CITY 7");
+    std::ofstream(city_path) << legacy;
+    require(City::load(city_path,loaded,error) && serialized(*loaded.buildings[0].mesh)==serialized(cube),"version 7 city mesh did not migrate");
+    BuildingMesh sliced; sliced.name = "Sliced roof";
+    require(sliced.set_footprint(2,3,error) && sliced.footprint()==std::array<int,2>{2,3},"rectangular tile footprint did not update");
+    sliced.decals.push_back({0,"window.png",0,0,1,1});
+    require(sliced.slice(1,6,error) && sliced.vertices.size()==12 && sliced.faces.size()==10,
+        "cube slice did not add a connected four-vertex loop");
+    require(sliced.slice(0,0,error) && sliced.validate(error) && std::abs(decal_area(sliced)-1)<.001f,
+        "intersecting slices lost connected topology or decal coverage");
+    const auto roof_before = sliced.points();
+    require(sliced.move_vertices({3,7},Vec3(4,0,0),error),error.c_str());
+    const auto trapezoid = sliced.points();
+    require(std::abs(trapezoid[3].GetX()-roof_before[3].GetX()-4)<.001f && sliced.footprint()==std::array<int,2>{2,3}
+        && trapezoid[3].GetX()>trapezoid[0].GetX(),"sliced cube could not become a sloping trapezoid inside its footprint");
+    const int extra = sliced.add_vertex(Vec3(0,1,0),error);
+    require(extra>=0 && sliced.move_vertices({extra},Vec3(10000,10000,-10000),error),"clamped movement failed");
+    auto clamped = sliced.points()[extra];
+    require(std::abs(clamped.GetX()-BuildingMesh::tile_size)<.001f && std::abs(clamped.GetZ()+BuildingMesh::tile_size*1.5f)<.001f
+        && clamped.GetY()==120 && sliced.footprint()==std::array<int,2>{2,3},"movement left the footprint or exceeded max height");
+    require(sliced.move_vertices({extra},Vec3(0,-10000,0),error) && sliced.points()[extra].GetY()==0,"vertex moved below the ground");
+    for (auto p : sliced.points()) require(std::abs(p.GetX())<=BuildingMesh::tile_size+.001f
+        && std::abs(p.GetZ())<=BuildingMesh::tile_size*1.5f+.001f && p.GetY()>=0 && p.GetY()<=120,"new slice vertex escaped clamping bounds");
+    const auto intact = serialized(sliced);
+    require(!sliced.slice(4,0,error) && !sliced.slice(1,-5,error) && serialized(sliced)==intact,"failed slice partially changed the mesh");
+    require(sliced.save(directory,error) && BuildingMesh::load(directory/"building-Sliced roof.building",read,error)
+        && serialized(read)==intact && read.footprint()==std::array<int,2>{2,3},"sliced footprint did not round-trip in the existing format");
+    require(concave.slice(0,-2,error) && concave.validate(error),"concave extrusion could not be sliced");
+    BuildingMesh migrated = cube; const auto physical = migrated.points(); const auto old_tiles = migrated.footprint();
+    require(migrated.set_footprint(old_tiles[0],old_tiles[1],error,true),"legacy footprint did not align to tiles");
+    for (std::size_t i = 0; i<physical.size(); ++i) require((migrated.points()[i]-physical[i]).Length()<.001f,"footprint alignment moved legacy geometry");
+    require(migrated.set_footprint(128,128,error) && migrated.footprint()==std::array<int,2>{128,128},"map-sized N x M footprint failed");
+    require(!migrated.set_footprint(129,1,error),"out-of-map footprint accepted");
+    std::filesystem::remove(directory/"building-Sliced roof.building");
+    std::filesystem::remove(path); std::filesystem::remove(legacy_path);
+}
+void building_design_updates(const std::filesystem::path& directory) {
+    std::string error; City city = City::create("Updated designs"); BuildingMesh design;
+    design.name = "Shared shop"; design.texture = "soil.png";
+    BuildingMesh other = design; other.name = "Other shop";
+    require(city.add_land({60,60},{68,68},error) && city.add_building({{60,60},1,12,design},error)
+        && city.add_building({{62,60},1,12,design},error) && city.add_building({{66,66},1,12,other},error)
+        && city.add_building({{68,68},1,12},error),"design update placements failed");
+    const auto original = city.buildings;
+    design.texture = "brick.png"; design.decals.push_back({0,"window.png"});
+    require(design.slice(1,6,error) && design.move_vertices({2,6},Vec3(0,3,0),error)
+        && design.set_footprint(2,2,error,true),"design update edit failed");
+    require(city.update_building_design(design,error)==2,"design edit did not update every placed copy");
+    for (int i = 0; i<2; ++i) require(city.buildings[i].cell==original[i].cell && city.buildings[i].footprint()==CityCell{2,2}
+        && city.buildings[i].mesh->vertices==design.vertices && city.buildings[i].mesh->texture=="brick.png"
+        && city.buildings[i].mesh->faces.size()==design.faces.size() && city.buildings[i].mesh->decals.size()==design.decals.size(),"placed copy lost edited geometry, texture, decal or footprint");
+    require(city.buildings[2].mesh->vertices==other.vertices && city.buildings[2].mesh->texture==other.texture
+        && !city.buildings[3].mesh,"design edit changed another design or plain building");
+    require(city.update_building_design(design,error)==0,"unchanged design created another update");
+    BuildingMesh expanded = design; require(expanded.set_footprint(3,2,error,true),"larger design failed");
+    require(city.update_building_design(expanded,error)==-1 && city.buildings[0].footprint()==CityCell{2,2}
+        && city.buildings[1].footprint()==CityCell{2,2},"overlapping design update partially changed the map");
+    expanded.name = "Unused design";
+    require(city.update_building_design(expanded,error)==0 && city.update_building_design(design,error,9999)==-1,"invalid or unmatched design replacement accepted");
+    require(city.save(directory,error),"updated instances did not save"); City loaded;
+    const auto path = directory/(city.id+".city");
+    require(City::load(path,loaded,error) && loaded.buildings[0].mesh->vertices==design.vertices
+        && loaded.buildings[1].mesh->texture==design.texture && loaded.buildings[1].footprint()==CityCell{2,2},"design update did not survive city save/load");
+    Environment map(loaded); PhysicsWorld world(map); GroundHit hit;
+    for (int i = 0; i<2; ++i) {
+        const auto roof = loaded.buildings[i].base(City::level)+Vec3(0,13.5f,0);
+        require(world.cast_ray(roof+Vec3(0,10,0),-Vec3::sAxisY(),20,hit) && (hit.point-roof).Length()<.01f,"updated design did not reach instance collision");
+    }
+    BuildingMesh plain; plain.name = "Converted plain";
+    require(city.update_building_design(plain,error,3)==1 && city.buildings[3].mesh
+        && city.buildings[3].mesh->name==plain.name,"editing a selected plain building did not convert it");
+    std::filesystem::remove(path);
+}
+void building_rotation(const std::filesystem::path& directory) {
+    std::string error; City city = City::create("Rotated buildings"); BuildingMesh mesh;
+    mesh.name = "Sloped shop"; mesh.size = Vec3(20,16,8); mesh.texture = "brick.png";
+    mesh.vertices[2].SetY(.75f); mesh.vertices[6].SetY(.75f);
+    mesh.decals.push_back({0,"window.png"});
+    require(city.add_land({60,60},{68,68},error),error.c_str());
+    const auto triangles = mesh.triangles();
+    const auto path = directory/(city.id+".city"); City loaded;
+    for (int rotation = 0; rotation<4; ++rotation) {
+        CityBuilding placed{{61,61},1,12,mesh,rotation};
+        require(placed.footprint()==(rotation%2 ? CityCell{1,2} : CityCell{2,1}),"rotation did not swap rectangular footprint");
+        require(city.add_building(placed,error,city.buildings.empty() ? -1 : 0),error.c_str());
+        require(city.building_at({61,61})==0 && city.building_at(rotation%2 ? CityCell{61,62} : CityCell{62,61})==0
+            && city.building_at(rotation%2 ? CityCell{62,61} : CityCell{61,62})==-1,"rotated occupied tiles disagree with placement");
+        const float angle = rotation*3.14159265f/2;
+        const auto transformed = [&](Vec3 p) { return placed.base(City::level)+Vec3(p.GetX()*std::cos(angle)+p.GetZ()*std::sin(angle),
+            p.GetY(),p.GetZ()*std::cos(angle)-p.GetX()*std::sin(angle)); };
+        const auto points = placed.points(City::level); const auto world_triangles = placed.triangles(City::level);
+        for (std::size_t i = 0; i<points.size(); ++i) require((points[i]-transformed(mesh.points()[i])).Length()<.001f,"rotation lost edited mesh vertices");
+        for (std::size_t i = 0; i<triangles.size(); ++i) {
+            require(world_triangles[i].uv==triangles[i].uv && world_triangles[i].texture==triangles[i].texture
+                && world_triangles[i].decal==triangles[i].decal,"rotation changed textures or decal UVs");
+            for (int j = 0; j<3; ++j) require((world_triangles[i].points[j]-transformed(triangles[i].points[j])).Length()<.001f,"rotation missed face/decal geometry");
+        }
+        Environment map(city); PhysicsWorld world(map); GroundHit hit;
+        require(std::abs(map.buildings()[0].size.GetX()-(rotation%2 ? 8 : 20))<.001f,"environment bounds missed rectangular rotation");
+        const Vec3 roof = transformed(Vec3(5,13,0)), wall = transformed(Vec3(0,6,-4)), outside = transformed(Vec3(0,6,-9));
+        require(world.cast_ray(roof+Vec3(0,10,0),-Vec3::sAxisY(),20,hit) && (hit.point-roof).Length()<.01f,"rotated sloped roof collision disagrees with mesh");
+        require(world.cast_ray(outside,(wall-outside).Normalized(),10,hit) && (hit.point-wall).Length()<.01f,"rotated wall collision missing");
+        require(city.save(directory,error) && City::load(path,loaded,error) && loaded.buildings[0].rotation==rotation
+            && loaded.buildings[0].mesh->vertices==mesh.vertices,"rotation did not survive city save/load or legacy version 8 changed");
+    }
+    mesh.texture = "soil.png";
+    require(city.update_building_design(mesh,error)==1 && city.buildings[0].rotation==3,"design update reset instance rotation");
+    City blocked = city; require(blocked.add_building({{62,61},1,12},error),error.c_str());
+    auto rotated = city.buildings[0]; rotated.rotation = 0;
+    require(!blocked.add_building(rotated,error,0) && blocked.buildings[0].rotation==3,"overlapping rotation partially changed the building");
+    blocked = city; require(blocked.add_road({{62,61}},error),error.c_str());
+    require(!blocked.add_building(rotated,error,0),"rotation overlapped a road");
+    blocked = city; require(blocked.set_spawn({62,61},error),error.c_str());
+    require(!blocked.add_building(rotated,error,0),"rotation overlapped player spawn");
+    blocked = city; require(blocked.add_vehicle({CityVehicleKind::Car,{62,61},0},error),error.c_str());
+    require(!blocked.add_building(rotated,error,0),"rotation overlapped a parked vehicle");
+    City edge = City::create("Map edge"); require(edge.add_land({126,125},{127,127},error),error.c_str());
+    rotated.cell = {127,125}; rotated.rotation = 1; require(edge.add_building(rotated,error),error.c_str());
+    rotated.rotation = 0; require(!edge.add_building(rotated,error,0) && edge.buildings[0].rotation==1,"rotation escaped the map edge");
+    rotated.rotation = 4; require(!edge.add_building(rotated,error,0),"invalid rotation accepted");
+    city.buildings.clear(); require(city.add_building({{65,65},1,12,{},1},error) && city.save(directory,error)
+        && City::load(path,loaded,error) && !loaded.buildings[0].mesh && loaded.buildings[0].rotation==1,"plain building version 9 lost rotation");
+    std::filesystem::remove(path);
+}
+void generated_terrain(const std::filesystem::path& directory) {
+    std::string error; City city = City::create("Perlin island"), same = city, different = city;
+    require(city.generate_terrain(48,32,1234,error) && city.validate(error),error.c_str());
+    require(same.generate_terrain(48,32,1234,error) && same.tiles==city.tiles && same.elevation==city.elevation,"same seed produced different terrain");
+    require(different.generate_terrain(48,32,1235,error) && different.tiles!=city.tiles && different.elevation==city.elevation,"new seed did not change only the land/water layout");
+    require(city.land_count()>100 && city.land_count()<48*32 && std::all_of(city.elevation.begin(),city.elevation.end(),[](auto h){return h==0;}),"Perlin area must contain land and sea with flat ground");
+    for (int z = 0; z<City::width; ++z) for (int x = 0; x<City::width; ++x)
+        if (x<40 || x>=88 || z<48 || z>=80) require(city.tile({x,z})==CityTile::Water,"generated land escaped centered M x N area");
+    require(city.save(directory,error),error.c_str()); City loaded;
+    const auto path = directory/(city.id+".city");
+    require(City::load(path,loaded,error) && loaded.tiles==city.tiles && loaded.elevation==city.elevation,"generated terrain did not round-trip");
+    const auto before = city.tiles; const auto heights = city.elevation;
+    require(!city.generate_terrain(48,32,99,error) && city.tiles==before && city.elevation==heights,"generation overwrote an existing city");
+    for (CityCell size : {CityCell{1,1},{1,128},{128,1},{8,32},{128,128}}) {
+        City fresh = City::create("Terrain limits");
+        require(fresh.generate_terrain(size.x,size.z,std::numeric_limits<std::uint32_t>::max(),error)
+            && fresh.land_count()>0 && fresh.validate(error)
+            && std::all_of(fresh.elevation.begin(),fresh.elevation.end(),[](auto h){return h==0;}),"minimum, rectangular or maximum starter size must stay flat");
+    }
+    City fresh = City::create("Bad dimensions");
+    for (CityCell size : {CityCell{0,32},{32,0},{129,1},{1,129},{-1,1}})
+        require(!fresh.generate_terrain(size.x,size.z,0,error) && fresh.land_count()==0
+            && *std::max_element(fresh.elevation.begin(),fresh.elevation.end())==0,"invalid dimensions mutated terrain");
+    std::filesystem::remove(path);
+}
 void data_and_saves(const std::filesystem::path& directory) {
     std::string error; City city = City::create("First city");
     require(city.land_count()==0 && !city.spawn && city.traffic_routes().empty(),"new city isn't open water");
@@ -880,8 +1174,8 @@ int main(int argc,char** argv) {
             std::cout << (std::filesystem::path(argv[2])/(city.id+".city")).string() << '\n'; return 0;
         }
         const auto directory = std::filesystem::temp_directory_path()/("ambaretto-city-test-"+City::create("test").id);
-        data_and_saves(directory); trees_and_time(directory); ground_paint(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay();
-        // Remove only this test's two known files; no recursive filesystem deletion.
+        data_and_saves(directory); building_meshes(directory); building_mesh_editing(directory); building_design_updates(directory); building_rotation(directory); generated_terrain(directory); trees_and_time(directory); ground_paint(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay();
+        // Remove only files in this run's unique test directory; no recursive deletion.
         for (const auto& entry : std::filesystem::directory_iterator(directory)) std::filesystem::remove(entry.path());
         std::filesystem::remove(directory);
         std::cout << "City builder checks passed\n"; return 0;

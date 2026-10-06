@@ -36,7 +36,7 @@ FetchContent_Declare(Jolt
 )
 FetchContent_MakeAvailable(Jolt)
 
-add_library(vehicle_physics src/vehicle.cpp src/environment.cpp src/city.cpp src/player.cpp src/traffic.cpp src/pedestrians.cpp src/third_person_camera.cpp src/weapons.cpp src/police.cpp)
+add_library(vehicle_physics src/vehicle.cpp src/environment.cpp src/city.cpp src/building_mesh.cpp src/player.cpp src/traffic.cpp src/pedestrians.cpp src/third_person_camera.cpp src/weapons.cpp src/police.cpp)
 target_include_directories(vehicle_physics PUBLIC include)
 target_include_directories(vehicle_physics SYSTEM PUBLIC $<TARGET_PROPERTY:Jolt,INTERFACE_INCLUDE_DIRECTORIES>)
 target_link_libraries(vehicle_physics PUBLIC Jolt)

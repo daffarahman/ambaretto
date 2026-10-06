@@ -161,10 +161,10 @@ Environment::Environment(const City& city) : city_(std::make_shared<City>(city))
         }
         if ((x+z)%3==0) barriers_.push_back({c-Vec3(0,(c.GetY()+8)/2,0),Vec3(1.2f,c.GetY()+8,1.2f),0});
     }
-    for (auto b : city.buildings) {
-        const Vec3 size(b.size*City::block,float(b.height),b.size*City::block);
-        const Vec3 center = City::center(b.cell,city.tile_height(b.cell)+b.height/2.f)
-            +Vec3((b.size-1)*City::block/2,0,(b.size-1)*City::block/2);
+    for (const auto& b : city.buildings) {
+        Vec3 size = b.shape().size;
+        if (b.rotation%2) size = Vec3(size.GetZ(),size.GetY(),size.GetX());
+        const Vec3 center = b.base(city.tile_height(b.cell))+Vec3(0,size.GetY()/2,0);
         buildings_.push_back({center,size,0,BuildingKind::Office});
     }
     trees_ = city.trees;
@@ -180,8 +180,25 @@ bool valid_name(const std::string& name) {
     return !name.empty() && name.size() <= 48 && name.find_first_not_of(' ') != std::string::npos
         && std::all_of(name.begin(), name.end(), [](unsigned char c) { return c >= 32 && c < 127; });
 }
+std::uint32_t hash32(std::uint32_t n) {
+    n ^= n>>16; n *= 0x7feb352du; n ^= n>>15; n *= 0x846ca68bu; return n^(n>>16);
+}
+float perlin(float x,float z,std::uint32_t seed) {
+    const int ix = int(std::floor(x)), iz = int(std::floor(z)); const float dx = x-ix, dz = z-iz;
+    const auto fade = [](float t){return t*t*t*(t*(t*6-15)+10);};
+    const auto mix = [](float a,float b,float t){return a+(b-a)*t;};
+    const auto gradient = [&](int gx,int gz,float px,float pz) {
+        constexpr float directions[][2] = {{1,0},{-1,0},{0,1},{0,-1},{.70710678f,.70710678f},
+            {-.70710678f,.70710678f},{.70710678f,-.70710678f},{-.70710678f,-.70710678f}};
+        const auto& d = directions[hash32(seed ^ std::uint32_t(gx)*0x9e3779b9u ^ std::uint32_t(gz)*0x85ebca6bu)&7];
+        return d[0]*px+d[1]*pz;
+    };
+    return mix(mix(gradient(ix,iz,dx,dz),gradient(ix+1,iz,dx-1,dz),fade(dx)),
+        mix(gradient(ix,iz+1,dx,dz-1),gradient(ix+1,iz+1,dx-1,dz-1),fade(dx)),fade(dz));
+}
 bool covers(const CityBuilding& b, CityCell p) {
-    return p.x >= b.cell.x && p.z >= b.cell.z && p.x < b.cell.x + b.size && p.z < b.cell.z + b.size;
+    const auto footprint = b.footprint();
+    return p.x >= b.cell.x && p.z >= b.cell.z && p.x < b.cell.x + footprint.x && p.z < b.cell.z + footprint.z;
 }
 float triangle_height(const std::array<Vec3,3>& t, Vec3 p) {
     const float area = (t[1]-t[0]).Cross(t[2]-t[0]).GetY();
@@ -235,6 +252,30 @@ void sync_elevation(City& city) {
 }
 CityCell City::cell(float x, float z) { return {int(std::floor(x / block)) + width / 2, int(std::floor(z / block)) + width / 2}; }
 Vec3 City::center(CityCell p, float y) { return {(p.x - width / 2 + .5f) * block, y, (p.z - width / 2 + .5f) * block}; }
+Vec3 CityBuilding::base(float ground) const {
+    const auto cells = footprint();
+    return City::center(cell,ground)+Vec3((cells.x-1)*City::half_block,0,(cells.z-1)*City::half_block);
+}
+namespace {
+Vec3 rotate_building_point(Vec3 p,int rotation) {
+    switch (rotation) {
+        case 1: return Vec3(p.GetZ(),p.GetY(),-p.GetX());
+        case 2: return Vec3(-p.GetX(),p.GetY(),-p.GetZ());
+        case 3: return Vec3(-p.GetZ(),p.GetY(),p.GetX());
+        default: return p;
+    }
+}
+}
+std::vector<Vec3> CityBuilding::points(float ground) const {
+    auto result = shape().points(); const auto origin = base(ground);
+    for (auto& p : result) p = origin+rotate_building_point(p,rotation);
+    return result;
+}
+std::vector<BuildingTriangle> CityBuilding::triangles(float ground) const {
+    auto result = shape().triangles(); const auto origin = base(ground);
+    for (auto& t : result) for (auto& p : t.points) p = origin+rotate_building_point(p,rotation);
+    return result;
+}
 std::array<Vec3,4> City::ground_patch(CityCell p) const {
     std::array<Vec3,4> patch;
     const CityCell corners[] = {{p.x,p.z},{p.x,p.z+1},{p.x+1,p.z+1},{p.x+1,p.z}};
@@ -470,12 +511,11 @@ int City::brush_trees(Vec3 point, float radius, int density, bool remove, std::s
     for (auto t : trees) occupied.insert(plot(t.base));
     std::uint32_t seed = 0;
     for (unsigned char c : id) seed = seed*31+c;
-    const auto hash = [](std::uint32_t n) { n ^= n>>16; n *= 0x7feb352du; n ^= n>>15; n *= 0x846ca68bu; return n^(n>>16); };
     const int threshold[] = {0,25,55,90};
     const int x0 = std::max(0,int(std::floor((point.GetX()-radius+1024)/4))), x1 = std::min(511,int(std::floor((point.GetX()+radius+1024)/4)));
     const int z0 = std::max(0,int(std::floor((point.GetZ()-radius+1024)/4))), z1 = std::min(511,int(std::floor((point.GetZ()+radius+1024)/4)));
     for (int z = z0; z <= z1; ++z) for (int x = x0; x <= x1; ++x) {
-        const int key = z*512+x; const auto noise = hash(seed+std::uint32_t(key));
+        const int key = z*512+x; const auto noise = hash32(seed+std::uint32_t(key));
         if (occupied.count(key) || int(noise%100) >= threshold[density]) continue;
         const auto random = [&](int shift) { return float((noise>>shift)&255)/255; };
         Vec3 p(x*4-1022+(random(8)-.5f)*1.5f,level,z*4-1022+(random(16)-.5f)*1.5f);
@@ -631,12 +671,15 @@ bool City::add_road(const std::vector<CityCell>& cells, std::string& error) {
 }
 bool City::add_building(CityBuilding b, std::string& error, int replace) {
     error.clear();
-    if (b.size < 1 || b.size > 8 || b.height < 4 || b.height > 120 || !contains(b.cell)
-        || !contains({b.cell.x+b.size-1,b.cell.z+b.size-1})) return fail(error, "Use a 1-8 block square and a height of 4-120 m.");
-    for (int z = b.cell.z; z < b.cell.z+b.size; ++z) for (int x = b.cell.x; x < b.cell.x+b.size; ++x) {
+    if (b.rotation<0 || b.rotation>3) return fail(error,"Building rotation must be 0, 90, 180 or 270 degrees.");
+    if (b.mesh && !b.mesh->validate(error)) return false;
+    const auto footprint = b.footprint();
+    if ((!b.mesh && (b.size < 1 || b.size > 8 || b.height < 4 || b.height > 120)) || !contains(b.cell)
+        || !contains({b.cell.x+footprint.x-1,b.cell.z+footprint.z-1})) return fail(error, "Building dimensions must fit inside the map.");
+    for (int z = b.cell.z; z < b.cell.z+footprint.z; ++z) for (int x = b.cell.x; x < b.cell.x+footprint.x; ++x) {
         CityCell p{x,z}; const int existing = building_at(p);
         if (tile(p) != CityTile::Land || (existing >= 0 && existing != replace) || (spawn && *spawn == p))
-            return fail(error, "Buildings need an empty square of land.");
+            return fail(error, "Buildings need an empty footprint of land.");
         for (Vec3 corner : ground_patch(p))
             if (std::abs(corner.GetY()-tile_height(b.cell))>.001f) return fail(error,"Buildings need flat ground under the whole footprint.");
     }
@@ -648,6 +691,26 @@ bool City::add_building(CityBuilding b, std::string& error, int replace) {
     buildings = std::move(check.buildings);
     clear_trees();
     return true;
+}
+int City::update_building_design(const BuildingMesh& mesh, std::string& error, int replace) {
+    if (!mesh.validate(error)) return -1;
+    if (replace < -1 || replace >= int(buildings.size())) { error = "Invalid selected building."; return -1; }
+    const auto encoded = [](const BuildingMesh& value) { std::ostringstream stream; value.write(stream); return stream.str(); };
+    const auto definition = encoded(mesh);
+    City next = *this; int changed = 0;
+    // ponytail: existing saves link designs by name; stable IDs can preserve links across renames if needed.
+    for (int i = 0; i < int(next.buildings.size()); ++i) {
+        auto& building = next.buildings[i];
+        if (i != replace && (!building.mesh || building.mesh->name != mesh.name)) continue;
+        if (building.mesh && encoded(*building.mesh) == definition) continue;
+        building.mesh = mesh; ++changed;
+    }
+    if (changed) {
+        next.clear_trees();
+        if (!next.validate(error)) return -1;
+        *this = std::move(next);
+    }
+    return changed;
 }
 bool City::add_vehicle(CityVehicle v, std::string& error, int replace) {
     error.clear();
@@ -828,6 +891,25 @@ City City::create(std::string name) {
     std::mt19937_64 random(std::random_device{}()); std::ostringstream id;
     id << std::hex << std::setw(16) << std::setfill('0') << random(); city.id = id.str(); return city;
 }
+bool City::generate_terrain(int tiles_x,int tiles_z,std::uint32_t seed,std::string& error) {
+    if (tiles_x<1 || tiles_z<1 || tiles_x>width || tiles_z>width) return fail(error,"Starter dimensions must be 1-128 tiles per axis.");
+    if (std::any_of(tiles.begin(),tiles.end(),[](auto t){return t!=CityTile::Water;}) || !buildings.empty()
+        || !vehicles.empty() || !trees.empty() || spawn) return fail(error,"Generate starter terrain only in an empty city.");
+    City next = *this; next.elevation.fill(0);
+    const int x0 = (width-tiles_x)/2, z0 = (width-tiles_z)/2;
+    const float frequency = 4.f/std::max(8,std::min(tiles_x,tiles_z));
+    const auto field = [&](float x,float z) {
+        const float edge = std::max(std::abs(x*2/tiles_x-1),std::abs(z*2/tiles_z-1));
+        x = x*frequency+11.37f; z = z*frequency+23.61f;
+        const float noise = .65f*perlin(x,z,seed)+.25f*perlin(x*2,z*2,seed+1)+.1f*perlin(x*4,z*4,seed+2);
+        return .22f+noise*.85f-.55f*edge*edge*edge*edge;
+    };
+    for (int z = 0; z<tiles_z; ++z) for (int x = 0; x<tiles_x; ++x)
+        if (field(x+.5f,z+.5f)>0) next.tiles[index({x0+x,z0+z})] = CityTile::Land;
+    if (!next.land_count()) next.tiles[index({x0+tiles_x/2,z0+tiles_z/2})] = CityTile::Land;
+    if (!next.validate(error)) return false;
+    *this = std::move(next); return true;
+}
 bool City::save(const std::filesystem::path& directory, std::string& error) const {
     if (!validate(error)) return false;
     std::error_code ec; std::filesystem::create_directories(directory,ec);
@@ -835,10 +917,18 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
     const auto path = directory/(id+".city"); auto temporary = path; temporary += ".tmp";
     std::ofstream file(temporary,std::ios::trunc);
     if (!file) return fail(error,"Cannot write this city. Your previous save is intact.");
-    file << "AMBARETTO_CITY 6\n" << id << '\n' << std::quoted(name) << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10);
+    const int version = std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.rotation!=0;}) ? 9
+        : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh.has_value();}) ? 8 : 6;
+    file << "AMBARETTO_CITY " << version << '\n' << id << '\n' << std::quoted(name) << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10);
     for (auto t : tiles) file << char('0'+int(t));
     file << '\n' << buildings.size() << '\n';
-    for (auto b : buildings) file << b.cell.x << ' ' << b.cell.z << ' ' << b.size << ' ' << b.height << '\n';
+    for (const auto& b : buildings) {
+        file << b.cell.x << ' ' << b.cell.z << ' ' << b.size << ' ' << b.height;
+        if (version>=7) file << ' ' << int(b.mesh.has_value());
+        if (version>=9) file << ' ' << b.rotation;
+        file << '\n';
+        if (b.mesh) b.mesh->write(file);
+    }
     file << vehicles.size() << '\n';
     for (auto v : vehicles) file << int(v.kind) << ' ' << v.position.GetX() << ' ' << v.position.GetZ() << ' ' << v.rotation << '\n';
     file << int(spawn.has_value()) << ' ' << (spawn ? spawn->x : 0) << ' ' << (spawn ? spawn->z : 0) << '\n';
@@ -852,6 +942,8 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
     file << '\n';
     file.close();
     if (!file) return fail(error,"Cannot finish saving. Your previous save is intact.");
+    if (std::filesystem::file_size(temporary,ec)>64*1024*1024 || ec)
+        return fail(error,"City exceeds the 64 MiB save limit. Your previous save is intact.");
 #ifdef _WIN32
     const bool replaced = MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH) != 0;
 #else
@@ -862,9 +954,9 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
 }
 bool City::load(const std::filesystem::path& path, City& city, std::string& error) {
     std::error_code ec;
-    if (std::filesystem::file_size(path,ec) > 1024*1024 || ec) return fail(error,"City save is missing or too large.");
+    if (std::filesystem::file_size(path,ec) > 64*1024*1024 || ec) return fail(error,"City save is missing or too large.");
     std::ifstream file(path); City read; std::string magic, terrain; int version = 0;
-    if (!(file >> magic >> version >> read.id >> std::quoted(read.name) >> terrain) || magic != "AMBARETTO_CITY" || version<1 || version>6
+    if (!(file >> magic >> version >> read.id >> std::quoted(read.name) >> terrain) || magic != "AMBARETTO_CITY" || version<1 || version>9
         || terrain.size() != read.tiles.size()) return fail(error,"Invalid or unsupported city save.");
     for (std::size_t i = 0; i < terrain.size(); ++i) {
         if (terrain[i] < '0' || terrain[i] > (version>=3 ? '3' : '2')) return fail(error,"Invalid city terrain.");
@@ -872,7 +964,17 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
     }
     int count = 0;
     if (!(file >> count) || count < 0 || count > 4096) return fail(error,"Invalid building count.");
-    for (int i = 0; i < count; ++i) { CityBuilding b; if (!(file >> b.cell.x >> b.cell.z >> b.size >> b.height)) return fail(error,"Invalid building data."); read.buildings.push_back(b); }
+    for (int i = 0; i < count; ++i) {
+        CityBuilding b;
+        if (!(file >> b.cell.x >> b.cell.z >> b.size >> b.height)) return fail(error,"Invalid building data.");
+        if (version>=7) {
+            int custom;
+            if (!(file>>custom) || custom<0 || custom>1) return fail(error,"Invalid building mesh flag.");
+            if (version>=9 && (!(file>>b.rotation) || b.rotation<0 || b.rotation>3)) return fail(error,"Invalid building rotation.");
+            if (custom) { b.mesh.emplace(); if (!BuildingMesh::read(file,*b.mesh,error,version>=8 ? 2 : 1)) return false; }
+        }
+        read.buildings.push_back(std::move(b));
+    }
     if (!(file >> count) || count < 0 || count > 512) return fail(error,"Invalid vehicle count.");
     for (int i = 0; i < count; ++i) {
         CityVehicle v; int kind;
@@ -930,7 +1032,7 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
         if (!(file>>heights) || heights.size()!=(version==5 ? read.tiles.size() : read.elevation.size())) return fail(error,"Invalid ground elevation.");
         for (std::size_t i = 0; i < heights.size(); ++i) {
             if (heights[i]<'0' || heights[i]>'0'+max_elevation) return fail(error,"Invalid ground elevation.");
-            if (version==6) read.elevation[i] = heights[i]-'0';
+            if (version>=6) read.elevation[i] = heights[i]-'0';
             else {
                 if (read.tiles[i]==CityTile::Water && heights[i]!='0') return fail(error,"Invalid water elevation.");
                 const CityCell p{int(i)%width,int(i)/width};

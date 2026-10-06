@@ -13,22 +13,35 @@ constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", Men
 constexpr Item main_settings[] = {{"Graphics...", MenuCommand::Graphics}, {"Controller mapping...", MenuCommand::Controllers}};
 constexpr Item helps[] = {{"Controls...", MenuCommand::Controls}, {"About...", MenuCommand::About}};
 constexpr Item editor_files[] = {{"Save city", MenuCommand::SaveCity, "Ctrl+S"}, {"Start time...", MenuCommand::StartTime}, {"Play city", MenuCommand::PlayCity}, {"Cities...", MenuCommand::Cities, "Esc"}, {"Quit", MenuCommand::Quit}};
-constexpr Item editor_edits[] = {{"Undo", MenuCommand::Undo, "Ctrl+Z"}, {"Redo", MenuCommand::Redo, "Ctrl+Y"}, {"Delete selection", MenuCommand::DeleteSelection, "Del"}};
-constexpr Item builds[] = {{"Select / edit", MenuCommand::SelectTool, "1"}, {"Island / expand", MenuCommand::LandTool, "2"}, {"Road", MenuCommand::RoadTool, "3"}, {"Building block", MenuCommand::BuildingTool, "4"}, {"Player spawn", MenuCommand::SpawnTool, "5"}, {"Vehicle", MenuCommand::VehicleTool, "6"}, {"Bulldoze", MenuCommand::BulldozeTool, "7"}, {"Tree brush", MenuCommand::TreesTool, "8"}, {"Ground texture", MenuCommand::GroundTool, "9"}, {"Ground elevation", MenuCommand::ElevationTool, "0"}};
+constexpr Item editor_edits[] = {{"Undo", MenuCommand::Undo, "Ctrl+Z"}, {"Redo", MenuCommand::Redo, "Ctrl+Y"}, {"Delete selection", MenuCommand::DeleteSelection, "Del"}, {"Select / edit", MenuCommand::SelectTool, "1"}, {"Bulldoze", MenuCommand::BulldozeTool, "7"}};
+constexpr Item tiles[] = {{"Island / expand",MenuCommand::LandTool,"2"}, {"Road: L-shaped",MenuCommand::RoadBend,"3"}, {"Road: diagonal",MenuCommand::RoadDiagonal},
+    {"Ground: soil",MenuCommand::GroundSoil,"9"}, {"Ground: grass",MenuCommand::GroundGrass}, {"Ground: sand",MenuCommand::GroundSand}, {"Ground: asphalt",MenuCommand::GroundAsphalt},
+    {"Raise ground +2 m",MenuCommand::RaiseGround,"0"}, {"Lower ground -2 m",MenuCommand::LowerGround}};
+constexpr Item buildings[] = {{"Place selected building",MenuCommand::BuildingTool,"4"}, {"Building Creator...",MenuCommand::BuildingCreator}, {"Edit selected building...",MenuCommand::EditBuilding}, {"Rotate building +90",MenuCommand::RotateBuilding,"R"}};
+constexpr Item objects[] = {{"Player spawn",MenuCommand::SpawnTool,"5"}, {"Car",MenuCommand::PlaceCar,"6"}, {"Trainer plane",MenuCommand::PlaceTrainer},
+    {"F-18",MenuCommand::PlaceF18}, {"Boeing 747",MenuCommand::PlaceBoeing}, {"Rotate vehicle +90",MenuCommand::RotateObject},
+    {"Trees: sparse",MenuCommand::TreesSparse,"8"}, {"Trees: medium",MenuCommand::TreesMedium}, {"Trees: dense",MenuCommand::TreesDense},
+    {"Smaller tree brush",MenuCommand::BrushSmaller}, {"Larger tree brush",MenuCommand::BrushLarger}};
 constexpr Item views[] = {{"Top view", MenuCommand::TopView, "V"}, {"Show grid", MenuCommand::Grid, "G"}, {"Rotate left", MenuCommand::RotateLeft, "Q"}, {"Rotate right", MenuCommand::RotateRight, "E"}, {"Zoom in", MenuCommand::ZoomIn}, {"Zoom out", MenuCommand::ZoomOut}};
 constexpr Item city_files[] = {{"New city...", MenuCommand::NewCity, "Ins"}, {"Quit", MenuCommand::Quit}};
 constexpr Item city_actions[] = {{"Edit / build", MenuCommand::EditCity, "E"}, {"Play city", MenuCommand::PlayCity, "Enter"}, {"Rename...", MenuCommand::RenameCity, "F2"}, {"Delete city...", MenuCommand::DeleteCity, "Del"}};
 struct Menu { const char* title; const Item* items; int count; };
 constexpr Menu game_menus[] = {{"File", files, 3}, {"Edit", edits, 2}, {"Settings", settings, 3}, {"Help", helps, 2}};
-constexpr Menu editor_menus[] = {{"File", editor_files, 5}, {"Edit", editor_edits, 3}, {"Build", builds, int(std::size(builds))}, {"View", views, 6}, {"Help", helps, 2}};
+constexpr Menu editor_menus[] = {{"File", editor_files, 5}, {"Edit", editor_edits, int(std::size(editor_edits))}, {"Tiles", tiles, int(std::size(tiles))},
+    {"Buildings", buildings, int(std::size(buildings))}, {"Objects", objects, int(std::size(objects))}, {"View", views, 6}, {"Help", helps, 2}};
 constexpr Menu city_menus[] = {{"File", city_files, 2}, {"City", city_actions, 4}, {"Settings", main_settings, 2}, {"Help", helps, 2}};
-const Menu* menus(MenuMode mode) { return mode == MenuMode::Editor ? editor_menus : mode == MenuMode::Cities ? city_menus : game_menus; }
-int menu_count(MenuMode mode) { return mode == MenuMode::Editor ? 5 : 4; }
+constexpr Item creator_files[] = {{"New building",MenuCommand::NewBuilding}, {"Save building",MenuCommand::SaveBuilding,"Ctrl+S"}, {"Saved buildings",MenuCommand::SavedBuildings},
+    {"Use in map",MenuCommand::UseBuilding}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
+constexpr Menu creator_menus[] = {{"File",creator_files,int(std::size(creator_files))}, {"Edit",editor_edits,2}};
+const Menu* menus(MenuMode mode) { return mode == MenuMode::Editor ? editor_menus : mode == MenuMode::Cities ? city_menus : mode==MenuMode::Creator ? creator_menus : game_menus; }
+int menu_count(MenuMode mode) { return mode == MenuMode::Editor ? int(std::size(editor_menus)) : mode==MenuMode::Creator ? int(std::size(creator_menus)) : 4; }
 bool enabled(MenuCommand command, const MenuState& state) {
     switch (command) {
         case MenuCommand::Undo: return state.undo;
         case MenuCommand::Redo: return state.redo;
         case MenuCommand::PlayCity: return state.play;
+        case MenuCommand::EditBuilding: return state.building_selection;
+        case MenuCommand::RotateBuilding: return state.building_selection || state.tool==3;
         case MenuCommand::DeleteSelection: case MenuCommand::EditCity: case MenuCommand::RenameCity: case MenuCommand::DeleteCity: return state.selection;
         default: return true;
     }
@@ -36,6 +49,11 @@ bool enabled(MenuCommand command, const MenuState& state) {
 bool checked(MenuCommand command, const MenuState& state) {
     if (command == MenuCommand::TopView) return state.top;
     if (command == MenuCommand::Grid) return state.grid;
+    if (command==MenuCommand::RoadBend || command==MenuCommand::RoadDiagonal) return state.tool==2 && state.diagonal==(command==MenuCommand::RoadDiagonal);
+    if (command>=MenuCommand::GroundSoil && command<=MenuCommand::GroundAsphalt) return state.tool==8 && state.ground==int(command)-int(MenuCommand::GroundSoil);
+    if (command==MenuCommand::RaiseGround || command==MenuCommand::LowerGround) return state.tool==9 && state.elevation==(command==MenuCommand::RaiseGround ? 1 : -1);
+    if (command>=MenuCommand::PlaceCar && command<=MenuCommand::PlaceBoeing) return state.tool==5 && state.vehicle==int(command)-int(MenuCommand::PlaceCar);
+    if (command>=MenuCommand::TreesSparse && command<=MenuCommand::TreesDense) return state.tool==7 && state.density==int(command)-int(MenuCommand::TreesSparse)+1;
     return state.tool >= 0 && int(command) == int(MenuCommand::SelectTool) + state.tool;
 }
 Rectangle title_rect(MenuMode mode, int menu) {

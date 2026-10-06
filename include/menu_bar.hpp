@@ -8,12 +8,16 @@ enum class MenuCommand {
     None, Resume, Pause, Quit, Cities, Recover, CarDefaults, Map, Tuning, Graphics, AimMode, Controllers, Controls, About,
     SaveCity, StartTime, PlayCity, Undo, Redo, DeleteSelection,
     SelectTool, LandTool, RoadTool, BuildingTool, SpawnTool, VehicleTool, BulldozeTool, TreesTool, GroundTool, ElevationTool,
-    TopView, Grid, RotateLeft, RotateRight, ZoomIn, ZoomOut, NewCity, EditCity, RenameCity, DeleteCity
+    TopView, Grid, RotateLeft, RotateRight, ZoomIn, ZoomOut, NewCity, EditCity, RenameCity, DeleteCity,
+    BuildingCreator, EditBuilding, RoadBend, RoadDiagonal, GroundSoil, GroundGrass, GroundSand, GroundAsphalt,
+    RaiseGround, LowerGround, PlaceCar, PlaceTrainer, PlaceF18, PlaceBoeing, RotateObject,
+    TreesSparse, TreesMedium, TreesDense, BrushSmaller, BrushLarger,
+    NewBuilding, SaveBuilding, SavedBuildings, UseBuilding, CloseCreator, RotateBuilding
 };
-enum class MenuMode { Game, Editor, Cities };
+enum class MenuMode { Game, Editor, Cities, Creator };
 struct MenuState {
-    bool undo = false, redo = false, play = true, selection = false, top = false, grid = true;
-    int tool = -1;
+    bool undo = false, redo = false, play = true, selection = false, building_selection = false, top = false, grid = true, diagonal = false;
+    int tool = -1, ground = 0, vehicle = 0, density = 2, elevation = 1;
 };
 struct MenuInput {
     Vector2 mouse{};
