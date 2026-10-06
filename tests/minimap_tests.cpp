@@ -7,18 +7,18 @@ namespace {
 bool near(float a, float b) { return std::abs(a - b) < .002f; }
 bool near(Vector2 a, Vector2 b) { return near(a.x, b.x) && near(a.y, b.y); }
 void require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
-Camera3D looking(forza::Vec3 direction) {
+Camera3D looking(ambaretto::Vec3 direction) {
     return {{20, 30, 40}, {20 + direction.GetX(), 30 + direction.GetY(), 40 + direction.GetZ()},
         {0, 1, 0}, 60, CAMERA_PERSPECTIVE};
 }
 }
 int main() {
     try {
-        using forza::Vec3;
+        using ambaretto::Vec3;
         const Vec3 player(120, 4, -350);
         const float extent = 5120;
         for (const auto size : {Vector2{1024,600},Vector2{1280,720},Vector2{1920,1080}}) {
-            const forza::WorldMapLayout layout(int(size.x),int(size.y));
+            const ambaretto::WorldMapLayout layout(int(size.x),int(size.y));
             const auto r = layout.window, v = layout.viewport, close = layout.buttons[4];
             require(r.x>0 && r.y>32 && r.x+r.width<size.x && r.y+r.height<size.y,"map is not an inset window");
             require(close.x>r.x && close.x+close.width<r.x+r.width && close.y>r.y && close.y+close.height<=r.y+31,"close button leaves title bar");
@@ -26,7 +26,7 @@ int main() {
             for (int i = 0; i < 4; ++i) require(layout.buttons[i].y+layout.buttons[i].height<v.y,"map button overlaps map content");
         }
         for (Vec3 direction : {Vec3(0, 0, -1), Vec3(1, 0, 0), Vec3(0, 0, 1), Vec3(-1, 0, 0), Vec3(1, 0, -1).Normalized()}) {
-            const forza::MinimapView map(720, player, Vec3(0, 0, -1), looking(direction));
+            const ambaretto::MinimapView map(720, player, Vec3(0, 0, -1), looking(direction));
             require(near(map.project(player), map.anchor), "player moved away from map anchor");
             require(near(map.project(player + direction * 50), {map.anchor.x, map.anchor.y - 50 * map.scale}), "camera forward must point up");
             require(near(map.project(player + direction.Cross(Vec3::sAxisY()) * 50), {map.anchor.x + 50 * map.scale, map.anchor.y}), "camera right must point right");
@@ -40,7 +40,7 @@ int main() {
                     map.anchor.y + x * std::sin(radians) + y * std::cos(radians)};
                 require(near(texel, map.project(point)), "rotated texture and markers disagree");
             }
-            const forza::MinimapView driving(720, player, direction, looking(direction), true);
+            const ambaretto::MinimapView driving(720, player, direction, looking(direction), true);
             const Vec3 right = direction.Cross(Vec3::sAxisY());
             require(near(driving.project(player), driving.anchor), "vehicle perspective moved the player from its anchor");
             const auto ahead = driving.project(player + direction * 100);
@@ -60,14 +60,14 @@ int main() {
             }
             require(!driving.contains(driving.project(player - direction * 300)), "marker behind the minimap camera became visible");
         }
-        const forza::MinimapView pitched(720, player, Vec3(0, 0, 1), looking(Vec3(0, -100, -10)));
+        const ambaretto::MinimapView pitched(720, player, Vec3(0, 0, 1), looking(Vec3(0, -100, -10)));
         require(near(pitched.forward.GetZ(), -1) && near(pitched.project(player + Vec3(0, 500, -50)).y, pitched.anchor.y - 50 * pitched.scale), "pitch/height changed map scale");
-        const forza::MinimapView vertical(720, player, Vec3(1, 7, 0), looking(Vec3(0, -10, 0)));
+        const ambaretto::MinimapView vertical(720, player, Vec3(1, 7, 0), looking(Vec3(0, -10, 0)));
         require(near(vertical.forward.GetX(), 1), "vertical camera lost player-heading fallback");
-        const forza::MinimapView zero(720, player, Vec3::sZero(), looking(Vec3::sZero()));
+        const ambaretto::MinimapView zero(720, player, Vec3::sZero(), looking(Vec3::sZero()));
         require(near(zero.forward.GetZ(), -1) && std::isfinite(zero.rotation()), "zero directions lost north fallback");
         for (int height : {720, 600}) {
-            const forza::MinimapView map(height, player, Vec3(0, 0, -1), looking(Vec3(0, 0, -1)));
+            const ambaretto::MinimapView map(height, player, Vec3(0, 0, -1), looking(Vec3(0, 0, -1)));
             require(near(map.bounds.x, 14) && near(map.bounds.y + map.bounds.height, float(height - 14)), "map lost bottom-left margin");
             require(near(map.bounds.width, 320) && near(map.bounds.height, 180) && near(map.scale, 320.0f / 120), "map lost its 120m zoom");
             require(near(map.anchor.x, 174) && near(map.anchor.y, float(height - 77)), "look-ahead player anchor changed");
@@ -76,7 +76,7 @@ int main() {
         }
         const Rectangle viewport{20, 60, 1000, 600};
         const Vector2 viewport_center{520, 360};
-        forza::WorldMapView map;
+        ambaretto::WorldMapView map;
         require(near(map.scale, .5f), "world map default zoom changed");
         map.fit(viewport, extent);
         require(near(map.center, {0, 0}) && near(map.scale, 600 / (2 * extent)), "fit did not show whole map");

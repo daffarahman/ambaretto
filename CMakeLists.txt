@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(forzaambazon VERSION 1.0.0 LANGUAGES CXX)
+project(Ambaretto VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -44,18 +44,18 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vehicle_physics PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_executable(forzaambazon src/main.cpp src/city_editor.cpp src/environment_renderer.cpp src/car_renderer.cpp src/tuning_panel.cpp src/ui_font.cpp src/controller_mapping.cpp src/menu_bar.cpp src/graphics_settings.cpp src/graphics_panel.cpp src/scene_lighting.cpp src/vehicle_audio.cpp)
-target_link_libraries(forzaambazon PRIVATE vehicle_physics PkgConfig::RAYLIB PkgConfig::GLFW)
+add_executable(Ambaretto src/main.cpp src/city_editor.cpp src/environment_renderer.cpp src/car_renderer.cpp src/tuning_panel.cpp src/ui_font.cpp src/controller_mapping.cpp src/menu_bar.cpp src/graphics_settings.cpp src/graphics_panel.cpp src/scene_lighting.cpp src/vehicle_audio.cpp)
+target_link_libraries(Ambaretto PRIVATE vehicle_physics PkgConfig::RAYLIB PkgConfig::GLFW)
 # Keep runtime assets beside the executable, including after model/texture edits.
-add_custom_target(forzaambazon_assets ALL
+add_custom_target(Ambaretto_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:forzaambazon>/assets"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:Ambaretto>/assets"
     COMMENT "Copying game assets"
     VERBATIM
 )
-add_dependencies(forzaambazon forzaambazon_assets)
+add_dependencies(Ambaretto Ambaretto_assets)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(forzaambazon PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(Ambaretto PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 include(CTest)

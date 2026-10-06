@@ -11,7 +11,7 @@ constexpr double pi = 3.141592653589793;
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
-double slip_degrees(const forza::Car& car) {
+double slip_degrees(const ambaretto::Car& car) {
     auto forward = car.forward();
     auto velocity = car.velocity();
     forward.SetY(0);
@@ -19,7 +19,7 @@ double slip_degrees(const forza::Car& car) {
     if (velocity.Length() < 2) return 0;
     return std::acos(std::clamp(double(velocity.Normalized().Dot(forward.Normalized())), -1.0, 1.0)) * 180 / pi;
 }
-void tick(forza::PhysicsWorld& world, forza::Car& car, forza::Input input, int steps) {
+void tick(ambaretto::PhysicsWorld& world, ambaretto::Car& car, ambaretto::Input input, int steps) {
     for (int i = 0; i < steps; ++i) {
         car.step(input);
         world.step();
@@ -28,8 +28,8 @@ void tick(forza::PhysicsWorld& world, forza::Car& car, forza::Input input, int s
 }
 
 void test_settle_drive_reverse() {
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
     tick(world, car, {}, 240);
     require(car.position().GetY() > 0.35 && car.position().GetY() < 0.75, "car did not settle on suspension");
     tick(world, car, {1, 0, false}, 480);
@@ -39,8 +39,8 @@ void test_settle_drive_reverse() {
 }
 
 void test_no_wheelie() {
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
     double peak_pitch = 0;
     int front_air = 0;
     for (int i = 0; i < 600; ++i) {
@@ -53,8 +53,8 @@ void test_no_wheelie() {
 }
 
 void test_speed_independent_suspension() {
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
     tick(world, car, {0, 0, false, true}, 480);
     const float rest_height = car.position().GetY();
     for (float target : {80.0f, 240.0f, 400.0f}) {
@@ -80,8 +80,8 @@ void test_speed_independent_suspension() {
 }
 
 void test_grip_steering() {
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
     double max_slip = 0;
     for (int i = 0; i < 360; ++i) {
         tick(world, car, {1, float(0.22), false}, 1);
@@ -92,8 +92,8 @@ void test_grip_steering() {
 }
 
 void test_high_speed_steering() {
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
     tick(world, car, {1, 0, false}, 300);
     auto start_forward = car.forward();
     start_forward.SetY(0);
@@ -112,8 +112,8 @@ void test_high_speed_steering() {
 
 struct DriftResult { double slip; double speed; double recovered; int skid_steps; };
 DriftResult run_drift(bool handbrake) {
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
     tick(world, car, {1, 0, false}, 300);
     double max_slip = 0;
     int skid_steps = 0;
@@ -138,22 +138,22 @@ void test_drift_recovery() {
 }
 
 void test_ridges() {
-    forza::PhysicsWorld world(true);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(true);
+    ambaretto::Car car(world);
     tick(world, car, {1, 0, false}, 720);
     require(car.position().GetZ() < -45 && car.position().GetY() > 0.25 && car.position().GetY() < 1.5,
             "car failed to cross the suspension ridges");
 }
 
 void test_ground_queries_and_chassis_collision() {
-    forza::PhysicsWorld world(true);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(true);
+    ambaretto::Car car(world);
     require(std::abs(car.position().GetY() - 0.56f) < 0.001f, "chassis center of mass is misplaced");
-    forza::GroundHit hit;
-    require(world.cast_ground(forza::Vec3(0, 2, 0), forza::Vec3(0, -1, 0), 4, hit), "ground ray missed");
+    ambaretto::GroundHit hit;
+    require(world.cast_ground(ambaretto::Vec3(0, 2, 0), ambaretto::Vec3(0, -1, 0), 4, hit), "ground ray missed");
     require(std::abs(hit.point.GetY()) < 0.001f && hit.normal.GetY() > 0.99f,
             "wheel ray hit the chassis instead of the ground");
-    require(world.cast_ground(forza::Vec3(0, 2, -15), forza::Vec3(0, -1, 0), 4, hit), "ridge ray missed");
+    require(world.cast_ground(ambaretto::Vec3(0, 2, -15), ambaretto::Vec3(0, -1, 0), 4, hit), "ridge ray missed");
     require(std::abs(hit.point.GetY() - 0.12f) < 0.005f, "wheel ray missed the ridge surface");
     // Disable suspension impulses to check Jolt's actual chassis collisions.
     for (int i = 0; i < 360; ++i) world.step();
@@ -164,8 +164,8 @@ void test_ground_queries_and_chassis_collision() {
 
 void test_world_reset_lifetime() {
     struct TestScene {
-        forza::PhysicsWorld world{false};
-        forza::Car car{world};
+        ambaretto::PhysicsWorld world{false};
+        ambaretto::Car car{world};
     };
     auto scene = std::make_unique<TestScene>();
     for (int i = 0; i < 8; ++i) {
@@ -179,13 +179,13 @@ void test_world_reset_lifetime() {
 }
 
 void test_city_terrain() {
-    const forza::Environment map;
-    forza::PhysicsWorld world(map);
-    forza::Car car(world);
-    forza::GroundHit hit;
-    for (const auto& p : {forza::Vec3(0, 0, 105), forza::Vec3(-95, 0, -85),
-            forza::Vec3(283, 0, 40), forza::Vec3(-210, 0, 80), forza::Vec3(350, 0, 250)}) {
-        require(world.cast_ground(p + forza::Vec3(0, 100, 0), forza::Vec3(0, -1, 0), 150, hit),
+    const ambaretto::Environment map;
+    ambaretto::PhysicsWorld world(map);
+    ambaretto::Car car(world);
+    ambaretto::GroundHit hit;
+    for (const auto& p : {ambaretto::Vec3(0, 0, 105), ambaretto::Vec3(-95, 0, -85),
+            ambaretto::Vec3(283, 0, 40), ambaretto::Vec3(-210, 0, 80), ambaretto::Vec3(350, 0, 250)}) {
+        require(world.cast_ground(p + ambaretto::Vec3(0, 100, 0), ambaretto::Vec3(0, -1, 0), 150, hit),
                 "city terrain has a collision hole");
         require(std::abs(hit.point.GetY() - map.height(p.GetX(), p.GetZ())) < 0.005f,
                 "rendered terrain does not match Jolt collision height");
@@ -197,8 +197,8 @@ void test_city_terrain() {
             "car did not settle at the city spawn");
     for (int i = 0; i < 1200; ++i) {
         // Follow the lane: dense frontage no longer leaves a field beside the avenue.
-        const auto target = forza::Vec3(-car.position().GetX(), 0, -12);
-        const float curvature = 2 * target.Dot(-car.forward().Cross(forza::Vec3::sAxisY())) / target.LengthSq();
+        const auto target = ambaretto::Vec3(-car.position().GetX(), 0, -12);
+        const float curvature = 2 * target.Dot(-car.forward().Cross(ambaretto::Vec3::sAxisY())) / target.LengthSq();
         const float steer = std::atan(car.tuning().wheelbase * curvature) / car.tuning().max_steer;
         tick(world, car, {1, std::clamp(steer, -1.0f, 1.0f), false}, 1);
         require(std::abs(car.position().GetX()) < 3, "car failed to stay on the narrow avenue");
@@ -206,21 +206,21 @@ void test_city_terrain() {
     const float terrain_y = map.height(car.position().GetX(), car.position().GetZ());
     std::cout << "City avenue: position " << car.position().GetX() << ", " << car.position().GetY()
         << ", " << car.position().GetZ() << ", elevation " << terrain_y << " m\n";
-    require(car.position().GetZ() < -30 && std::abs(terrain_y - forza::Environment::road_level) < .01f,
+    require(car.position().GetZ() < -30 && std::abs(terrain_y - ambaretto::Environment::road_level) < .01f,
             "car failed to follow the Miami avenue");
     require(std::abs(car.position().GetY() - terrain_y - 0.56f) < 0.7f,
             "car lost the raised terrain");
     const auto& building = map.buildings().front();
     const float x = building.center.GetX(), z = building.center.GetZ();
-    require(world.cast_ground(forza::Vec3(x, 100, z), forza::Vec3(0, -1, 0), 150, hit)
+    require(world.cast_ground(ambaretto::Vec3(x, 100, z), ambaretto::Vec3(0, -1, 0), 150, hit)
             && std::abs(hit.point.GetY() - map.height(x, z)) < 0.005f,
             "suspension ray treated a building roof as terrain");
     const float approach = z + building.size.GetZ() / 2 + 12;
-    car.reset(forza::Vec3(x, map.height(x, approach) + 0.56f, approach));
+    car.reset(ambaretto::Vec3(x, map.height(x, approach) + 0.56f, approach));
     tick(world, car, {1, 0, false}, 480);
     require(car.position().GetZ() > z + building.size.GetZ() / 2,
             "car passed through a city building");
-    require(map.submerged(forza::Vec3(330, -1, 0)), "water recovery did not trigger");
+    require(map.submerged(ambaretto::Vec3(330, -1, 0)), "water recovery did not trigger");
     car.reset(map.spawn());
     require(car.velocity().Length() < 0.001f && !car.wheels()[2].skidding,
             "recovery retained velocity or skid state");

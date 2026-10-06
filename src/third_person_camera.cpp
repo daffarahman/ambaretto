@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace forza {
+namespace ambaretto {
 constexpr float two_pi = 6.28318530718f;
 void ThirdPersonCamera::recoil(float amount) {
     pitch_ = std::clamp(pitch_ - amount, -.95f, 1.12f);
@@ -58,4 +58,4 @@ Vec3 ThirdPersonCamera::above_water(Vec3 position) {
     position.SetY(std::max(position.GetY(), Environment::water_level + .3f));
     return position;
 }
-} // namespace forza
+} // namespace ambaretto

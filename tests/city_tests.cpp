@@ -13,7 +13,7 @@
 #include <iomanip>
 
 namespace {
-using namespace forza;
+using namespace ambaretto;
 void require(bool value,const char* message) { if (!value) throw std::runtime_error(message); }
 City fixture() {
     City city = City::create("Block City"); std::string error;
@@ -68,7 +68,7 @@ void data_and_saves(const std::filesystem::path& directory) {
     std::filesystem::create_directory(temporary);
     require(!city.save(directory,error) && City::load(path,loaded,error),"write failure damaged the previous city");
     std::filesystem::remove(temporary);
-    auto bad = directory/"0000000000000000.city"; std::ofstream(bad) << "FORZA_CITY 1\ntruncated";
+    auto bad = directory/"0000000000000000.city"; std::ofstream(bad) << "AMBARETTO_CITY 1\ntruncated";
     require(!City::load(bad,loaded,error),"truncated save accepted");
     std::filesystem::remove(bad);
     require(std::filesystem::remove(directory/(second.id+".city")),"city delete failed");
@@ -117,7 +117,7 @@ void trees_and_time(const std::filesystem::path& directory) {
     require(!invalid.validate(error),"tree with NaN Z was accepted");
     // Original saves store vehicle cells, then end after the spawn.
     std::ostringstream legacy;
-    legacy << "FORZA_CITY 1\n" << city.id << '\n' << std::quoted(city.name) << '\n';
+    legacy << "AMBARETTO_CITY 1\n" << city.id << '\n' << std::quoted(city.name) << '\n';
     for (auto t : city.tiles) legacy << int(t);
     legacy << '\n' << city.buildings.size() << '\n';
     for (auto b : city.buildings) legacy << b.cell.x << ' ' << b.cell.z << ' ' << b.size << ' ' << b.height << '\n';
@@ -182,7 +182,7 @@ City ground_paint(const std::filesystem::path& directory) {
     require(!City::load(path,loaded,error),"invalid saved ground texture accepted");
     std::ofstream(path) << current.substr(0,textures);
     require(!City::load(path,loaded,error),"missing saved ground textures accepted");
-    std::string legacy = current.substr(0,textures); legacy[11] = '3'; std::ofstream(path) << legacy;
+    std::string legacy = current.substr(0,textures); legacy[legacy.find(' ')+1] = '3'; std::ofstream(path) << legacy;
     require(City::load(path,loaded,error) && loaded.tiles==city.tiles && loaded.road_axes==city.road_axes
         && std::all_of(loaded.ground.begin(),loaded.ground.end(),[](auto g){return g==CityGround::Soil;}),"version 3 city did not load with default soil");
     require(city.save(directory,error),"restoring painted fixture failed");
@@ -339,7 +339,7 @@ City terraced_ground(const std::filesystem::path& directory) {
         && loaded.vehicles[0].position==city.vehicles[0].position,"corner terrain save did not round-trip");
     std::ifstream file(path); std::ostringstream contents; contents << file.rdbuf(); file.close();
     const std::string current = contents.str(); const auto heights = current.rfind('\n',current.size()-2)+1;
-    require(current.rfind("FORZA_CITY 6\n",0)==0 && current.size()-heights-1==city.elevation.size(),"city did not save version 6 shared corners");
+    require(current.rfind("AMBARETTO_CITY 6\n",0)==0 && current.size()-heights-1==city.elevation.size(),"city did not save version 6 shared corners");
     std::string bad = current; bad[heights] = '9'; std::ofstream(path) << bad;
     require(!City::load(path,loaded,error),"invalid corner height was accepted");
     bad = current; bad.erase(heights+5,1); std::ofstream(path) << bad;
@@ -348,7 +348,7 @@ City terraced_ground(const std::filesystem::path& directory) {
     require(!City::load(path,loaded,error),"saved corner grid with an excessive neighbor step was accepted");
     std::ofstream(path) << current.substr(0,heights);
     require(!City::load(path,loaded,error),"missing corner elevation grid was accepted");
-    std::string legacy = current.substr(0,heights); legacy[11] = '5';
+    std::string legacy = current.substr(0,heights); legacy[legacy.find(' ')+1] = '5';
     for (int z = 0; z < City::width; ++z) for (int x = 0; x < City::width; ++x)
         legacy += char('0'+(city.land({x,z}) ? (x>=68 ? 2 : x>=64 ? 1 : 0) : 0));
     legacy[heights+City::index({60,70})] = '3'; legacy += '\n'; std::ofstream(path) << legacy;
@@ -362,7 +362,7 @@ City terraced_ground(const std::filesystem::path& directory) {
         && loaded.vehicles.size()==city.vehicles.size() && loaded.ramp_axis({62,64})==0,
         "version 5 migration lost city objects or left an incompatible road ramp");
     steps(loaded);
-    legacy = current.substr(0,heights); legacy[11] = '4'; std::ofstream(path) << legacy;
+    legacy = current.substr(0,heights); legacy[legacy.find(' ')+1] = '4'; std::ofstream(path) << legacy;
     require(City::load(path,loaded,error) && loaded.ground==city.ground
         && std::all_of(loaded.elevation.begin(),loaded.elevation.end(),[](auto h){return h==0;}),"version 4 city did not retain flat terrain");
     require(city.save(directory,error),"restoring corner terrain save failed");
@@ -879,7 +879,7 @@ int main(int argc,char** argv) {
             if (!city.save(argv[2],error)) throw std::runtime_error(error);
             std::cout << (std::filesystem::path(argv[2])/(city.id+".city")).string() << '\n'; return 0;
         }
-        const auto directory = std::filesystem::temp_directory_path()/("forza-city-test-"+City::create("test").id);
+        const auto directory = std::filesystem::temp_directory_path()/("ambaretto-city-test-"+City::create("test").id);
         data_and_saves(directory); trees_and_time(directory); ground_paint(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay();
         // Remove only this test's two known files; no recursive filesystem deletion.
         for (const auto& entry : std::filesystem::directory_iterator(directory)) std::filesystem::remove(entry.path());

@@ -2,7 +2,7 @@
 #include <array>
 #include <cmath>
 
-namespace forza {
+namespace ambaretto {
 struct AirportPoint { float x, z; };
 // Shared by terrain, pavement, rendering, aircraft parking and recovery.
 struct Airport {
@@ -84,4 +84,4 @@ inline constexpr std::array<Airport, 2> airports{{
     {-1040, 0, -1, 75, "MIAMI INTERNATIONAL AIRPORT", true},
     {-2160, 4380, 1, 75, "KEY WEST AIRFIELD"}
 }};
-} // namespace forza
+} // namespace ambaretto

@@ -7,7 +7,7 @@
 #include <cstring>
 #include <string>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 // raylib bakes the GLB node translation into the imported vertices. Undo that
 // export pivot before mirroring the half-body about its original X = 0 seam.
@@ -345,4 +345,4 @@ void CarRenderer::draw_model(const Model& model, const Matrix& transform, const 
     }
     rlEnableBackfaceCulling();
 }
-} // namespace forza
+} // namespace ambaretto

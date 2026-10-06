@@ -8,7 +8,7 @@ void require(bool value, const char* message) { if (!value) throw std::runtime_e
 bool same(Color a, Color b) { return a.r == b.r && a.g == b.g && a.b == b.b; }
 }
 int main(int argc, char** argv) {
-    using namespace forza;
+    using namespace ambaretto;
     SetTraceLogLevel(LOG_WARNING);
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
     InitWindow(1024, 600, "Desktop menu check");

@@ -10,7 +10,7 @@
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 void check_aim_assist() {
-    using namespace forza;
+    using namespace ambaretto;
     PhysicsWorld world(false);
     Character player(world, nullptr, true), body(world), left(world), right(world), behind(world), distant(world), disabled(world);
     player.reset(Vec3(0, .08f, 0));
@@ -89,7 +89,7 @@ void check_aim_assist() {
 }
 }
 int main() {
-    using namespace forza;
+    using namespace ambaretto;
     try {
         check_aim_assist();
         require(wheel_selection(0, -1, WeaponType::Pistol) == WeaponType::Unarmed &&

@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 const char* depth_vertex = R"GLSL(#version 330
 in vec3 vertexPosition;
@@ -261,4 +261,4 @@ void SceneLighting::apply(Shader shader, const Camera3D& camera, const Daylight&
         }
     }
 }
-} // namespace forza
+} // namespace ambaretto

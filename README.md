@@ -1,4 +1,4 @@
-# Forza Ambazon
+# Ambaretto
 
 A C++17 block-based island city builder with native [raylib](https://www.raylib.com/) and [Jolt Physics](https://github.com/jrouwe/JoltPhysics). Create and save multiple cities, build flat land and connected roads, place plain square building blocks, set a player spawn, and place cars or aircraft. Explore your city using the existing driving, flying, pedestrian, weapons, and police systems.
 
@@ -18,10 +18,10 @@ CMake downloads Jolt **5.4.0**, verifies the archive's SHA-256, and builds it as
 Configure, build, and run from the project directory:
 
 ```bash
-cd /d/Daffa/Code/forzaambazon
+cd /d/Daffa/Code/ambaretto
 cmake --preset ucrt64
 cmake --build --preset ucrt64
-./build/ucrt64/forzaambazon.exe
+./build/ucrt64/Ambaretto.exe
 ```
 
 The preset creates a Debug build with symbols for GDB. For an optimized build:
@@ -29,7 +29,7 @@ The preset creates a Debug build with symbols for GDB. For an optimized build:
 ```bash
 cmake --preset ucrt64-release
 cmake --build --preset ucrt64-release
-./build/ucrt64-release/forzaambazon.exe
+./build/ucrt64-release/Ambaretto.exe
 ```
 
 Run from UCRT64 so its shared libraries are on `PATH`. In PowerShell, prepend `C:\msys64\ucrt64\bin` to `PATH` before using the same CMake commands or running the executable:
@@ -38,12 +38,14 @@ Run from UCRT64 so its shared libraries are on `PATH`. In PowerShell, prepend `C
 $env:PATH = 'C:\msys64\ucrt64\bin;' + $env:PATH
 cmake --preset ucrt64
 cmake --build --preset ucrt64
-.\build\ucrt64\forzaambazon.exe
+.\build\ucrt64\Ambaretto.exe
 ```
 
 ## City builder
 
 The game starts at **Your cities**. Use **New city** to create an empty water map, **Edit / build** to change a saved city, or **Play city** to explore it. The menu also supports rename and confirmed deletion. **Settings** here contains Graphics and Controller mapping. While playing, choose **File > End Game** to return here; Quit is available in the main menu.
+
+City saves use the `AMBARETTO_CITY` header. For saves exported before the project was renamed, replace only the first word of the first line with `AMBARETTO_CITY`; keep the version number and remaining data unchanged.
 
 Cities use a **128 x 128 grid of 11.2-meter blocks** (1.4336 km square). Create multiple islands anywhere by dragging rectangles with **Island / expand**. Bulldozing can separate land into islands. Roads drawn over water automatically become bridges with decks, railings, supports, and matching collision; diagonal bridges follow the diagonal pavement. Removing a bridge restores water. Buildable land stays flat at 3.2 m above water. The shoreline slopes gently outward through shallow water to the seabed over 32 m, with rounded outer corners and matching terrain collision. All land and shorelines default to `soil.png`, with no automatic beach detection. Use Ground texture to draw rectangles of `grass.png`, `beach-sand.png`, `soil.png`, or `asphalt.png`; the saved textures appear in both the editor and gameplay.
 
@@ -166,8 +168,8 @@ Cars and aircraft start with 100 health. Hard crashes and bullets reduce it; gen
 Start beside a traffic car, ready to steal it, or capture a preview:
 
 ```bash
-./build/ucrt64/forzaambazon.exe --traffic
-./build/ucrt64/forzaambazon.exe --traffic --screenshot build/traffic-preview.png
+./build/ucrt64/Ambaretto.exe --traffic
+./build/ucrt64/Ambaretto.exe --traffic --screenshot build/traffic-preview.png
 ```
 
 ### Flying
@@ -232,14 +234,14 @@ This is an arcade vehicle model. Wheel meshes are visual; Jolt handles the chass
 
 ```bash
 ctest --preset ucrt64
-gdb ./build/ucrt64/forzaambazon.exe
+gdb ./build/ucrt64/Ambaretto.exe
 ```
 
 Open directly in tuning mode, or capture the panel:
 
 ```bash
-./build/ucrt64/forzaambazon.exe --city path/to/saved.city --tuning
-./build/ucrt64/forzaambazon.exe --city path/to/saved.city --tuning --screenshot build/tuning-preview.png
+./build/ucrt64/Ambaretto.exe --city path/to/saved.city --tuning
+./build/ucrt64/Ambaretto.exe --city path/to/saved.city --tuning --screenshot build/tuning-preview.png
 ```
 
 All source, build configuration, and checks use C++; no Go toolchain is needed.
@@ -255,15 +257,15 @@ All source, build configuration, and checks use C++; no Go toolchain is needed.
 For a rendered map preview (saves the image and exits):
 
 ```bash
-./build/ucrt64/forzaambazon.exe --city path/to/saved.city --overview --screenshot build/city-overview.png
-./build/ucrt64/forzaambazon.exe --city path/to/saved.city --map --screenshot build/player-map.png
+./build/ucrt64/Ambaretto.exe --city path/to/saved.city --overview --screenshot build/city-overview.png
+./build/ucrt64/Ambaretto.exe --city path/to/saved.city --map --screenshot build/player-map.png
 ```
 
 Start on foot, or capture a character preview:
 
 ```bash
-./build/ucrt64/forzaambazon.exe --city path/to/saved.city
-./build/ucrt64/forzaambazon.exe --city path/to/saved.city --screenshot build/character-preview.png
+./build/ucrt64/Ambaretto.exe --city path/to/saved.city
+./build/ucrt64/Ambaretto.exe --city path/to/saved.city --screenshot build/character-preview.png
 ```
 
 Capture the empty editor with `--editor --screenshot build/editor.png`, or a saved city with `--city path/to/saved.city --editor --screenshot build/editor.png`. A plain `--screenshot` captures the city menu.

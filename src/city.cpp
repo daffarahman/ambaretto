@@ -18,7 +18,7 @@
 #include <windows.h>
 #endif
 
-namespace forza {
+namespace ambaretto {
 namespace {
 float coast_height(const City& city,float x,float z) {
     const auto cell = City::cell(x,z);
@@ -835,7 +835,7 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
     const auto path = directory/(id+".city"); auto temporary = path; temporary += ".tmp";
     std::ofstream file(temporary,std::ios::trunc);
     if (!file) return fail(error,"Cannot write this city. Your previous save is intact.");
-    file << "FORZA_CITY 6\n" << id << '\n' << std::quoted(name) << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10);
+    file << "AMBARETTO_CITY 6\n" << id << '\n' << std::quoted(name) << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10);
     for (auto t : tiles) file << char('0'+int(t));
     file << '\n' << buildings.size() << '\n';
     for (auto b : buildings) file << b.cell.x << ' ' << b.cell.z << ' ' << b.size << ' ' << b.height << '\n';
@@ -864,7 +864,7 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
     std::error_code ec;
     if (std::filesystem::file_size(path,ec) > 1024*1024 || ec) return fail(error,"City save is missing or too large.");
     std::ifstream file(path); City read; std::string magic, terrain; int version = 0;
-    if (!(file >> magic >> version >> read.id >> std::quoted(read.name) >> terrain) || magic != "FORZA_CITY" || version<1 || version>6
+    if (!(file >> magic >> version >> read.id >> std::quoted(read.name) >> terrain) || magic != "AMBARETTO_CITY" || version<1 || version>6
         || terrain.size() != read.tiles.size()) return fail(error,"Invalid or unsupported city save.");
     for (std::size_t i = 0; i < terrain.size(); ++i) {
         if (terrain[i] < '0' || terrain[i] > (version>=3 ? '3' : '2')) return fail(error,"Invalid city terrain.");
@@ -977,4 +977,4 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
     }
     city = std::move(read); error.clear(); return true;
 }
-} // namespace forza
+} // namespace ambaretto

@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 Vec3 flat(Vec3 p) { p.SetY(0); return p; }
 float segment_distance(Vec3 p, Vec3 a, Vec3 b) {
@@ -214,4 +214,4 @@ unsigned Pedestrians::alarm(Vec3 origin, float radius) {
     }
     return witnesses;
 }
-} // namespace forza
+} // namespace ambaretto

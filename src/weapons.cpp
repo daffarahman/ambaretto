@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace forza {
+namespace ambaretto {
 const WeaponData& weapon_data(WeaponType type) {
     static const std::array<WeaponData, int(WeaponType::Count)> data{{
         {"Unarmed", 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, Vec3::sZero(), false},
@@ -163,4 +163,4 @@ Shot Weapons::fire(PhysicsWorld& world, const Pedestrians* pedestrians, Vec3 ori
     return {true, hit.character != nullptr || hit.car != nullptr || hit.plane != nullptr, origin, hit.point, data().recoil, hit.character,
         alive && !hit.character->alive(), alive};
 }
-} // namespace forza
+} // namespace ambaretto

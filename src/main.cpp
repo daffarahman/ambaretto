@@ -26,32 +26,32 @@
 #include <vector>
 
 namespace {
-Vector3 render_vector(const forza::Vec3& value) {
+Vector3 render_vector(const ambaretto::Vec3& value) {
     return {float(value.GetX()), float(value.GetY()), float(value.GetZ())};
 }
 Vector3 lerp(Vector3 a, Vector3 b, float t) {
     return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
 }
 
-struct SkidMark { forza::Vec3 from, to; };
+struct SkidMark { ambaretto::Vec3 from, to; };
 struct Scene {
-    const forza::Environment& environment;
-    forza::PhysicsWorld world;
-    forza::Car car{world};
-    forza::Plane plane{world};
-    std::vector<std::unique_ptr<forza::Plane>> aircraft = forza::parked_aircraft(world, environment);
-    forza::Traffic traffic{world, environment};
-    forza::Pedestrians pedestrians{world, environment};
-    forza::Police police{world, environment, &traffic, &pedestrians};
-    forza::Player player{world, car, environment, &plane, &traffic, &pedestrians, &aircraft, &police};
+    const ambaretto::Environment& environment;
+    ambaretto::PhysicsWorld world;
+    ambaretto::Car car{world};
+    ambaretto::Plane plane{world};
+    std::vector<std::unique_ptr<ambaretto::Plane>> aircraft = ambaretto::parked_aircraft(world, environment);
+    ambaretto::Traffic traffic{world, environment};
+    ambaretto::Pedestrians pedestrians{world, environment};
+    ambaretto::Police police{world, environment, &traffic, &pedestrians};
+    ambaretto::Player player{world, car, environment, &plane, &traffic, &pedestrians, &aircraft, &police};
     std::vector<SkidMark> marks;
     std::size_t next_mark = 0;
-    std::array<forza::Vec3, 4> last_skid{};
+    std::array<ambaretto::Vec3, 4> last_skid{};
     std::array<bool, 4> last_valid{};
-    const forza::Car* skid_car = nullptr;
+    const ambaretto::Car* skid_car = nullptr;
     static constexpr std::size_t max_marks = 2400;
 
-    explicit Scene(const forza::Environment& map) : environment(map), world(map) {
+    explicit Scene(const ambaretto::Environment& map) : environment(map), world(map) {
         marks.reserve(max_marks);
         if (map.city()) { plane.set_simulated(false); plane.reset({-9000,-8,-9000}); }
         reset();
@@ -59,7 +59,7 @@ struct Scene {
     void reset() {
         police.clear();
         if (environment.city() && !player.flying() && player.on_foot()) {
-            player.respawn_on_foot(environment.spawn()-forza::Vec3(0,.48f,0));
+            player.respawn_on_foot(environment.spawn()-ambaretto::Vec3(0,.48f,0));
             marks.clear(); next_mark = 0; last_valid.fill(false); return;
         }
         if (player.flying()) player.recover_plane();
@@ -70,7 +70,7 @@ struct Scene {
         last_valid.fill(false);
     }
     void respawn_on_foot() { respawn_on_foot(player.position()); }
-    void respawn_on_foot(forza::Vec3 origin) {
+    void respawn_on_foot(ambaretto::Vec3 origin) {
         police.clear();
         player.respawn_near(origin);
     }
@@ -84,7 +84,7 @@ struct Scene {
                 last_valid[i] = false;
                 continue;
             }
-            const forza::Vec3 point = wheel.ground_point + wheel.ground_normal * 0.09f;
+            const ambaretto::Vec3 point = wheel.ground_point + wheel.ground_normal * 0.09f;
             if (!last_valid[i]) {
                 last_skid[i] = point;
                 last_valid[i] = true;
@@ -108,10 +108,10 @@ struct Scene {
 void draw_skid_marks(const std::vector<SkidMark>& marks) {
     constexpr Color tint{26, 28, 31, 185};
     for (const auto& mark : marks) {
-        const forza::Vec3 direction = mark.to - mark.from;
+        const ambaretto::Vec3 direction = mark.to - mark.from;
         const float length = std::hypot(direction.GetX(), direction.GetZ());
         if (length < float(0.001)) continue;
-        const forza::Vec3 side(-direction.GetZ() / length * float(0.105), 0,
+        const ambaretto::Vec3 side(-direction.GetZ() / length * float(0.105), 0,
                              direction.GetX() / length * float(0.105));
         const Vector3 a = render_vector(mark.from - side);
         const Vector3 b = render_vector(mark.from + side);
@@ -122,14 +122,14 @@ void draw_skid_marks(const std::vector<SkidMark>& marks) {
     }
 }
 
-void draw_box(const forza::Vec3& center, const forza::Quat& rotation,
-              const forza::Vec3& size, Color tint, bool outline = true) {
+void draw_box(const ambaretto::Vec3& center, const ambaretto::Quat& rotation,
+              const ambaretto::Vec3& size, Color tint, bool outline = true) {
     const auto half = size * float(0.5);
-    const std::array<forza::Vec3, 8> local = {
-        forza::Vec3(-half.GetX(), -half.GetY(), -half.GetZ()), forza::Vec3(half.GetX(), -half.GetY(), -half.GetZ()),
-        forza::Vec3(half.GetX(), half.GetY(), -half.GetZ()), forza::Vec3(-half.GetX(), half.GetY(), -half.GetZ()),
-        forza::Vec3(-half.GetX(), -half.GetY(), half.GetZ()), forza::Vec3(half.GetX(), -half.GetY(), half.GetZ()),
-        forza::Vec3(half.GetX(), half.GetY(), half.GetZ()), forza::Vec3(-half.GetX(), half.GetY(), half.GetZ())};
+    const std::array<ambaretto::Vec3, 8> local = {
+        ambaretto::Vec3(-half.GetX(), -half.GetY(), -half.GetZ()), ambaretto::Vec3(half.GetX(), -half.GetY(), -half.GetZ()),
+        ambaretto::Vec3(half.GetX(), half.GetY(), -half.GetZ()), ambaretto::Vec3(-half.GetX(), half.GetY(), -half.GetZ()),
+        ambaretto::Vec3(-half.GetX(), -half.GetY(), half.GetZ()), ambaretto::Vec3(half.GetX(), -half.GetY(), half.GetZ()),
+        ambaretto::Vec3(half.GetX(), half.GetY(), half.GetZ()), ambaretto::Vec3(-half.GetX(), half.GetY(), half.GetZ())};
     std::array<Vector3, 8> p{};
     for (std::size_t i = 0; i < p.size(); ++i) p[i] = render_vector(center + rotation * local[i]);
     constexpr int faces[6][4] = {{0,1,2,3}, {5,4,7,6}, {4,0,3,7}, {1,5,6,2}, {3,2,6,7}, {4,5,1,0}};
@@ -153,21 +153,21 @@ Color traffic_paint(std::size_t index) {
     return colors[index % std::size(colors)];
 }
 
-void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const Camera3D& camera,
+void draw_car(const ambaretto::Car& car, const ambaretto::CarRenderer& renderer, const Camera3D& camera,
               Color paint = {235, 235, 224, 255}, Shader override_shader = {}, bool emergency = false) {
-    if (car.type() == forza::CarType::Police) paint = {30, 36, 48, 255};
+    if (car.type() == ambaretto::CarType::Police) paint = {30, 36, 48, 255};
     if (car.destroyed()) paint = {18, 18, 18, 255};
     emergency &= !car.destroyed();
     const bool model_body = renderer.draw_body(car, camera, paint, override_shader);
     if (!model_body) {
         const auto basis = car.rotation();
-        draw_box(car.position() + car.rotate(forza::Vec3(0, forza::chassis_offset, 0)), basis,
-                 forza::Vec3(float(1.85), float(0.5), float(3.7)), paint);
-        draw_box(car.position() + car.rotate(forza::Vec3(0, float(0.93), float(0.25))), basis,
-                 forza::Vec3(float(1.45), float(0.55), float(1.7)), car.destroyed() ? paint : Color{39, 58, 73, 255});
+        draw_box(car.position() + car.rotate(ambaretto::Vec3(0, ambaretto::chassis_offset, 0)), basis,
+                 ambaretto::Vec3(float(1.85), float(0.5), float(3.7)), paint);
+        draw_box(car.position() + car.rotate(ambaretto::Vec3(0, float(0.93), float(0.25))), basis,
+                 ambaretto::Vec3(float(1.45), float(0.55), float(1.7)), car.destroyed() ? paint : Color{39, 58, 73, 255});
     }
-    if (car.type() == forza::CarType::Police) {
-        const auto box = [&](forza::Vec3 p, forza::Vec3 size, Color color) {
+    if (car.type() == ambaretto::CarType::Police) {
+        const auto box = [&](ambaretto::Vec3 p, ambaretto::Vec3 size, Color color) {
             draw_box(car.position() + car.rotate(p), car.rotation(), size, car.destroyed() ? paint : color, false);
         };
         const float roof = model_body ? .88f : 1.205f;
@@ -181,9 +181,9 @@ void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const C
         const auto center = car.wheel_center(wheel);
         DrawLine3D(render_vector(mount), render_vector(center), LIGHTGRAY);
         if (renderer.draw_wheel(car, wheel, camera, override_shader)) continue;
-        auto axis = car.rotate(forza::Vec3(1, 0, 0));
-        if (wheel.front) axis = forza::Quat::sRotation(car.rotate(forza::Vec3(0, 1, 0)), car.steering()) * axis;
-        const float radius = car.tuning().wheel_radius, size = radius / forza::wheel_radius;
+        auto axis = car.rotate(ambaretto::Vec3(1, 0, 0));
+        if (wheel.front) axis = ambaretto::Quat::sRotation(car.rotate(ambaretto::Vec3(0, 1, 0)), car.steering()) * axis;
+        const float radius = car.tuning().wheel_radius, size = radius / ambaretto::wheel_radius;
         DrawCylinderEx(render_vector(center - axis * (0.13f * size)),
                        render_vector(center + axis * (0.13f * size)), radius, radius, 16, BLACK);
         DrawCylinderEx(render_vector(center - axis * (0.14f * size)),
@@ -192,21 +192,21 @@ void draw_car(const forza::Car& car, const forza::CarRenderer& renderer, const C
 }
 
 template<class Vehicle>
-void draw_vehicle_damage(const Vehicle& vehicle, const forza::CarRenderer& renderer, const Camera3D& camera,
-                         float draw_distance, float scale = 1, forza::Vec3 smoke = {0, .5f, -1.2f}) {
+void draw_vehicle_damage(const Vehicle& vehicle, const ambaretto::CarRenderer& renderer, const Camera3D& camera,
+                         float draw_distance, float scale = 1, ambaretto::Vec3 smoke = {0, .5f, -1.2f}) {
     if (vehicle.health() > 50) return;
     const bool wreck = vehicle.destroyed();
     const float age = vehicle.explosion_time();
     const auto center = wreck ? vehicle.explosion_position() : vehicle.position() + vehicle.rotate(smoke);
-    if ((center - forza::Vec3(camera.position.x, camera.position.y, camera.position.z)).LengthSq() > draw_distance * draw_distance) return;
+    if ((center - ambaretto::Vec3(camera.position.x, camera.position.y, camera.position.z)).LengthSq() > draw_distance * draw_distance) return;
     renderer.draw_damage(camera, center, wreck, age, scale, float(GetTime()));
 }
 
-void draw_character(const forza::Character& character, const forza::Environment& environment, std::size_t appearance = 0, bool police = false) {
+void draw_character(const ambaretto::Character& character, const ambaretto::Environment& environment, std::size_t appearance = 0, bool police = false) {
     const auto feet = character.position();
     const float ground = environment.surface_height(feet);
     const float radius = std::clamp(0.33f - (feet.GetY() - ground) * 0.08f, 0.18f, 0.33f);
-    const auto shadow_point = [&](float x, float z) { return Vector3{x, environment.surface_height(forza::Vec3(x, feet.GetY(), z)) + 0.085f, z}; };
+    const auto shadow_point = [&](float x, float z) { return Vector3{x, environment.surface_height(ambaretto::Vec3(x, feet.GetY(), z)) + 0.085f, z}; };
     for (int i = 0; !character.swimming() && i < 24; ++i) {
         const float a = i * 6.2831853f / 24, b = (i + 1) * 6.2831853f / 24;
         DrawTriangle3D(shadow_point(feet.GetX(), feet.GetZ()),
@@ -219,7 +219,7 @@ void draw_character(const forza::Character& character, const forza::Environment&
     const Color shirt = police ? Color{25, 38, 65, 255} : shirts[appearance % std::size(shirts)], skin = skins[appearance % std::size(skins)];
     const Color pants{39, 48, 66, 255}, shoes = police ? Color{24, 26, 29, 255} : Color{214, 221, 222, 255};
     const auto parts = character.body_parts();
-    using Part = forza::BodyPart;
+    using Part = ambaretto::BodyPart;
     for (std::size_t i = 0; i < parts.size(); ++i) {
         const auto kind = Part(i);
         const auto& part = parts[i];
@@ -230,47 +230,47 @@ void draw_character(const forza::Character& character, const forza::Environment&
         if (kind == Part::LeftFoot || kind == Part::RightFoot) color = shoes;
         if (kind == Part::Head) {
             DrawSphereEx(render_vector(part.position), part.size.GetY() / 2, 10, 12, skin);
-            draw_box(part.position + part.rotation * forza::Vec3(0, .14f, .02f), part.rotation,
-                forza::Vec3(.28f, .08f, .26f), police ? shirt : Color{44, 35, 31, 255}, false);
-            if (police) draw_box(part.position + part.rotation * forza::Vec3(0, .1f, -.13f), part.rotation, {.31f, .035f, .18f}, shirt, false);
-            DrawSphereEx(render_vector(part.position + part.rotation * forza::Vec3(0, -.02f, -.16f)), .045f, 6, 8, skin);
+            draw_box(part.position + part.rotation * ambaretto::Vec3(0, .14f, .02f), part.rotation,
+                ambaretto::Vec3(.28f, .08f, .26f), police ? shirt : Color{44, 35, 31, 255}, false);
+            if (police) draw_box(part.position + part.rotation * ambaretto::Vec3(0, .1f, -.13f), part.rotation, {.31f, .035f, .18f}, shirt, false);
+            DrawSphereEx(render_vector(part.position + part.rotation * ambaretto::Vec3(0, -.02f, -.16f)), .045f, 6, 8, skin);
         } else if (kind == Part::Pelvis || kind == Part::Torso || kind == Part::LeftHand || kind == Part::RightHand
             || kind == Part::LeftFoot || kind == Part::RightFoot) {
             draw_box(part.position, part.rotation, part.size, color, false);
             if (police && kind == Part::Torso) {
-                draw_box(part.position + part.rotation * forza::Vec3(-.075f, .1f, -.116f), part.rotation, {.06f, .075f, .02f}, GOLD, false);
-                draw_box(part.position + part.rotation * forza::Vec3(0, -.15f, 0), part.rotation, {.37f, .055f, .245f}, BLACK, false);
+                draw_box(part.position + part.rotation * ambaretto::Vec3(-.075f, .1f, -.116f), part.rotation, {.06f, .075f, .02f}, GOLD, false);
+                draw_box(part.position + part.rotation * ambaretto::Vec3(0, -.15f, 0), part.rotation, {.37f, .055f, .245f}, BLACK, false);
             }
         } else {
             const float radius = part.size.GetX() / 2;
-            const auto axis = part.rotation * forza::Vec3(0, part.size.GetY() / 2 - radius, 0);
+            const auto axis = part.rotation * ambaretto::Vec3(0, part.size.GetY() / 2 - radius, 0);
             DrawCapsule(render_vector(part.position - axis), render_vector(part.position + axis), radius, 6, 8, color);
         }
     }
 }
 
-void draw_weapon_model(const forza::BodyPartPose& hand, forza::WeaponType type, float flash = 0) {
-    if (type == forza::WeaponType::Unarmed) return;
+void draw_weapon_model(const ambaretto::BodyPartPose& hand, ambaretto::WeaponType type, float flash = 0) {
+    if (type == ambaretto::WeaponType::Unarmed) return;
     const auto rotation = hand.rotation;
-    const float length = forza::weapon_data(type).length;
+    const float length = ambaretto::weapon_data(type).length;
     const Color metal{47, 49, 52, 255}, wood{127, 74, 36, 255};
-    const auto box = [&](forza::Vec3 offset, forza::Vec3 size, Color color) {
+    const auto box = [&](ambaretto::Vec3 offset, ambaretto::Vec3 size, Color color) {
         draw_box(hand.position + rotation * offset, rotation, size, color, false);
     };
     box({0, .06f, -length * .35f}, {.10f, .11f, length}, metal);
     box({0, -.07f, 0}, {.075f, .17f, .09f}, metal);
-    if (type != forza::WeaponType::Pistol) {
-        box({0, .04f, .09f}, {.09f, .13f, .16f}, type == forza::WeaponType::AK47 ? wood : metal);
+    if (type != ambaretto::WeaponType::Pistol) {
+        box({0, .04f, .09f}, {.09f, .13f, .16f}, type == ambaretto::WeaponType::AK47 ? wood : metal);
         box({0, -.1f, -length * .3f}, {.075f, .22f, .1f}, metal);
-        if (type == forza::WeaponType::AK47) box({0, .04f, -.26f}, {.12f, .13f, .21f}, wood);
+        if (type == ambaretto::WeaponType::AK47) box({0, .04f, -.26f}, {.12f, .13f, .21f}, wood);
     }
-    if (flash > 0) DrawSphereEx(render_vector(hand.position + rotation * forza::Vec3(0, .06f, -length * .88f)), .07f, 6, 8, YELLOW);
+    if (flash > 0) DrawSphereEx(render_vector(hand.position + rotation * ambaretto::Vec3(0, .06f, -length * .88f)), .07f, 6, 8, YELLOW);
 }
-void draw_weapon(const forza::Character& character, forza::WeaponType type, float flash) {
+void draw_weapon(const ambaretto::Character& character, ambaretto::WeaponType type, float flash) {
     if (character.alive() && !character.ragdolling() && !character.swimming()) draw_weapon_model(character.held_weapon(), type, flash);
 }
 
-void draw_wanted(const forza::WantedLevel& wanted, int x, int y) {
+void draw_wanted(const ambaretto::WantedLevel& wanted, int x, int y) {
     if (!wanted.stars()) return;
     DrawRectangle(x, y, 180, 34, {19, 28, 45, 230});
     for (int i = 0; i < 6; ++i) {
@@ -286,74 +286,74 @@ void draw_wanted(const forza::WantedLevel& wanted, int x, int y) {
     if (wanted.escape_progress() > 0) DrawRectangle(x, y + 31, int(180 * wanted.escape_progress()), 3, GOLD);
 }
 
-void draw_ammo(const forza::Weapons& weapons, int x, int y) {
-    if (weapons.selected() == forza::WeaponType::Unarmed) return;
+void draw_ammo(const ambaretto::Weapons& weapons, int x, int y) {
+    if (weapons.selected() == ambaretto::WeaponType::Unarmed) return;
     DrawRectangle(x, y, 180, weapons.reloading() ? 62 : 40, {19, 28, 45, 230});
     const char* ammo = TextFormat("%d / %d", weapons.ammo(), weapons.reserve());
-    forza::ui::draw_text(ammo, x + (180 - forza::ui::measure_text(ammo, 24)) / 2, y + 8, 24, RAYWHITE);
+    ambaretto::ui::draw_text(ammo, x + (180 - ambaretto::ui::measure_text(ammo, 24)) / 2, y + 8, 24, RAYWHITE);
     if (weapons.reloading()) {
         const char* status = "RELOADING";
-        forza::ui::draw_text(status, x + (180 - forza::ui::measure_text(status, 14)) / 2, y + 40, 14, LIGHTGRAY);
+        ambaretto::ui::draw_text(status, x + (180 - ambaretto::ui::measure_text(status, 14)) / 2, y + 40, 14, LIGHTGRAY);
     }
 }
 
-void draw_weapon_wheel(forza::WeaponType selection, Vector2 cursor) {
+void draw_weapon_wheel(ambaretto::WeaponType selection, Vector2 cursor) {
     const Vector2 center{GetScreenWidth() * .5f, GetScreenHeight() * .5f};
     const float radius = std::min(200.f, GetScreenHeight() * .28f);
-    DrawRectangle(0, forza::menu_height, GetScreenWidth(), GetScreenHeight() - forza::menu_height, {8, 14, 23, 130});
-    for (int i = 0; i < int(forza::WeaponType::Count); ++i) {
+    DrawRectangle(0, ambaretto::menu_height, GetScreenWidth(), GetScreenHeight() - ambaretto::menu_height, {8, 14, 23, 130});
+    for (int i = 0; i < int(ambaretto::WeaponType::Count); ++i) {
         const bool selected = i == int(selection);
         DrawRing(center, radius * .40f, radius, -135.f + i * 90, -45.f + i * 90, 24,
             selected ? Color{68, 134, 157, 235} : Color{27, 36, 45, 235});
         const float angle = i * 1.57079633f;
         const Vector2 label{center.x + std::sin(angle) * radius * .72f, center.y - std::cos(angle) * radius * .72f};
-        const char* name = forza::weapon_data(forza::WeaponType(i)).name;
-        forza::ui::draw_text(name, int(label.x) - forza::ui::measure_text(name, 18) / 2, int(label.y) - 9, 18, selected ? YELLOW : RAYWHITE);
+        const char* name = ambaretto::weapon_data(ambaretto::WeaponType(i)).name;
+        ambaretto::ui::draw_text(name, int(label.x) - ambaretto::ui::measure_text(name, 18) / 2, int(label.y) - 9, 18, selected ? YELLOW : RAYWHITE);
     }
     DrawCircleV(center, radius * .39f, {16, 24, 32, 245});
-    const char* name = forza::weapon_data(selection).name;
-    forza::ui::draw_text(name, int(center.x) - forza::ui::measure_text(name, 20) / 2, int(center.y) - 12, 20, RAYWHITE);
+    const char* name = ambaretto::weapon_data(selection).name;
+    ambaretto::ui::draw_text(name, int(center.x) - ambaretto::ui::measure_text(name, 20) / 2, int(center.y) - 12, 20, RAYWHITE);
     const char* hint = "Release to equip";
-    forza::ui::draw_text(hint, int(center.x) - forza::ui::measure_text(hint, 18) / 2, int(center.y + radius + 20), 18, RAYWHITE);
-    if (selection != forza::WeaponType::Unarmed) {
-        const auto& data = forza::weapon_data(selection);
+    ambaretto::ui::draw_text(hint, int(center.x) - ambaretto::ui::measure_text(hint, 18) / 2, int(center.y + radius + 20), 18, RAYWHITE);
+    if (selection != ambaretto::WeaponType::Unarmed) {
+        const auto& data = ambaretto::weapon_data(selection);
         const char* details = TextFormat("DAMAGE %.0f   MAG %d   %s", data.damage, data.magazine, data.automatic ? "AUTO" : "SEMI");
-        forza::ui::draw_text(details, int(center.x) - forza::ui::measure_text(details, 16) / 2, int(center.y + radius + 50), 16, LIGHTGRAY);
+        ambaretto::ui::draw_text(details, int(center.x) - ambaretto::ui::measure_text(details, 16) / 2, int(center.y + radius + 50), 16, LIGHTGRAY);
     }
     DrawCircleV({center.x + cursor.x * radius, center.y + cursor.y * radius}, 4, YELLOW);
 }
 
-void draw_plane(const forza::Plane& plane, bool occupied) {
+void draw_plane(const ambaretto::Plane& plane, bool occupied) {
     const auto basis = plane.rotation();
     const auto tint = [&](Color color) { return plane.destroyed() ? Color{18, 18, 18, 255} : color; };
     occupied &= !plane.destroyed();
-    const auto point = [&](float x, float y, float z) { return plane.position() + plane.rotate(forza::Vec3(x, y, z)); };
-    const auto box = [&](forza::Vec3 center, forza::Vec3 size, Color color) {
+    const auto point = [&](float x, float y, float z) { return plane.position() + plane.rotate(ambaretto::Vec3(x, y, z)); };
+    const auto box = [&](ambaretto::Vec3 center, ambaretto::Vec3 size, Color color) {
         draw_box(plane.position() + plane.rotate(center), basis, size, tint(color), false);
     };
-    const auto cylinder = [&](forza::Vec3 a, forza::Vec3 b, float r1, float r2, Color color) {
+    const auto cylinder = [&](ambaretto::Vec3 a, ambaretto::Vec3 b, float r1, float r2, Color color) {
         DrawCylinderEx(render_vector(plane.position() + plane.rotate(a)),
             render_vector(plane.position() + plane.rotate(b)), r1, r2, 12, tint(color));
     };
     constexpr Color paint{234, 236, 223, 255}, blue{39, 103, 152, 255}, glass{59, 112, 139, 255};
-    const auto panel = [&](std::array<forza::Vec3, 4> vertices, Color color) {
+    const auto panel = [&](std::array<ambaretto::Vec3, 4> vertices, Color color) {
         color = tint(color);
         std::array<Vector3, 4> p{};
         for (int i = 0; i < 4; ++i) p[i] = render_vector(plane.position() + basis * vertices[i]);
         DrawTriangle3D(p[0], p[1], p[2], color); DrawTriangle3D(p[0], p[2], p[3], color);
         DrawTriangle3D(p[2], p[1], p[0], color); DrawTriangle3D(p[3], p[2], p[0], color);
     };
-    if (plane.type() == forza::PlaneType::F18) {
+    if (plane.type() == ambaretto::PlaneType::F18) {
         constexpr Color grey{157, 170, 180, 255}, dark{69, 82, 95, 255};
         cylinder({0, 0, -8.55f}, {0, 0, -4}, .025f, .72f, grey);
         cylinder({0, 0, -4}, {0, 0, 5.5f}, .72f, .8f, grey);
         cylinder({0, .72f, -4.8f}, {0, .78f, -2}, .42f, .22f, glass);
         for (float s : {-1.f, 1.f}) {
-            panel({forza::Vec3(s * .6f, -.1f, -2), {s * 6.15f, -.1f, 2.4f},
+            panel({ambaretto::Vec3(s * .6f, -.1f, -2), {s * 6.15f, -.1f, 2.4f},
                 {s * 6.15f, -.1f, 4}, {s * .6f, -.1f, 2.6f}}, grey);
-            panel({forza::Vec3(s * .5f, .3f, 4.8f), {s * 2.5f, .3f, 6.8f},
+            panel({ambaretto::Vec3(s * .5f, .3f, 4.8f), {s * 2.5f, .3f, 6.8f},
                 {s * 2.5f, .3f, 8.2f}, {s * .5f, .3f, 8}}, grey);
-            panel({forza::Vec3(s * .9f, .3f, 4.8f), {s * 1.6f, 3, 6},
+            panel({ambaretto::Vec3(s * .9f, .3f, 4.8f), {s * 1.6f, 3, 6},
                 {s * 1.6f, 2.8f, 8}, {s * .9f, .3f, 8.4f}}, dark);
             cylinder({s * .75f, -.25f, -2.8f}, {s * .75f, -.25f, 7.8f}, .45f, .50f, grey);
             cylinder({s * .75f, -.25f, -2.83f}, {s * .75f, -.25f, -2.75f}, .36f, .36f, BLACK);
@@ -363,19 +363,19 @@ void draw_plane(const forza::Plane& plane, bool occupied) {
             DrawSphereEx(render_vector(point(s * 6.15f, -.1f, 2.8f)), .08f, 6, 8, tint(s < 0 ? RED : GREEN));
         }
         if (occupied) DrawSphereEx(render_vector(point(0, 1, -3.6f)), .15f, 8, 10, {211, 155, 113, 255});
-    } else if (plane.type() == forza::PlaneType::Boeing747) {
+    } else if (plane.type() == ambaretto::PlaneType::Boeing747) {
         cylinder({0, 0, -35.33f}, {0, 0, -27}, .2f, 3.1f, paint);
         cylinder({0, 0, -27}, {0, 0, 20}, 3.1f, 3.0f, paint);
         cylinder({0, 0, 20}, {0, 1, 35.33f}, 3, .25f, paint);
         cylinder({0, 2.7f, -28}, {0, 2.7f, -11}, 1.7f, .8f, paint);
         box({0, 3.1f, -28.1f}, {2.4f, .7f, .25f}, glass);
-        panel({forza::Vec3(0, .8f, 18), {0, 12, 25}, {0, 12, 31}, {0, .8f, 33}}, blue);
+        panel({ambaretto::Vec3(0, .8f, 18), {0, 12, 25}, {0, 12, 31}, {0, .8f, 33}}, blue);
         for (float s : {-1.f, 1.f}) {
-            panel({forza::Vec3(s * 2, -.2f, -9), {s * 32.22f, .6f, 8},
+            panel({ambaretto::Vec3(s * 2, -.2f, -9), {s * 32.22f, .6f, 8},
                 {s * 32.22f, .6f, 11}, {s * 2, -.2f, 11}}, paint);
-            panel({forza::Vec3(s * 1.2f, .8f, 22), {s * 12, 1.2f, 29},
+            panel({ambaretto::Vec3(s * 1.2f, .8f, 22), {s * 12, 1.2f, 29},
                 {s * 12, 1.2f, 32}, {s * 1.2f, .8f, 31}}, paint);
-            panel({forza::Vec3(s * 32.22f, .6f, 8), {s * 32.22f, 2.5f, 9},
+            panel({ambaretto::Vec3(s * 32.22f, .6f, 8), {s * 32.22f, 2.5f, 9},
                 {s * 32.22f, 2.5f, 11}, {s * 32.22f, .6f, 11}}, blue);
             for (float e : {11.f, 21.f}) {
                 box({s * e, -.7f, 1.2f}, {.35f, 2.1f, 2.5f}, LIGHTGRAY);
@@ -388,38 +388,38 @@ void draw_plane(const forza::Plane& plane, bool occupied) {
             DrawSphereEx(render_vector(point(s * 32.22f, .7f, 9)), .17f, 6, 8, tint(s < 0 ? RED : GREEN));
         }
     } else {
-    cylinder(forza::Vec3(0, 0, -2.8f), forza::Vec3(0, 0, 1.1f), .42f, .48f, paint);
-    cylinder(forza::Vec3(0, 0, 1.1f), forza::Vec3(0, .2f, 3.1f), .48f, .12f, paint);
-    box(forza::Vec3(0, .18f, -.8f), forza::Vec3(.84f, .64f, 1.3f), glass);
-    box(forza::Vec3(0, .52f, -.8f), forza::Vec3(.88f, .06f, 1.4f), paint);
+    cylinder(ambaretto::Vec3(0, 0, -2.8f), ambaretto::Vec3(0, 0, 1.1f), .42f, .48f, paint);
+    cylinder(ambaretto::Vec3(0, 0, 1.1f), ambaretto::Vec3(0, .2f, 3.1f), .48f, .12f, paint);
+    box(ambaretto::Vec3(0, .18f, -.8f), ambaretto::Vec3(.84f, .64f, 1.3f), glass);
+    box(ambaretto::Vec3(0, .52f, -.8f), ambaretto::Vec3(.88f, .06f, 1.4f), paint);
     for (float side : {-1.0f, 1.0f}) {
-        box(forza::Vec3(side * .43f, .18f, -.8f), forza::Vec3(.04f, .65f, .045f), paint);
-        box(forza::Vec3(side * .47f, -.18f, -.6f), forza::Vec3(.03f, .12f, 3.3f), blue);
-        cylinder(forza::Vec3(side * .42f, -.3f, -.45f), forza::Vec3(side * 3.5f, .57f, -.3f), .035f, .035f, LIGHTGRAY);
+        box(ambaretto::Vec3(side * .43f, .18f, -.8f), ambaretto::Vec3(.04f, .65f, .045f), paint);
+        box(ambaretto::Vec3(side * .47f, -.18f, -.6f), ambaretto::Vec3(.03f, .12f, 3.3f), blue);
+        cylinder(ambaretto::Vec3(side * .42f, -.3f, -.45f), ambaretto::Vec3(side * 3.5f, .57f, -.3f), .035f, .035f, LIGHTGRAY);
     }
     const auto wing = [&](float span, float y, float z, float chord, Color color) {
         color = tint(color);
-        const std::array<forza::Vec3, 4> corners = {forza::Vec3(-span, y, z - chord * .36f),
-            forza::Vec3(-span, y, z + chord * .4f), forza::Vec3(span, y, z + chord * .4f),
-            forza::Vec3(span, y, z - chord * .36f)};
+        const std::array<ambaretto::Vec3, 4> corners = {ambaretto::Vec3(-span, y, z - chord * .36f),
+            ambaretto::Vec3(-span, y, z + chord * .4f), ambaretto::Vec3(span, y, z + chord * .4f),
+            ambaretto::Vec3(span, y, z - chord * .36f)};
         for (float offset : {-.07f, .07f}) {
             std::array<Vector3, 4> p{};
-            for (int i = 0; i < 4; ++i) p[i] = render_vector(plane.position() + basis * (corners[i] + forza::Vec3(0, offset, 0)));
+            for (int i = 0; i < 4; ++i) p[i] = render_vector(plane.position() + basis * (corners[i] + ambaretto::Vec3(0, offset, 0)));
             DrawTriangle3D(p[0], p[1], p[2], color); DrawTriangle3D(p[0], p[2], p[3], color);
             DrawTriangle3D(p[2], p[1], p[0], color); DrawTriangle3D(p[3], p[2], p[0], color);
         }
-        box(forza::Vec3(0, y, z - chord * .36f), forza::Vec3(span * 2, .14f, .1f), color);
-        box(forza::Vec3(0, y, z + chord * .4f), forza::Vec3(span * 2, .14f, .1f), color);
+        box(ambaretto::Vec3(0, y, z - chord * .36f), ambaretto::Vec3(span * 2, .14f, .1f), color);
+        box(ambaretto::Vec3(0, y, z + chord * .4f), ambaretto::Vec3(span * 2, .14f, .1f), color);
     };
     wing(5.5f, .6f, -.3f, 1.8f, paint);
     wing(1.8f, .35f, 2.5f, 1.2f, paint);
     for (float side : {-1.0f, 1.0f}) {
-        box(forza::Vec3(side * 4.9f, .69f, -.26f), forza::Vec3(.7f, .015f, 1.3f), blue);
+        box(ambaretto::Vec3(side * 4.9f, .69f, -.26f), ambaretto::Vec3(.7f, .015f, 1.3f), blue);
         DrawSphereEx(render_vector(point(side * 5.48f, .6f, -.65f)), .09f, 6, 8, tint(side < 0 ? RED : GREEN));
     }
-    box(forza::Vec3(0, .95f, 2.5f), forza::Vec3(.14f, 1.3f, 1.1f), blue);
-    const auto prop = forza::Quat::sRotation(plane.forward(), plane.propeller_angle());
-    const auto blade = prop * plane.rotate(forza::Vec3(0, 1.05f, 0));
+    box(ambaretto::Vec3(0, .95f, 2.5f), ambaretto::Vec3(.14f, 1.3f, 1.1f), blue);
+    const auto prop = ambaretto::Quat::sRotation(plane.forward(), plane.propeller_angle());
+    const auto blade = prop * plane.rotate(ambaretto::Vec3(0, 1.05f, 0));
     const auto hub = point(0, 0, -3.02f);
     DrawCylinderEx(render_vector(hub - blade), render_vector(hub + blade), .055f, .055f, 6, tint(DARKGRAY));
     DrawSphereEx(render_vector(hub), .18f, 8, 10, tint(blue));
@@ -429,11 +429,11 @@ void draw_plane(const forza::Plane& plane, bool occupied) {
         const auto mount = plane.position() + plane.rotate(wheel.mount);
         DrawCylinderEx(render_vector(mount), render_vector(wheel.center), .045f, .045f, 8, tint(LIGHTGRAY));
         const float radius = plane.specs().wheel_radius;
-        const auto axis = plane.rotate(forza::Vec3(radius * .42f, 0, 0));
+        const auto axis = plane.rotate(ambaretto::Vec3(radius * .42f, 0, 0));
         DrawCylinderEx(render_vector(wheel.center - axis), render_vector(wheel.center + axis),
             radius, radius, 12, BLACK);
-        if (plane.type() == forza::PlaneType::Boeing747 && !wheel.front) for (float z : {-1.4f, 1.4f}) {
-            const auto center = wheel.center + plane.rotate(forza::Vec3(0, 0, z));
+        if (plane.type() == ambaretto::PlaneType::Boeing747 && !wheel.front) for (float z : {-1.4f, 1.4f}) {
+            const auto center = wheel.center + plane.rotate(ambaretto::Vec3(0, 0, z));
             DrawCylinderEx(render_vector(center - axis), render_vector(center + axis), radius, radius, 12, BLACK);
         }
     }
@@ -441,17 +441,17 @@ void draw_plane(const forza::Plane& plane, bool occupied) {
 
 void draw_resume_prompt(bool captured) {
     if (!captured) {
-        const int panel_width = std::max(408, forza::ui::measure_text("Game running / F10: menu / F2: map", 18) + 28);
+        const int panel_width = std::max(408, ambaretto::ui::measure_text("Game running / F10: menu / F2: map", 18) + 28);
         const int x = (GetScreenWidth() - panel_width) / 2 + 14, y = GetScreenHeight() / 2 - 36;
         DrawRectangle(x - 14, y - 12, panel_width, 87, {19, 28, 35, 235});
-        forza::ui::draw_text("Click to capture mouse", x, y, 20, RAYWHITE);
-        forza::ui::draw_text("Game running / F10: menu / F2: map", x, y + 32, 18, LIGHTGRAY);
+        ambaretto::ui::draw_text("Click to capture mouse", x, y, 20, RAYWHITE);
+        ambaretto::ui::draw_text("Game running / F10: menu / F2: map", x, y + 32, 18, LIGHTGRAY);
     }
 }
 } // namespace
 
 int main(int argc, char** argv) {
-    forza::DayNight day_night;
+    ambaretto::DayNight day_night;
     std::string time_override;
     std::string screenshot;
     std::string city_path;
@@ -486,7 +486,7 @@ int main(int argc, char** argv) {
     unsigned int window_flags = FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE;
     if (!screenshot.empty()) window_flags |= FLAG_WINDOW_HIDDEN;
     SetConfigFlags(window_flags);
-    InitWindow(1280, 720, "Forza Ambazon - City builder");
+    InitWindow(1280, 720, "Ambaretto - City builder");
     if (!IsWindowReady()) return 1;
     SetWindowMinSize(1024, 600);
     SetExitKey(KEY_NULL);
@@ -498,93 +498,93 @@ int main(int argc, char** argv) {
     if (tuning_open) map_open = false;
     if (captured) DisableCursor();
     {
-        const forza::ui::FontResource ui_font;
+        const ambaretto::ui::FontResource ui_font;
         const auto cities_directory = std::filesystem::path(GetApplicationDirectory()) / "cities";
-        forza::ControllerMapping controls;
+        ambaretto::ControllerMapping controls;
         const auto mapping_path = std::filesystem::path(GetApplicationDirectory()) / "controller-mappings.ini";
         std::string mapping_error;
         if (std::filesystem::exists(mapping_path)) controls.load(mapping_path, mapping_error);
         else if (screenshot.empty()) controls.save(mapping_path, mapping_error);
-        forza::GraphicsSettings graphics;
+        ambaretto::GraphicsSettings graphics;
         const auto graphics_path = std::filesystem::path(GetApplicationDirectory()) / "graphics-settings.ini";
         std::string graphics_status;
         if (std::filesystem::exists(graphics_path)) graphics.load(graphics_path, graphics_status);
         if (!quality.empty()) {
-            if (quality == "low") graphics.apply_preset(forza::GraphicsPreset::Low);
-            else if (quality == "balanced") graphics.apply_preset(forza::GraphicsPreset::Balanced);
-            else if (quality == "high") graphics.apply_preset(forza::GraphicsPreset::High);
+            if (quality == "low") graphics.apply_preset(ambaretto::GraphicsPreset::Low);
+            else if (quality == "balanced") graphics.apply_preset(ambaretto::GraphicsPreset::Balanced);
+            else if (quality == "high") graphics.apply_preset(ambaretto::GraphicsPreset::High);
             else { TraceLog(LOG_ERROR, "Quality must be low, balanced, or high"); return 1; }
         }
         if (graphics.vsync) SetWindowState(FLAG_VSYNC_HINT); else ClearWindowState(FLAG_VSYNC_HINT);
         SetTargetFPS(graphics.fps_limit);
-        forza::City selected_city;
+        ambaretto::City selected_city;
         bool direct_city = !city_path.empty();
         if (direct_city) {
             std::string error;
-            if (!forza::City::load(city_path,selected_city,error)) { TraceLog(LOG_ERROR,"%s",error.c_str()); direct_city = false; }
+            if (!ambaretto::City::load(city_path,selected_city,error)) { TraceLog(LOG_ERROR,"%s",error.c_str()); direct_city = false; }
             else if (!selected_city.spawn) preview_editor = true;
         }
         while (!WindowShouldClose()) {
         if (!direct_city || preview_editor || start_graphics || start_controllers) {
-            const auto settings = start_graphics ? forza::MenuCommand::Graphics : start_controllers ? forza::MenuCommand::Controllers : forza::MenuCommand::None;
-            if (!forza::city_menu(selected_city,cities_directory,controls,graphics,preview_editor && direct_city,
+            const auto settings = start_graphics ? ambaretto::MenuCommand::Graphics : start_controllers ? ambaretto::MenuCommand::Controllers : ambaretto::MenuCommand::None;
+            if (!ambaretto::city_menu(selected_city,cities_directory,controls,graphics,preview_editor && direct_city,
                     screenshot,preview_editor,settings)) break;
             start_graphics = start_controllers = false;
         }
         direct_city = false; preview_editor = false;
-        day_night = forza::DayNight();
+        day_night = ambaretto::DayNight();
         if (!time_override.empty()) day_night.set_time(time_override);
         else day_night.advance(selected_city.start_minutes-8*60+1440);
         captured = screenshot.empty() && !map_open && !start_menu && !start_controllers && !start_help && !start_graphics;
         if (captured) DisableCursor(); else EnableCursor();
-        forza::VehicleAudio vehicle_audio;
-        const forza::Environment environment(selected_city);
-        forza::EnvironmentRenderer scenery(environment);
-        forza::CarRenderer car_renderer;
-        forza::TuningPanel tuning_panel;
-        forza::SceneLighting lighting;
-        using forza::Action;
-        using forza::MenuCommand;
-        forza::MenuBar menu;
+        ambaretto::VehicleAudio vehicle_audio;
+        const ambaretto::Environment environment(selected_city);
+        ambaretto::EnvironmentRenderer scenery(environment);
+        ambaretto::CarRenderer car_renderer;
+        ambaretto::TuningPanel tuning_panel;
+        ambaretto::SceneLighting lighting;
+        using ambaretto::Action;
+        using ambaretto::MenuCommand;
+        ambaretto::MenuBar menu;
         if (start_help) menu.show(MenuCommand::Controls);
         else if (start_menu) menu.open();
         if (performance_tuning) tuning_panel.select_tab(2);
         auto scene = std::make_unique<Scene>(environment);
-        forza::ThirdPersonCamera orbit;
-        forza::AimAssist aim_assist;
-        forza::ThirdPersonCamera saved_orbit = orbit;
+        ambaretto::ThirdPersonCamera orbit;
+        ambaretto::AimAssist aim_assist;
+        ambaretto::ThirdPersonCamera saved_orbit = orbit;
         Camera3D camera{{0, 4, 9}, {0, 1, 0}, {0, 1, 0}, 60, CAMERA_PERSPECTIVE};
         bool weapon_wheel = false, aiming = false;
         auto wheel_choice = scene->player.weapons().selected();
         Vector2 wheel_cursor{};
         const auto focus = [&]() {
             if (!tuning_open && scene->player.on_foot() && scene->player.character().covering())
-                return orbit.shoulder_focus(scene->player.character().body_parts()[int(forza::BodyPart::Head)].position,
+                return orbit.shoulder_focus(scene->player.character().body_parts()[int(ambaretto::BodyPart::Head)].position,
                     aiming ? .4f : 0, scene->player.character().cover_aim_side());
-            if (scene->player.can_shoot() && scene->player.weapons().selected() != forza::WeaponType::Unarmed && !tuning_open)
-                return orbit.shoulder_focus(scene->player.position() + forza::Vec3(0, aiming ? 1.48f : 1.45f, 0),
+            if (scene->player.can_shoot() && scene->player.weapons().selected() != ambaretto::WeaponType::Unarmed && !tuning_open)
+                return orbit.shoulder_focus(scene->player.position() + ambaretto::Vec3(0, aiming ? 1.48f : 1.45f, 0),
                     aiming ? .62f : .6f);
-            if (!tuning_open) return scene->player.position() + forza::Vec3(0, scene->player.flying() ? .5f : scene->player.driving() ? .7f :
+            if (!tuning_open) return scene->player.position() + ambaretto::Vec3(0, scene->player.flying() ? .5f : scene->player.driving() ? .7f :
                 scene->player.character().swimming() ? 1.55f : 1.25f, 0);
-            const auto center = scene->player.car().position() + forza::Vec3(0, .7f, 0);
+            const auto center = scene->player.car().position() + ambaretto::Vec3(0, .7f, 0);
             const float distance = (orbit.desired_position(center, true) - center).Length();
             // Shift the camera's aim to frame the car in the area beside the
             // 400-pixel panel. Scale with zoom and viewport height (60-deg FOV).
-            const auto right = orbit.forward().Cross(forza::Vec3::sAxisY());
+            const auto right = orbit.forward().Cross(ambaretto::Vec3::sAxisY());
             return center + right * (distance * 400.0f / GetScreenHeight() * .57735027f);
         };
         const auto snap_camera = [&]() {
             aim_assist.reset();
             const auto heading = tuning_open ? scene->player.car().forward() : scene->player.forward();
-            if (tuning_open) orbit = forza::ThirdPersonCamera{};
+            if (tuning_open) orbit = ambaretto::ThirdPersonCamera{};
             orbit.reset(std::atan2(-heading.GetX(), -heading.GetZ()));
             if (tuning_open) orbit.look(-230, 25, 5, true, heading, 0, 0);
             camera.target = render_vector(focus());
             camera.position = render_vector(orbit.desired_position(focus(), tuning_open || scene->player.driving(), !tuning_open && scene->player.flying(), scene->player.plane().camera_scale()));
         };
         snap_camera();
-        forza::WorldMapView world_map;
-        float min_x = forza::Environment::extent, min_z = min_x, max_x = -min_x, max_z = -min_x;
+        ambaretto::WorldMapView world_map;
+        float min_x = ambaretto::Environment::extent, min_z = min_x, max_x = -min_x, max_z = -min_x;
         for (const auto& island : environment.land_islands()) {
             min_x = std::min(min_x, island.center.GetX() - island.radius_x);
             min_z = std::min(min_z, island.center.GetZ() - island.radius_z);
@@ -592,9 +592,9 @@ int main(int argc, char** argv) {
             max_z = std::max(max_z, island.center.GetZ() + island.radius_z);
         }
         const Rectangle map_region{min_x - 160, min_z - 160, max_x - min_x + 320, max_z - min_z + 320};
-        const Rectangle initial_map_viewport = forza::WorldMapLayout(GetScreenWidth(),GetScreenHeight()).viewport;
-        if (start_region_map) world_map.fit(initial_map_viewport, map_region, forza::Environment::extent);
-        else world_map.focus(scene->player.position(), initial_map_viewport, forza::Environment::extent);
+        const Rectangle initial_map_viewport = ambaretto::WorldMapLayout(GetScreenWidth(),GetScreenHeight()).viewport;
+        if (start_region_map) world_map.fit(initial_map_viewport, map_region, ambaretto::Environment::extent);
+        else world_map.focus(scene->player.position(), initial_map_viewport, ambaretto::Environment::extent);
         double accumulator = 0;
         float notice_time = mapping_error.empty() ? 0 : 8;
         std::string notice = mapping_error;
@@ -602,9 +602,9 @@ int main(int argc, char** argv) {
         bool jump_pending = false, discard_mouse = true, orbit_dragging = false, map_dragging = false, flaps = false;
         bool fire_pending = false, suppress_fire = true;
         float shot_flash = 0, hit_marker = 0, death_time = 0, arrest_time = 0, recoil_return = 0, hurt_flash = 0, kill_flash = 0;
-        forza::Vec3 death_position = scene->player.position();
+        ambaretto::Vec3 death_position = scene->player.position();
         float previous_health = scene->player.character().health();
-        forza::Shot last_shot;
+        ambaretto::Shot last_shot;
         int rendered_frames = 0;
         const auto mode_action = [&](Action foot, Action car, Action plane) {
             return scene->player.on_foot() ? foot : scene->player.flying() ? plane : car;
@@ -626,14 +626,14 @@ int main(int argc, char** argv) {
             shot_flash = std::max(0.f, shot_flash - frame);
             hit_marker = std::max(0.f, hit_marker - frame);
             kill_flash = std::max(0.f, kill_flash - frame);
-            const forza::WorldMapLayout map_layout(GetScreenWidth(),GetScreenHeight());
+            const ambaretto::WorldMapLayout map_layout(GetScreenWidth(),GetScreenHeight());
             const auto map_viewport = map_layout.viewport;
             const auto& map_buttons = map_layout.buttons;
-            if (map_open) world_map.constrain(map_viewport, forza::Environment::extent);
+            if (map_open) world_map.constrain(map_viewport, ambaretto::Environment::extent);
             bool mode_changed = false;
             const auto toggle_map = [&]() {
                 map_open = !map_open;
-                if (map_open) world_map.focus(scene->player.position(), map_viewport, forza::Environment::extent);
+                if (map_open) world_map.focus(scene->player.position(), map_viewport, ambaretto::Environment::extent);
                 captured = !map_open && IsWindowFocused();
                 if (captured) DisableCursor(); else EnableCursor();
                 SetMouseCursor(MOUSE_CURSOR_DEFAULT);
@@ -661,7 +661,7 @@ int main(int argc, char** argv) {
                 }
             };
             if (screenshot.empty()) {
-                const auto controller_input = forza::read_controllers();
+                const auto controller_input = ambaretto::read_controllers();
                 controls.update(controller_input);
                 if (!IsWindowFocused()) {
                     if (captured) EnableCursor();
@@ -714,34 +714,34 @@ int main(int argc, char** argv) {
                     const bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
                     const bool inside = CheckCollisionPointRec(mouse, map_viewport);
                     if (click) for (int i = 0; i < int(map_buttons.size()); ++i) if (CheckCollisionPointRec(mouse, map_buttons[i])) {
-                        if (i == 0) world_map.focus(scene->player.position(), map_viewport, forza::Environment::extent);
-                        else if (i == 1) world_map.fit(map_viewport, map_region, forza::Environment::extent);
+                        if (i == 0) world_map.focus(scene->player.position(), map_viewport, ambaretto::Environment::extent);
+                        else if (i == 1) world_map.fit(map_viewport, map_region, ambaretto::Environment::extent);
                         else if (i == 4) toggle_map();
-                        else world_map.zoom(i == 2 ? -1 : 1, {map_viewport.x + map_viewport.width / 2, map_viewport.y + map_viewport.height / 2}, map_viewport, forza::Environment::extent);
+                        else world_map.zoom(i == 2 ? -1 : 1, {map_viewport.x + map_viewport.width / 2, map_viewport.y + map_viewport.height / 2}, map_viewport, ambaretto::Environment::extent);
                     }
                     const auto pressed = [](int key) { return IsKeyPressed(key) || IsKeyPressedRepeat(key); };
-                    if (IsKeyPressed(KEY_HOME)) world_map.fit(map_viewport, map_region, forza::Environment::extent);
-                    if (IsKeyPressed(KEY_C)) world_map.focus(scene->player.position(), map_viewport, forza::Environment::extent);
+                    if (IsKeyPressed(KEY_HOME)) world_map.fit(map_viewport, map_region, ambaretto::Environment::extent);
+                    if (IsKeyPressed(KEY_C)) world_map.focus(scene->player.position(), map_viewport, ambaretto::Environment::extent);
                     const auto stick = look_stick();
                     const float horizontal = std::max(float(IsKeyDown(KEY_RIGHT)), std::max(mode_value(Action::FootRight, Action::Right, Action::BankRight), std::max(0.f, stick.x)))
                         - std::max(float(IsKeyDown(KEY_LEFT)), std::max(mode_value(Action::FootLeft, Action::Left, Action::BankLeft), std::max(0.f, -stick.x)));
                     const float vertical = std::max(float(IsKeyDown(KEY_DOWN)), std::max(mode_value(Action::FootBackward, Action::Backward, Action::PitchUp), std::max(0.f, stick.y)))
                         - std::max(float(IsKeyDown(KEY_UP)), std::max(mode_value(Action::FootForward, Action::Forward, Action::PitchDown), std::max(0.f, -stick.y)));
-                    world_map.pan({-horizontal * 400 * frame, -vertical * 400 * frame}, forza::Environment::extent);
+                    world_map.pan({-horizontal * 400 * frame, -vertical * 400 * frame}, ambaretto::Environment::extent);
                     const float zoom = float(pressed(KEY_EQUAL) || pressed(KEY_KP_ADD)) - float(pressed(KEY_MINUS) || pressed(KEY_KP_SUBTRACT))
                         + zoom_amount() * 4 * frame;
-                    if (zoom != 0) world_map.zoom(zoom, {map_viewport.x + map_viewport.width / 2, map_viewport.y + map_viewport.height / 2}, map_viewport, forza::Environment::extent);
-                    if (inside) world_map.zoom(GetMouseWheelMove(), mouse, map_viewport, forza::Environment::extent);
+                    if (zoom != 0) world_map.zoom(zoom, {map_viewport.x + map_viewport.width / 2, map_viewport.y + map_viewport.height / 2}, map_viewport, ambaretto::Environment::extent);
+                    if (inside) world_map.zoom(GetMouseWheelMove(), mouse, map_viewport, ambaretto::Environment::extent);
                     if (click && inside) map_dragging = true;
                     else if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) map_dragging = false;
-                    if (map_dragging && !click) world_map.pan(GetMouseDelta(), forza::Environment::extent);
+                    if (map_dragging && !click) world_map.pan(GetMouseDelta(), ambaretto::Environment::extent);
                     SetMouseCursor(map_dragging ? MOUSE_CURSOR_RESIZE_ALL : inside ? MOUSE_CURSOR_POINTING_HAND : MOUSE_CURSOR_DEFAULT);
                 }
                 if (tuning_open && !mode_changed && !menu.blocking()) {
                     const auto mouse = GetMousePosition();
                     const bool fine = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
                     const auto pressed = [](int key) { return IsKeyPressed(key) || IsKeyPressedRepeat(key); };
-                    const forza::TuningPanelInput input{mouse, IsMouseButtonPressed(MOUSE_BUTTON_LEFT),
+                    const ambaretto::TuningPanelInput input{mouse, IsMouseButtonPressed(MOUSE_BUTTON_LEFT),
                         IsMouseButtonDown(MOUSE_BUTTON_LEFT), IsWindowFocused(), fine,
                         int(pressed(KEY_RIGHT)) - int(pressed(KEY_LEFT)),
                         int(pressed(KEY_DOWN)) - int(pressed(KEY_UP)), GetMouseWheelMove()};
@@ -758,7 +758,7 @@ int main(int argc, char** argv) {
                     SetMouseCursor(tuning_open && !outside ? MOUSE_CURSOR_DEFAULT : dragging ? MOUSE_CURSOR_RESIZE_ALL : MOUSE_CURSOR_DEFAULT);
                 }
                 if (!captured && !map_open && !tuning_open && !menu.blocking() && !mode_changed && IsWindowFocused() &&
-                    GetMousePosition().y >= forza::menu_height && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                    GetMousePosition().y >= ambaretto::menu_height && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                     captured = true; DisableCursor(); discard_mouse = true;
                 }
             }
@@ -778,11 +778,11 @@ int main(int argc, char** argv) {
             if (!active || weapon_wheel || !scene->player.can_shoot()) { fire_pending = false; suppress_fire = true; }
             else if (controls.value(Action::Fire) < .5f) suppress_fire = false;
             aiming = active && !weapon_wheel && scene->player.can_shoot()
-                && scene->player.weapons().selected() != forza::WeaponType::Unarmed && controls.value(Action::Aim) > .5f;
+                && scene->player.weapons().selected() != ambaretto::WeaponType::Unarmed && controls.value(Action::Aim) > .5f;
             if (!aiming || !controls.auto_lock) aim_assist.reset();
             day_night.advance(elapsed, screenshot.empty() && simulate);
             if (active && screenshot.empty()) {
-                const bool armed = scene->player.on_foot() && scene->player.weapons().selected() != forza::WeaponType::Unarmed;
+                const bool armed = scene->player.on_foot() && scene->player.weapons().selected() != ambaretto::WeaponType::Unarmed;
                 const bool reload_pressed = controls.pressed(Action::Reload) && scene->player.can_shoot() && armed && !weapon_wheel;
                 if (reload_pressed) scene->player.weapons().reload();
                 if (controls.pressed(mode_action(Action::Respawn, Action::Recover, Action::PlaneRecover)) && !reload_pressed && !weapon_wheel) {
@@ -792,13 +792,13 @@ int main(int argc, char** argv) {
                 if (controls.pressed(mode_action(Action::EnterVehicle, Action::ExitVehicle, Action::PlaneExit)) && !weapon_wheel) {
                     const bool stealing = scene->player.can_steal();
                     const auto result = scene->player.interact();
-                    if (result == forza::Interaction::Entered || result == forza::Interaction::Exited) {
+                    if (result == ambaretto::Interaction::Entered || result == ambaretto::Interaction::Exited) {
                         jump_pending = false;
                         snap_camera();
-                        notice = result == forza::Interaction::Entered ? (scene->player.flying() ? "Entered plane - increase throttle to take off" :
+                        notice = result == ambaretto::Interaction::Entered ? (scene->player.flying() ? "Entered plane - increase throttle to take off" :
                             stealing ? "Pulled driver out - stole traffic car" : "Entered car") : scene->player.character().ragdolling()
                             ? "Jumped out - brace for impact" : "On foot";
-                    } else if (result == forza::Interaction::Blocked) notice = "Exit blocked - move the vehicle to an open space";
+                    } else if (result == ambaretto::Interaction::Blocked) notice = "Exit blocked - move the vehicle to an open space";
                     else notice = "Move closer to a car or plane to enter";
                     notice_time = 2.5f;
                 }
@@ -820,7 +820,7 @@ int main(int argc, char** argv) {
                     else { wheel_cursor.x += mouse.x / 200; wheel_cursor.y += mouse.y / 200; }
                     const float length = std::hypot(wheel_cursor.x, wheel_cursor.y);
                     if (length > 1) { wheel_cursor.x /= length; wheel_cursor.y /= length; }
-                    wheel_choice = forza::wheel_selection(wheel_cursor.x, wheel_cursor.y, wheel_choice);
+                    wheel_choice = ambaretto::wheel_selection(wheel_cursor.x, wheel_cursor.y, wheel_choice);
                     mouse = {};
                 }
                 if (!weapon_wheel && !suppress_fire && controls.pressed(Action::Fire)) fire_pending = true;
@@ -835,11 +835,11 @@ int main(int argc, char** argv) {
                     scene->player.flying() ? scene->player.plane().velocity().Length() : scene->player.driving() ? scene->player.car().velocity().Length()
                         : std::hypot(foot_velocity.GetX(), foot_velocity.GetZ()), frame, scene->player.flying(), auto_follow);
                 if (aiming && controls.auto_lock) {
-                    std::vector<forza::Character*> candidates;
+                    std::vector<ambaretto::Character*> candidates;
                     for (const auto& person : scene->pedestrians.people()) if (person.enabled) candidates.push_back(person.character.get());
                     for (const auto& unit : scene->police.units()) if (unit.active)
                         for (const auto& officer : unit.officers) if (!officer.seated) candidates.push_back(officer.character.get());
-                    const forza::Vec3 origin(camera.position.x, camera.position.y, camera.position.z);
+                    const ambaretto::Vec3 origin(camera.position.x, camera.position.y, camera.position.z);
                     aim_assist.update(scene->world, candidates, &scene->player.character(), origin, orbit.aim_direction(),
                         scene->player.weapons().data().range, mouse.x, mouse.y, frame);
                     if (const auto point = aim_assist.point()) { orbit.aim_at(origin, *point); orbit.recoil(recoil_return); }
@@ -849,9 +849,9 @@ int main(int argc, char** argv) {
                     camera.target = {camera.position.x + direction.GetX(), camera.position.y + direction.GetY(), camera.position.z + direction.GetZ()};
                 }
             }
-            forza::Input driving;
-            forza::FootInput walking;
-            forza::FlightInput flight;
+            ambaretto::Input driving;
+            ambaretto::FootInput walking;
+            ambaretto::FlightInput flight;
             flight.flaps = flaps;
             driving.parking_brake = tuning_open;
             if (active && screenshot.empty()) {
@@ -863,7 +863,7 @@ int main(int argc, char** argv) {
                 walking.sprint = controls.value(Action::Sprint) > .5f
                     || (scene->player.character().swimming() && controls.value(Action::Jump) > .5f);
                 if ((aiming || (!suppress_fire && controls.value(Action::Fire) > .5f)) && scene->player.can_shoot()
-                    && scene->player.weapons().selected() != forza::WeaponType::Unarmed && !weapon_wheel) {
+                    && scene->player.weapons().selected() != ambaretto::WeaponType::Unarmed && !weapon_wheel) {
                     walking.aim_direction = orbit.aim_direction();
                     walking.sprint = false;
                     walking.direction *= .6f;
@@ -876,19 +876,19 @@ int main(int argc, char** argv) {
             }
             if (simulate) accumulator += frame * (weapon_wheel ? .15f : 1.f);
             else { accumulator = 0; jump_pending = false; }
-            while (accumulator >= double(forza::fixed_step)) {
+            while (accumulator >= double(ambaretto::fixed_step)) {
                 walking.jump = jump_pending;
                 scene->police.set_view({camera.position.x, camera.position.y, camera.position.z},
                     {camera.target.x - camera.position.x, camera.target.y - camera.position.y, camera.target.z - camera.position.z});
-                scene->player.step(driving, walking, forza::fixed_step, flight);
+                scene->player.step(driving, walking, ambaretto::fixed_step, flight);
                 if (active && !weapon_wheel && !suppress_fire && screenshot.empty() && scene->player.can_shoot()
-                    && scene->player.weapons().selected() != forza::WeaponType::Unarmed && controls.value(Action::Fire) > .5f) {
+                    && scene->player.weapons().selected() != ambaretto::WeaponType::Unarmed && controls.value(Action::Fire) > .5f) {
                     const auto ray = GetScreenToWorldRay({GetScreenWidth() * .5f, GetScreenHeight() * .5f}, camera);
-                    const auto aim = forza::trace_shot(scene->world, &scene->pedestrians,
+                    const auto aim = ambaretto::trace_shot(scene->world, &scene->pedestrians,
                         {ray.position.x, ray.position.y, ray.position.z}, {ray.direction.x, ray.direction.y, ray.direction.z}, scene->player.weapons().data().range, &scene->police, &scene->player.character());
                     const auto gun = scene->player.character().held_weapon();
                     // Cast from the receiver so a barrel protruding into cover cannot bypass it.
-                    const auto muzzle = gun.position + gun.rotation * forza::Vec3(0, .06f, 0);
+                    const auto muzzle = gun.position + gun.rotation * ambaretto::Vec3(0, .06f, 0);
                     const auto shot = scene->player.shoot(muzzle, aim.point - muzzle, controls.value(Action::Fire) > .5f, fire_pending, aiming);
                     if (shot.fired) {
                         last_shot = shot; shot_flash = .055f;
@@ -904,7 +904,7 @@ int main(int argc, char** argv) {
                 scene->record_skids();
                 const auto position = scene->player.position();
                 const bool recover = scene->player.flying() ? position.Length() > 24000
-                    : std::abs(position.GetX()) > forza::Environment::extent - 40 || std::abs(position.GetZ()) > forza::Environment::extent - 40;
+                    : std::abs(position.GetX()) > ambaretto::Environment::extent - 40 || std::abs(position.GetZ()) > ambaretto::Environment::extent - 40;
                 if (recover) {
                     scene->reset(); snap_camera(); flaps = false;
                     notice = scene->player.flying() ? "Recovered aircraft at the airport" : "Recovered from world boundary"; notice_time = 3;
@@ -912,14 +912,14 @@ int main(int argc, char** argv) {
                 if (!scene->player.flying() && !scene->player.plane().destroyed() && scene->player.plane().position().GetY() < -.6f) scene->player.recover_plane();
                 if (scene->player.on_foot() && !scene->player.character().alive()) {
                     if (death_time == 0) death_position = scene->player.position();
-                    death_time += forza::fixed_step;
+                    death_time += ambaretto::fixed_step;
                     if (death_time > 4) { scene->respawn_on_foot(death_position); snap_camera(); death_time = 0; suppress_fire = true; }
                 } else death_time = 0;
                 if (scene->police.arrested()) {
-                    arrest_time += forza::fixed_step;
+                    arrest_time += ambaretto::fixed_step;
                     if (arrest_time > 3) { scene->respawn_on_foot(); snap_camera(); arrest_time = 0; suppress_fire = true; }
                 } else arrest_time = 0;
-                accumulator -= double(forza::fixed_step);
+                accumulator -= double(ambaretto::fixed_step);
             }
             if (scene->world.take_player_kill()) kill_flash = .18f;
             const auto target = focus();
@@ -928,13 +928,13 @@ int main(int argc, char** argv) {
             const float follow = scene->player.driving() && !tuning_open ? 1.f : 1 - std::exp(-12 * frame);
             const bool aim_view = aiming && scene->player.can_shoot();
             camera.target = aim_view ? render_vector(target) : lerp(camera.target, render_vector(target), follow);
-            auto smoothed = forza::Vec3(camera.position.x, camera.position.y, camera.position.z);
+            auto smoothed = ambaretto::Vec3(camera.position.x, camera.position.y, camera.position.z);
             smoothed += (desired - smoothed) * follow;
-            const auto camera_target = forza::Vec3(camera.target.x, camera.target.y, camera.target.z);
+            const auto camera_target = ambaretto::Vec3(camera.target.x, camera.target.y, camera.target.z);
             const auto offset = smoothed - camera_target;
             const float fraction = scene->world.camera_fraction(camera_target, offset,
                 (tuning_open || scene->player.driving()) ? scene->player.car().body_id() : scene->player.flying() ? scene->player.plane().body_id() : JPH::BodyID());
-            camera.position = render_vector(forza::ThirdPersonCamera::above_water(camera_target + offset * fraction));
+            camera.position = render_vector(ambaretto::ThirdPersonCamera::above_water(camera_target + offset * fraction));
             if (aim_view) {
                 if (const auto point = aim_assist.point()) {
                     orbit.aim_at({camera.position.x, camera.position.y, camera.position.z}, *point);
@@ -944,10 +944,10 @@ int main(int argc, char** argv) {
                 camera.target = {camera.position.x + direction.GetX(), camera.position.y + direction.GetY(), camera.position.z + direction.GetZ()};
             }
             vehicle_audio.update(scene->traffic, scene->player.car(), scene->player.position(),
-                orbit.forward().Cross(forza::Vec3::sAxisY()), scene->player.driving(),
+                orbit.forward().Cross(ambaretto::Vec3::sAxisY()), scene->player.driving(),
                 active && scene->player.driving() && controls.value(Action::Horn) > .5f, simulate && screenshot.empty(), frame, driving.throttle);
-            vehicle_audio.update_police(scene->police, scene->player.position(), orbit.forward().Cross(forza::Vec3::sAxisY()), simulate && screenshot.empty());
-            vehicle_audio.update_effects(scene->world, scene->player.position(), orbit.forward().Cross(forza::Vec3::sAxisY()), simulate && screenshot.empty());
+            vehicle_audio.update_police(scene->police, scene->player.position(), orbit.forward().Cross(ambaretto::Vec3::sAxisY()), simulate && screenshot.empty());
+            vehicle_audio.update_effects(scene->world, scene->player.position(), orbit.forward().Cross(ambaretto::Vec3::sAxisY()), simulate && screenshot.empty());
             const Camera3D view = camera;
             if (scene->player.character().health() < previous_health) hurt_flash = .3f;
             previous_health = scene->player.character().health();
@@ -958,16 +958,16 @@ int main(int argc, char** argv) {
             const auto daylight = day_night.lighting();
             ClearBackground(BLACK);
             if (!map_open) {
-                std::array<forza::SceneLight, forza::SceneLighting::max_lights> nearby_lights{};
+                std::array<ambaretto::SceneLight, ambaretto::SceneLighting::max_lights> nearby_lights{};
                 int light_count = 0;
                 if (graphics.local_lights && daylight.night > .01f) {
-                    const auto headlights = [&](const forza::Car& car) {
+                    const auto headlights = [&](const ambaretto::Car& car) {
                         if (!car.simulated()) return;
-                        if (car.destroyed() || light_count + 2 > forza::SceneLighting::max_lights) return;
+                        if (car.destroyed() || light_count + 2 > ambaretto::SceneLighting::max_lights) return;
                         for (float side : {-1.0f, 1.0f}) nearby_lights[light_count++] = {
-                            render_vector(car.position() + car.rotate(forza::Vec3(side * .65f, .40f, -1.83f))),
+                            render_vector(car.position() + car.rotate(ambaretto::Vec3(side * .65f, .40f, -1.83f))),
                             {2.6f * daylight.night, 2.3f * daylight.night, 1.8f * daylight.night}, 48,
-                            render_vector((car.forward() + forza::Vec3(0, -.13f, 0)).Normalized()), .87f};
+                            render_vector((car.forward() + ambaretto::Vec3(0, -.13f, 0)).Normalized()), .87f};
                     };
                     headlights(scene->player.car());
                     for (const auto& unit : scene->police.units()) if (unit.active && light_count < 6
@@ -976,17 +976,17 @@ int main(int argc, char** argv) {
                         if (light_count < 6 && vehicle.car.get() != &scene->player.car() && vehicle.car->simulated() &&
                             (vehicle.car->position() - scene->player.position()).LengthSq() < 45 * 45) headlights(*vehicle.car);
                     const int first_lamp = light_count;
-                    std::array<float, forza::SceneLighting::max_lights> distances{};
+                    std::array<float, ambaretto::SceneLighting::max_lights> distances{};
                     distances.fill(1e30f);
                     const auto p = scene->player.position();
                     for (const auto& lamp : scenery.lights()) {
-                        const float distance = (forza::Vec3(lamp.position.x, lamp.position.y, lamp.position.z) - p).LengthSq();
+                        const float distance = (ambaretto::Vec3(lamp.position.x, lamp.position.y, lamp.position.z) - p).LengthSq();
                         if (distance > (lamp.radius + 50) * (lamp.radius + 50)) continue;
-                        for (int i = first_lamp; i < forza::SceneLighting::max_lights; ++i) if (distance < distances[i]) {
-                            for (int j = forza::SceneLighting::max_lights - 1; j > i; --j) { distances[j] = distances[j - 1]; nearby_lights[j] = nearby_lights[j - 1]; }
+                        for (int i = first_lamp; i < ambaretto::SceneLighting::max_lights; ++i) if (distance < distances[i]) {
+                            for (int j = ambaretto::SceneLighting::max_lights - 1; j > i; --j) { distances[j] = distances[j - 1]; nearby_lights[j] = nearby_lights[j - 1]; }
                             distances[i] = distance; nearby_lights[i] = lamp;
                             nearby_lights[i].color.x *= daylight.night; nearby_lights[i].color.y *= daylight.night; nearby_lights[i].color.z *= daylight.night;
-                            light_count = std::min(light_count + 1, forza::SceneLighting::max_lights); break;
+                            light_count = std::min(light_count + 1, ambaretto::SceneLighting::max_lights); break;
                         }
                     }
                 }
@@ -1023,16 +1023,16 @@ int main(int argc, char** argv) {
                 }
             }
             if (map_open) {
-                forza::ui::draw_desktop();
-                forza::ui::draw_window(map_layout.window,(selected_city.name+" / MAP").c_str());
-                forza::ui::draw_window_close(map_layout.window);
+                ambaretto::ui::draw_desktop();
+                ambaretto::ui::draw_window(map_layout.window,(selected_city.name+" / MAP").c_str());
+                ambaretto::ui::draw_window_close(map_layout.window);
                 const char* labels[] = {"Player", "Region", "-", "+"};
                 for (int i = 0; i < 4; ++i) {
                     const auto button = map_buttons[i];
                     const bool hover = CheckCollisionPointRec(GetMousePosition(), button);
                     DrawRectangleRec(button, hover ? Color{0, 112, 112, 255} : Color{170, 170, 170, 255});
                     DrawRectangleLinesEx(button, 1, RAYWHITE);
-                    forza::ui::draw_text(labels[i], int(button.x + (button.width - forza::ui::measure_text(labels[i], 16)) / 2),
+                    ambaretto::ui::draw_text(labels[i], int(button.x + (button.width - ambaretto::ui::measure_text(labels[i], 16)) / 2),
                         int(button.y + 7), 16, hover ? RAYWHITE : Color{0, 0, 0, 255});
                 }
                 scenery.world_map(world_map, map_viewport, scene->player.position(), scene->player.forward(), &scene->police);
@@ -1048,7 +1048,7 @@ int main(int argc, char** argv) {
                 for (std::size_t i = 0; i < scene->traffic.cars().size(); ++i) {
                     const auto& vehicle = scene->traffic.cars()[i];
                     if (!vehicle.car->simulated()) continue;
-                    const auto delta = vehicle.car->position() - forza::Vec3(view.position.x, view.position.y, view.position.z);
+                    const auto delta = vehicle.car->position() - ambaretto::Vec3(view.position.x, view.position.y, view.position.z);
                     if (delta.GetX() * delta.GetX() + delta.GetZ() * delta.GetZ() > graphics.view_distance * graphics.view_distance) continue;
                     draw_car(*vehicle.car, car_renderer, view, traffic_paint(i));
                 }
@@ -1076,8 +1076,8 @@ int main(int argc, char** argv) {
                     }
                 }
                 for (const auto& pickup : scene->police.pickups()) if ((pickup.position - scene->player.position()).LengthSq() < nearby_distance * nearby_distance) {
-                    DrawCylinder(render_vector(pickup.position - forza::Vec3(0, .07f, 0)), .4f, .4f, .02f, 16, {238, 198, 66, 180});
-                    draw_weapon_model({pickup.position + forza::Vec3(0, .08f, 0), forza::Quat::sRotation(forza::Vec3::sAxisZ(), 1.57079633f)}, pickup.weapon);
+                    DrawCylinder(render_vector(pickup.position - ambaretto::Vec3(0, .07f, 0)), .4f, .4f, .02f, 16, {238, 198, 66, 180});
+                    draw_weapon_model({pickup.position + ambaretto::Vec3(0, .08f, 0), ambaretto::Quat::sRotation(ambaretto::Vec3::sAxisZ(), 1.57079633f)}, pickup.weapon);
                 }
                 EndShaderMode();
                 draw_vehicle_damage(scene->car, car_renderer, view, nearby_distance);
@@ -1085,71 +1085,71 @@ int main(int argc, char** argv) {
                     draw_vehicle_damage(*vehicle.car, car_renderer, view, nearby_distance);
                 for (const auto& unit : scene->police.units()) if (unit.active)
                     draw_vehicle_damage(*unit.car, car_renderer, view, nearby_distance);
-                const auto draw_plane_damage = [&](const forza::Plane& plane) {
+                const auto draw_plane_damage = [&](const ambaretto::Plane& plane) {
                     if ((plane.position() - scene->player.position()).LengthSq() < graphics.view_distance * graphics.view_distance)
                         draw_vehicle_damage(plane, car_renderer, view, graphics.view_distance, plane.explosion_radius() / 10, {0, plane.specs().body_radius, 0});
                 };
                 draw_plane_damage(scene->plane);
                 for (const auto& plane : scene->aircraft) draw_plane_damage(*plane);
                 EndMode3D();
-                if (kill_flash > 0) DrawRectangle(0, forza::menu_height, GetScreenWidth(), GetScreenHeight() - forza::menu_height,
+                if (kill_flash > 0) DrawRectangle(0, ambaretto::menu_height, GetScreenWidth(), GetScreenHeight() - ambaretto::menu_height,
                     {150, 150, 150, static_cast<unsigned char>(110 * kill_flash / .18f)});
                 draw_resume_prompt(captured || tuning_open || !screenshot.empty());
                 if (!tuning_open) scenery.minimap(scene->player.position(), scene->player.forward(), view, &scene->police, !scene->player.on_foot());
                 const auto region = scene->player.position();
                 if (!tuning_open) {
-                    const auto bounds = forza::MinimapView(GetScreenHeight(), region, scene->player.forward(), view).bounds;
+                    const auto bounds = ambaretto::MinimapView(GetScreenHeight(), region, scene->player.forward(), view).bounds;
                     const int info_x = int(bounds.x + bounds.width) + 20, info_y = GetScreenHeight() - 42;
                     const auto draw_info = [&](const char* text, int y) {
-                        forza::ui::draw_text(text, info_x + 1, y + 1, 20, BLACK);
-                        forza::ui::draw_text(text, info_x, y, 20, RAYWHITE);
+                        ambaretto::ui::draw_text(text, info_x + 1, y + 1, 20, BLACK);
+                        ambaretto::ui::draw_text(text, info_x, y, 20, RAYWHITE);
                     };
                     if (!scene->player.on_foot()) {
                         const auto velocity = scene->player.flying() ? scene->player.plane().velocity() : scene->player.car().velocity();
                         draw_info(TextFormat("%.0f km/h", velocity.Length() * 3.6f), info_y);
                     }
                     const float health = scene->player.character().health();
-                    DrawRectangle(26, forza::menu_height + 18, 184, 16, {26, 20, 25, 235});
-                    DrawRectangle(28, forza::menu_height + 20, int(180 * health / 100), 12, {177, 112, 137, 255});
+                    DrawRectangle(26, ambaretto::menu_height + 18, 184, 16, {26, 20, 25, 235});
+                    DrawRectangle(28, ambaretto::menu_height + 20, int(180 * health / 100), 12, {177, 112, 137, 255});
                     if (scene->player.on_foot()) {
                         if (scene->player.character().covering()) draw_info(scene->player.character().cover_peeking() ? "COVER - exposed while aiming"
-                            : scene->player.character().cover_stance() == forza::CoverStance::Crawling ? "COVER - crawling | Q / B: leave"
-                            : scene->player.character().cover_stance() == forza::CoverStance::Crouched ? "COVER - crouched | Q / B: leave"
+                            : scene->player.character().cover_stance() == ambaretto::CoverStance::Crawling ? "COVER - crawling | Q / B: leave"
+                            : scene->player.character().cover_stance() == ambaretto::CoverStance::Crouched ? "COVER - crouched | Q / B: leave"
                             : "COVER - standing | Q / B: leave", info_y - 68);
                         const auto& weapons = scene->player.weapons();
-                        if (scene->player.can_shoot() && weapons.selected() != forza::WeaponType::Unarmed && !weapon_wheel && active) {
+                        if (scene->player.can_shoot() && weapons.selected() != ambaretto::WeaponType::Unarmed && !weapon_wheel && active) {
                             DrawCircle(GetScreenWidth() / 2, GetScreenHeight() / 2, 3, BLACK);
                             DrawCircle(GetScreenWidth() / 2, GetScreenHeight() / 2, 2, hit_marker > 0 ? RED : RAYWHITE);
                         }
-                        if (hurt_flash > 0) DrawRectangle(0, forza::menu_height, GetScreenWidth(), GetScreenHeight() - forza::menu_height,
+                        if (hurt_flash > 0) DrawRectangle(0, ambaretto::menu_height, GetScreenWidth(), GetScreenHeight() - ambaretto::menu_height,
                             {160, 0, 0, static_cast<unsigned char>(hurt_flash * 160)});
                         if (!scene->player.character().alive()) {
-                            DrawRectangle(0, forza::menu_height, GetScreenWidth(), GetScreenHeight() - forza::menu_height, {22, 8, 8, 140});
+                            DrawRectangle(0, ambaretto::menu_height, GetScreenWidth(), GetScreenHeight() - ambaretto::menu_height, {22, 8, 8, 140});
                             const char* text = "WASTED";
-                            forza::ui::draw_text(text, (GetScreenWidth() - forza::ui::measure_text(text, 44)) / 2, GetScreenHeight() / 2 - 22, 44, RED);
+                            ambaretto::ui::draw_text(text, (GetScreenWidth() - ambaretto::ui::measure_text(text, 44)) / 2, GetScreenHeight() / 2 - 22, 44, RED);
                         }
                     }
                     if (scene->police.arrested()) {
-                        DrawRectangle(0, forza::menu_height, GetScreenWidth(), GetScreenHeight() - forza::menu_height, {8, 14, 28, 135});
+                        DrawRectangle(0, ambaretto::menu_height, GetScreenWidth(), GetScreenHeight() - ambaretto::menu_height, {8, 14, 28, 135});
                         const char* text = "BUSTED";
-                        forza::ui::draw_text(text, (GetScreenWidth() - forza::ui::measure_text(text, 44)) / 2, GetScreenHeight() / 2 - 22, 44, SKYBLUE);
+                        ambaretto::ui::draw_text(text, (GetScreenWidth() - ambaretto::ui::measure_text(text, 44)) / 2, GetScreenHeight() / 2 - 22, 44, SKYBLUE);
                     }
                     if (scene->player.flying()) {
-                        draw_info(TextFormat("ALT %.0f m", std::max(0.f, float(region.GetY()) - forza::Environment::water_level)), info_y - 28);
+                        draw_info(TextFormat("ALT %.0f m", std::max(0.f, float(region.GetY()) - ambaretto::Environment::water_level)), info_y - 28);
                     }
                     const char* location = selected_city.name.c_str();
-                    const int width = forza::ui::measure_text(location, 20), x = GetScreenWidth() - width - 26;
+                    const int width = ambaretto::ui::measure_text(location, 20), x = GetScreenWidth() - width - 26;
                     DrawRectangle(x - 12, GetScreenHeight() - 50, width + 24, 36, {19, 28, 45, 230});
-                    forza::ui::draw_text(location, x, GetScreenHeight() - 42, 20, RAYWHITE);
+                    ambaretto::ui::draw_text(location, x, GetScreenHeight() - 42, 20, RAYWHITE);
                 }
-                if (notice_time > 0) forza::ui::draw_text(notice.c_str(), 26, scene->player.flying() ? 190 : 161, 20, RAYWHITE);
+                if (notice_time > 0) ambaretto::ui::draw_text(notice.c_str(), 26, scene->player.flying() ? 190 : 161, 20, RAYWHITE);
                 if (tuning_open) tuning_panel.draw(scene->player.car(), GetScreenWidth(), GetScreenHeight());
             }
             if (!map_open) {
                 const int clock_x = tuning_open ? 14 : GetScreenWidth() - 194, clock_y = tuning_open ? 198 : 46;
                 DrawRectangle(clock_x, clock_y, 180, 40, {19, 28, 45, 230});
                 const auto clock = day_night.clock();
-                forza::ui::draw_text(clock.data(), clock_x + (180 - forza::ui::measure_text(clock.data(), 24)) / 2,
+                ambaretto::ui::draw_text(clock.data(), clock_x + (180 - ambaretto::ui::measure_text(clock.data(), 24)) / 2,
                     clock_y + 8, 24, {174, 231, 246, 255});
                 if (!tuning_open) {
                     draw_wanted(scene->police.wanted(), clock_x, clock_y + 48);

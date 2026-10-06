@@ -8,7 +8,7 @@
 #include <limits>
 #include <string>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 void write_integer(std::vector<unsigned char>& bytes, unsigned offset, std::uint32_t value, unsigned size) {
     for (unsigned i = 0; i < size; ++i) bytes[offset + i] = static_cast<unsigned char>(value >> (i * 8));
@@ -260,4 +260,4 @@ void VehicleAudio::update(const Traffic& traffic, const Car& player_car, Vec3 li
         if (!selected && voice.engine_gain < .001f && voice.horn_gain < .001f && voice.vehicle) clear_voice(voice);
     }
 }
-} // namespace forza
+} // namespace ambaretto

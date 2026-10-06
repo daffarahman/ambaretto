@@ -7,7 +7,7 @@
 #include <stdexcept>
 
 namespace {
-using namespace forza;
+using namespace ambaretto;
 void require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
 void tick(Player& player, int count, FootInput input = {}) {
     for (int i = 0; i < count; ++i) player.step({}, input);

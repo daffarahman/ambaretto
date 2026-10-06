@@ -5,7 +5,7 @@
 #include <optional>
 #include <string>
 
-namespace forza {
+namespace ambaretto {
 class ControllerMapping;
 struct GraphicsSettings;
 enum class MenuCommand;
@@ -123,4 +123,4 @@ struct City {
 bool city_menu(City& selected, const std::filesystem::path& directory, ControllerMapping& controls,
                GraphicsSettings& graphics, bool edit_selected = false, const std::string& screenshot = {},
                bool preview_editor = false, MenuCommand initial_settings = {});
-} // namespace forza
+} // namespace ambaretto

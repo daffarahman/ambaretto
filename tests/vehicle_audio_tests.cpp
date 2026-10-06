@@ -41,14 +41,14 @@ void check_effect_clips(bool playback) {
     }
     if (playback) {
         {
-            forza::VehicleAudio audio;
-            forza::PhysicsWorld world(false);
-            for (const auto effect : {forza::SoundEffect::Pistol, forza::SoundEffect::SMG, forza::SoundEffect::AK47, forza::SoundEffect::Explosion})
-                world.emit_sound(effect, forza::Vec3::sZero());
-            audio.update_effects(world, forza::Vec3::sZero(), forza::Vec3::sAxisX(), true);
+            ambaretto::VehicleAudio audio;
+            ambaretto::PhysicsWorld world(false);
+            for (const auto effect : {ambaretto::SoundEffect::Pistol, ambaretto::SoundEffect::SMG, ambaretto::SoundEffect::AK47, ambaretto::SoundEffect::Explosion})
+                world.emit_sound(effect, ambaretto::Vec3::sZero());
+            audio.update_effects(world, ambaretto::Vec3::sZero(), ambaretto::Vec3::sAxisX(), true);
             require(world.take_sound_events().empty(), "Audio update did not consume gameplay sounds");
-            world.emit_sound(forza::SoundEffect::Explosion, forza::Vec3::sZero());
-            audio.update_effects(world, forza::Vec3::sZero(), forza::Vec3::sAxisX(), false);
+            world.emit_sound(ambaretto::SoundEffect::Explosion, ambaretto::Vec3::sZero());
+            audio.update_effects(world, ambaretto::Vec3::sZero(), ambaretto::Vec3::sAxisX(), false);
             require(world.take_sound_events().empty(), "Paused audio retained a delayed sound");
         }
         CloseAudioDevice();
@@ -58,7 +58,7 @@ void check_effect_clips(bool playback) {
 void check_loop(const char* filename, bool horn, bool playback) {
     const Wave original = LoadWave((std::string(VEHICLE_AUDIO_ASSETS) + filename).c_str());
     require(IsWaveValid(original), "The supplied vehicle WAV must decode");
-    const auto loop = forza::make_vehicle_audio_loop(original);
+    const auto loop = ambaretto::make_vehicle_audio_loop(original);
     require(!loop.wav.empty(), "A loud vehicle WAV must produce a loop");
     const Wave decoded = LoadWaveFromMemory(".wav", loop.wav.data(), int(loop.wav.size()));
     require(IsWaveValid(decoded) && decoded.channels == 1 && decoded.sampleSize == 16, "The in-memory loop must be native mono PCM WAV");
@@ -111,16 +111,16 @@ int main(int argc, char** argv) {
     const bool playback = argc > 1 && std::string(argv[1]) == "--playback";
     check_loop("car-horn.wav", true, playback); check_loop("car-engine.wav", false, false);
     check_effect_clips(playback);
-    const auto origin = forza::Vec3::sZero(), right = forza::Vec3::sAxisX();
-    const auto near = forza::vehicle_audio_placement(origin, origin, right, 100);
+    const auto origin = ambaretto::Vec3::sZero(), right = ambaretto::Vec3::sAxisX();
+    const auto near = ambaretto::vehicle_audio_placement(origin, origin, right, 100);
     require(near.volume == 1 && near.pan == 0, "A car beside the listener must be centered and audible");
-    const auto left = forza::vehicle_audio_placement(forza::Vec3(-50, 0, 0), origin, right, 100);
-    const auto right_car = forza::vehicle_audio_placement(forza::Vec3(50, 0, 0), origin, right, 100);
+    const auto left = ambaretto::vehicle_audio_placement(ambaretto::Vec3(-50, 0, 0), origin, right, 100);
+    const auto right_car = ambaretto::vehicle_audio_placement(ambaretto::Vec3(50, 0, 0), origin, right, 100);
     require(std::abs(left.volume - .25f) < .0001f && left.pan == -1 && right_car.pan == 1, "Distance falloff and left/right panning must match the listener's orientation");
-    require(forza::vehicle_audio_placement(forza::Vec3(50, 0, 0), origin, -right, 100).pan == -1, "Turning around must reverse the stereo placement");
-    require(forza::vehicle_audio_placement(forza::Vec3(100, 0, 0), origin, right, 100).volume == 0, "Distant vehicles must be inaudible");
-    require(forza::make_vehicle_audio_loop({}).wav.empty(), "Missing or invalid audio must fail safely");
+    require(ambaretto::vehicle_audio_placement(ambaretto::Vec3(50, 0, 0), origin, -right, 100).pan == -1, "Turning around must reverse the stereo placement");
+    require(ambaretto::vehicle_audio_placement(ambaretto::Vec3(100, 0, 0), origin, right, 100).volume == 0, "Distant vehicles must be inaudible");
+    require(ambaretto::make_vehicle_audio_loop({}).wav.empty(), "Missing or invalid audio must fail safely");
     short silence[100]{};
-    require(forza::make_vehicle_audio_loop(Wave{100, 1000, 16, 1, silence}).wav.empty(), "A silent recording must not become a playing voice");
+    require(ambaretto::make_vehicle_audio_loop(Wave{100, 1000, 16, 1, silence}).wav.empty(), "A silent recording must not become a playing voice");
     std::puts("Vehicle loop trimming, seams, and positional audio checks passed");
 }

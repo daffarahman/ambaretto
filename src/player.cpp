@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace forza {
+namespace ambaretto {
 Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane, Traffic* traffic, Pedestrians* pedestrians,
     const std::vector<std::unique_ptr<Plane>>* aircraft, Police* police)
     : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world, &environment, true), plane_(plane), traffic_(traffic),
@@ -303,4 +303,4 @@ Shot Player::shoot(Vec3 origin, Vec3 direction, bool held, bool pressed, bool ai
     }
     return shot;
 }
-} // namespace forza
+} // namespace ambaretto

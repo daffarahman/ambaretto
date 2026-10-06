@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 constexpr Color blue = ui::dos_blue, gray = ui::dos_white, ink = ui::dos_blue, selected = ui::dos_light_blue;
 struct Item { const char* label; MenuCommand command; const char* shortcut = ""; };
@@ -303,4 +303,4 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         button(4, "Close");
     }
 }
-} // namespace forza
+} // namespace ambaretto

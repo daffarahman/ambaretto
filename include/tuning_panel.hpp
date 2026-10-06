@@ -2,7 +2,7 @@
 #include "vehicle.hpp"
 #include <raylib.h>
 
-namespace forza {
+namespace ambaretto {
 struct TuningPanelInput {
     Vector2 mouse{};
     bool pressed = false, down = false, focused = true, fine = false;
@@ -21,4 +21,4 @@ public:
 private:
     int tab_ = 0, selected_ = 0, dragging_ = -1;
 };
-} // namespace forza
+} // namespace ambaretto

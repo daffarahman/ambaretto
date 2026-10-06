@@ -2,7 +2,7 @@
 #include "player.hpp"
 #include <vector>
 
-namespace forza {
+namespace ambaretto {
 class Traffic;
 
 struct Pedestrian {
@@ -32,4 +32,4 @@ private:
     float stream_time_ = 0;
     unsigned spawn_sequence_ = 0;
 };
-} // namespace forza
+} // namespace ambaretto

@@ -20,21 +20,21 @@ bool equal(Image a, Image b) {
         if (!same(GetImageColor(a, x, y), GetImageColor(b, x, y))) return false;
     return true;
 }
-Camera3D city_camera(forza::Vec3 focus) {
-    return {{focus.GetX(), forza::City::level + 200, focus.GetZ()},
-        {focus.GetX(), forza::City::level, focus.GetZ()}, {0, 0, -1}, 100, CAMERA_ORTHOGRAPHIC};
+Camera3D city_camera(ambaretto::Vec3 focus) {
+    return {{focus.GetX(), ambaretto::City::level + 200, focus.GetZ()},
+        {focus.GetX(), ambaretto::City::level, focus.GetZ()}, {0, 0, -1}, 100, CAMERA_ORTHOGRAPHIC};
 }
-Image render_city(forza::EnvironmentRenderer& scenery, RenderTexture2D texture, Camera3D camera, const char* time = "12:00") {
-    forza::DayNight clock; clock.set_time(time);
-    forza::SceneLighting lighting;
-    forza::GraphicsSettings settings; settings.shadows = 0; settings.local_lights = false;
+Image render_city(ambaretto::EnvironmentRenderer& scenery, RenderTexture2D texture, Camera3D camera, const char* time = "12:00") {
+    ambaretto::DayNight clock; clock.set_time(time);
+    ambaretto::SceneLighting lighting;
+    ambaretto::GraphicsSettings settings; settings.shadows = 0; settings.local_lights = false;
     BeginTextureMode(texture); ClearBackground(BLACK); BeginMode3D(camera);
     scenery.draw(camera, 0, clock.lighting(), lighting, settings);
     EndMode3D(); EndTextureMode();
     Image image = LoadImageFromTexture(texture.texture); ImageFlipVertical(&image); return image;
 }
-int crossing_pixels(Image image, Camera3D camera, const forza::CityRoadPort& gate, int direction) {
-    using namespace forza;
+int crossing_pixels(Image image, Camera3D camera, const ambaretto::CityRoadPort& gate, int direction) {
+    using namespace ambaretto;
     const Vec3 out((direction == 1) - (direction == 3), 0, (direction == 2) - (direction == 0));
     const Vec3 across = out.Cross(Vec3::sAxisY()), center = gate.center - out * .9f;
     Vector2 first{float(image.width), float(image.height)}, last{};
@@ -55,7 +55,7 @@ int crossing_pixels(Image image, Camera3D camera, const forza::CityRoadPort& gat
     return count;
 }
 void city_crosswalks(RenderTexture2D texture) {
-    using namespace forza;
+    using namespace ambaretto;
     City city = City::create("Crosswalk render check"); std::string error;
     require(city.add_land({56, 58}, {74, 74}, error), "crosswalk island failed");
     for (const auto& stroke : {City::road_stroke({65, 60}, {65, 66}), City::road_stroke({65, 66}, {72, 66}),
@@ -108,7 +108,7 @@ void city_crosswalks(RenderTexture2D texture) {
     UnloadImage(image);
 }
 void elevated_road_pixels(RenderTexture2D texture) {
-    using namespace forza;
+    using namespace ambaretto;
     bool passed = true;
     for (bool diagonal : {false, true}) {
         City city = City::create("Elevated road render"); std::string error;
@@ -158,7 +158,7 @@ void elevated_road_pixels(RenderTexture2D texture) {
     require(passed,"elevated ramp hides road pavement or a white verge marking");
 }
 void single_square_ramps(RenderTexture2D texture) {
-    using namespace forza;
+    using namespace ambaretto;
     City flat = City::create("Single square ramps"); std::string error;
     require(flat.add_land({59,59},{69,69},error),"single-square island failed");
     City raised = flat;
@@ -188,8 +188,8 @@ void single_square_ramps(RenderTexture2D texture) {
     require(changed>1000,"corner-height ramps did not appear in the isometric renderer");
     UnloadImage(before); UnloadImage(after);
 }
-void sharp_map_edges(const forza::EnvironmentRenderer& scenery, RenderTexture2D texture, bool in_vehicle = false) {
-    using namespace forza;
+void sharp_map_edges(const ambaretto::EnvironmentRenderer& scenery, RenderTexture2D texture, bool in_vehicle = false) {
+    using namespace ambaretto;
     const Vec3 player(0, 3.3f, 105), heading(0, 0, -1);
     const Rectangle viewport{0, 0, 640, 480};
     // This render target has no MSAA: interior map pixels must retain the palette,
@@ -230,7 +230,7 @@ void sharp_map_edges(const forza::EnvironmentRenderer& scenery, RenderTexture2D 
     }
 }
 void diagonal_bridge_pixels(RenderTexture2D texture) {
-    using namespace forza;
+    using namespace ambaretto;
     City city = City::create("Diagonal bridge render"); std::string error;
     require(city.add_road(City::road_stroke({60,60},{68,68},false,true),error),"diagonal render stroke failed");
     const auto network = city.road_network();
@@ -256,7 +256,7 @@ int main(int argc, char** argv) {
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
     InitWindow(640, 480, "Map marker regression check");
     try {
-        using namespace forza;
+        using namespace ambaretto;
         if (argc == 4 && std::string(argv[1]) == "--city-preview") {
             City city; std::string error;
             if (!City::load(argv[2], city, error)) throw std::runtime_error(error);

@@ -2,7 +2,7 @@
 #include <cmath>
 #include <string>
 
-namespace forza::ui {
+namespace ambaretto::ui {
 namespace {
 Font active{};
 Font current() { return active.texture.id ? active : GetFontDefault(); }
@@ -66,4 +66,4 @@ void draw_window(Rectangle r, const char* title) {
 void draw_image_text(Image* image, const char* text, int x, int y, int size, Color color) {
     ImageDrawTextEx(image, current(), text, {float(x), float(y)}, float(size), spacing(size), color);
 }
-} // namespace forza::ui
+} // namespace ambaretto::ui

@@ -6,7 +6,7 @@
 #include <cmath>
 #include <limits>
 
-namespace forza {
+namespace ambaretto {
 struct MinimapView {
     Rectangle bounds;
     Vector2 anchor;
@@ -49,4 +49,4 @@ struct MinimapView {
             && p.y >= bounds.y + 6 && p.y <= bounds.y + bounds.height - 6;
     }
 };
-} // namespace forza
+} // namespace ambaretto

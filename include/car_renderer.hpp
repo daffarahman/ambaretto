@@ -4,7 +4,7 @@
 #include "scene_lighting.hpp"
 #include <raylib.h>
 
-namespace forza {
+namespace ambaretto {
 class CarRenderer {
 public:
     CarRenderer();
@@ -25,4 +25,4 @@ private:
     int damage_time_location_ = -1, damage_fire_location_ = -1;
     bool ready_ = false, wheel_ready_ = false;
 };
-} // namespace forza
+} // namespace ambaretto

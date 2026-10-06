@@ -7,14 +7,14 @@
 void require(bool condition) { if (!condition) throw std::runtime_error("day/night cycle regression"); }
 int main() {
     try {
-        forza::DayNight time;
+        ambaretto::DayNight time;
         require(std::string(time.clock().data()) == "08:00");
         time.advance(60);
         require(std::string(time.clock().data()) == "09:00");
         time.advance(60, false);
         time.advance(std::numeric_limits<double>::infinity());
         require(std::string(time.clock().data()) == "09:00");
-        time.advance(forza::DayNight::cycle_seconds);
+        time.advance(ambaretto::DayNight::cycle_seconds);
         require(std::string(time.clock().data()) == "09:00");
         require(time.set_time("23:59")); time.advance(1);
         require(std::string(time.clock().data()) == "00:00");

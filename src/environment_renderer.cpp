@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 constexpr float pi = 3.14159265359f;
 constexpr int sign_rows = 11;
@@ -570,7 +570,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         ImageDrawRectangle(&atlas, 0, row * 64, 256, 64, backgrounds[row]);
         ImageDrawRectangleLines(&atlas, {3, float(row * 64 + 3), 250, 58}, 2, RAYWHITE);
         const int font_size = row == 6 ? 22 : 32;
-        forza::ui::draw_image_text(&atlas, labels[row], (256 - forza::ui::measure_text(labels[row], font_size)) / 2, row * 64 + 18, font_size, RAYWHITE);
+        ambaretto::ui::draw_image_text(&atlas, labels[row], (256 - ambaretto::ui::measure_text(labels[row], font_size)) / 2, row * 64 + 18, font_size, RAYWHITE);
     }
     sign_texture_ = LoadTextureFromImage(atlas); UnloadImage(atlas);
     SetTextureFilter(sign_texture_, TEXTURE_FILTER_BILINEAR);
@@ -1341,9 +1341,9 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
         const auto& island = Environment::islands()[i];
         const auto p = view.project(island.center, viewport);
         if (!inside(p)) continue;
-        const int width = forza::ui::measure_text(island.name, 16);
+        const int width = ambaretto::ui::measure_text(island.name, 16);
         DrawRectangle(int(p.x) - width / 2 - 5, int(p.y) - 28, width + 10, 24, {19, 28, 45, 205});
-        forza::ui::draw_text(island.name, int(p.x) - width / 2, int(p.y) - 24, 16, RAYWHITE);
+        ambaretto::ui::draw_text(island.name, int(p.x) - width / 2, int(p.y) - 24, 16, RAYWHITE);
     }
     if (!environment_->city()) for (const auto& airport : airports) {
         const auto p = view.project(Vec3(airport.center_x, 0, airport.runway_z), viewport);
@@ -1353,15 +1353,15 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
     if (inside(player)) {
         DrawCircleV(player, 11, {19, 28, 45, 255});
         DrawPoly(player, 3, 9, std::atan2(player_forward.GetZ(), player_forward.GetX()) * RAD2DEG, RAYWHITE);
-        forza::ui::draw_text("YOU", int(player.x + 14), int(player.y - 7), 14, RAYWHITE);
+        ambaretto::ui::draw_text("YOU", int(player.x + 14), int(player.y - 7), 14, RAYWHITE);
     }
     const float bar_meters = view.scale >= .5f ? 100 : view.scale >= .15f ? 500 : 1000;
     const float bar_width = bar_meters * view.scale;
     const float bx = viewport.x + 18, by = viewport.y + viewport.height - 20;
     DrawRectangle(int(bx - 6), int(by - 28), int(bar_width + 20), 40, {19, 28, 45, 210});
     DrawLineEx({bx, by}, {bx + bar_width, by}, 3, RAYWHITE);
-    forza::ui::draw_text(TextFormat("%.0f m", double(bar_meters)), int(bx), int(by - 23), 14, RAYWHITE);
+    ambaretto::ui::draw_text(TextFormat("%.0f m", double(bar_meters)), int(bx), int(by - 23), 14, RAYWHITE);
     EndScissorMode();
     DrawRectangleLinesEx(viewport, 2, {115, 157, 174, 255});
 }
-} // namespace forza
+} // namespace ambaretto

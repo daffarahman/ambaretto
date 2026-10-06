@@ -2,7 +2,7 @@
 #include "graphics_settings.hpp"
 #include <raylib.h>
 
-namespace forza {
+namespace ambaretto {
 enum class GraphicsPanelAction { None, Preview, Apply, Cancel };
 struct GraphicsPanelInput {
     Vector2 mouse{};
@@ -28,4 +28,4 @@ private:
     bool visible_ = false;
     int selected_ = 0, dragging_ = -1;
 };
-} // namespace forza
+} // namespace ambaretto

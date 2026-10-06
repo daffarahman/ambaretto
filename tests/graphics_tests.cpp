@@ -10,8 +10,8 @@ namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 }
 int main() {
-    using namespace forza;
-    const auto folder = std::filesystem::temp_directory_path() / "forza-graphics-check";
+    using namespace ambaretto;
+    const auto folder = std::filesystem::temp_directory_path() / "ambaretto-graphics-check";
     const auto path = folder / "graphics-settings.ini";
     try {
         std::filesystem::create_directories(folder);

@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace forza {
+namespace ambaretto {
 enum class Surface { Grass, Sand, Rock, Road, Seabed, Soil };
 struct TerrainTriangle { std::uint32_t a, b, c; Surface surface; bool deck = false; };
 enum class BuildingKind { Tower, Mall, Hotel, Cafe, Club, House, GasStation, Warehouse, Terminal, Hangar, ControlTower, Apartment, Shop, Office };
@@ -113,4 +113,4 @@ private:
     std::vector<Barrier> barriers_;
     std::vector<Port> ports_;
 };
-} // namespace forza
+} // namespace ambaretto

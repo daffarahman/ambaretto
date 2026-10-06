@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 constexpr Color blue = ui::dos_blue, gray = ui::dos_white, teal = ui::dos_light_blue, ink = ui::dos_blue;
 constexpr const char* labels[] = {"Preset", "Sun shadows", "Soft shadow edges", "Shadow distance", "City / vehicle lights",
@@ -174,4 +174,4 @@ void GraphicsPanel::draw(float fps, const std::string& status) const {
     button(layout.button(1), "Cancel", selected_ == 10);
     button(layout.button(2), dirty() ? "Apply & save *" : "Apply & save", selected_ == 11);
 }
-} // namespace forza
+} // namespace ambaretto

@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 constexpr Color background = ui::dos_blue, panel = ui::dos_blue, border = ui::dos_white;
 constexpr Color ink = ui::dos_white, muted = ui::dos_white, accent = ui::dos_yellow;
@@ -80,10 +80,10 @@ void help_dialog(bool editing, bool about) {
     while (!WindowShouldClose()) {
         BeginDrawing(); ui::draw_desktop();
         Rectangle r{(GetScreenWidth()-760)/2.f,(GetScreenHeight()-394)/2.f,760,394};
-        ui::draw_window(r,about ? "About Forza Ambazon" : "Keyboard reference");
+        ui::draw_window(r,about ? "About Ambaretto" : "Keyboard reference");
         ui::draw_window_close(r);
         if (about) {
-            text("FORZA AMBAZON",r.x+28,r.y+64,28,accent);
+            text("Ambaretto",r.x+28,r.y+64,28,accent);
             text("Build an island. Make it your own. Take it for a drive.",r.x+28,r.y+120,18);
             text("City builder / C++17 / raylib / Jolt Physics",r.x+28,r.y+158,18);
         } else {
@@ -543,7 +543,7 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         ui::draw_window({x,y,940,height},"City directory");
         ui::draw_window_close({x,y,940,height});
         if (close_clicked({x,y,940,height},can_choose)) { EndDrawing(); return false; }
-        text("FORZA AMBAZON / CITIES",x+20,y+48,20,accent);
+        text("Ambaretto / CITIES",x+20,y+48,20,accent);
         DrawRectangleRec({x,y+108,600,height-118},panel);
         if (cities.empty()) text("No cities",x+24,y+138,22);
         for (int row = 0; row<rows && row+scroll<int(cities.size()); ++row) {
@@ -598,7 +598,7 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         }
         if (graphics_panel.visible()) graphics_panel.draw(float(GetFPS()),settings_status);
         if (menu.dialog_open()) menu.draw(controls,mapping_path); else menu.draw(menu_state);
-        text("FORZA AMBAZON",GetScreenWidth()-176.f,8,16,background);
+        text("Ambaretto",GetScreenWidth()-ui::measure_text("Ambaretto",16)-20.f,8,16,background);
         EndDrawing();
         accept_input = true;
         if (!screenshot.empty() && ++frames>=3) { auto image = LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); return false; }
@@ -607,4 +607,4 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
     if (!menu.save_pending(controls,mapping_path)) TraceLog(LOG_ERROR,"Could not save controller mappings; previous file retained");
     return false;
 }
-} // namespace forza
+} // namespace ambaretto

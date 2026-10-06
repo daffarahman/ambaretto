@@ -1,7 +1,7 @@
 #pragma once
 #include <raylib.h>
 
-namespace forza::ui {
+namespace ambaretto::ui {
 inline constexpr Color dos_blue{0, 0, 170, 255}, dos_white{255, 255, 255, 255};
 inline constexpr Color dos_yellow{255, 255, 85, 255}, dos_light_blue{85, 85, 255, 255};
 void draw_desktop();
@@ -24,4 +24,4 @@ private:
 void draw_text(const char* text, int x, int y, int size, Color color);
 int measure_text(const char* text, int size);
 void draw_image_text(Image* image, const char* text, int x, int y, int size, Color color);
-} // namespace forza::ui
+} // namespace ambaretto::ui

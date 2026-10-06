@@ -9,7 +9,7 @@
 #include <limits>
 #include <string_view>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 constexpr float lane_offset = 2.2f;
 Vec3 flat(Vec3 value) { value.SetY(0); return value; }
@@ -511,4 +511,4 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         }
     }
 }
-} // namespace forza
+} // namespace ambaretto

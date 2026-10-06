@@ -6,7 +6,7 @@
 #include <string_view>
 #include <limits>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 float smooth(float a, float b, float x) {
     const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
@@ -1024,4 +1024,4 @@ float Environment::surface_height(Vec3 reference) const {
 bool Environment::submerged(const Vec3& point) const {
     return point.GetY() < water_level - .6f || std::abs(point.GetX()) > extent - 40 || std::abs(point.GetZ()) > extent - 40;
 }
-} // namespace forza
+} // namespace ambaretto

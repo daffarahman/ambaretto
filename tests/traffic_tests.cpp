@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace {
-using namespace forza;
+using namespace ambaretto;
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }

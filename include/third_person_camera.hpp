@@ -1,7 +1,7 @@
 #pragma once
 #include "vehicle.hpp"
 
-namespace forza {
+namespace ambaretto {
 class ThirdPersonCamera {
 public:
     void reset(float yaw = 0) { yaw_ = movement_yaw_ = yaw; pitch_ = 0.30f; idle_ = 0; movement_input_ = Vec3::sZero(); follow_foot_ = true; }
@@ -23,4 +23,4 @@ private:
     bool follow_foot_ = true;
     float foot_distance_ = 4.5f, car_distance_ = 9, plane_distance_ = 20;
 };
-} // namespace forza
+} // namespace ambaretto

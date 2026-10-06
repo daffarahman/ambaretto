@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace forza {
+namespace ambaretto {
 enum class Action {
     FootForward, FootBackward, FootLeft, FootRight, EnterVehicle, Sprint, Jump, Respawn,
     WeaponWheel, Fire, Aim, Reload, Cover,
@@ -70,4 +70,4 @@ private:
     std::array<float, action_count> values_{};
     std::array<bool, action_count> pressed_{};
 };
-} // namespace forza
+} // namespace ambaretto

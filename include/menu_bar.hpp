@@ -2,7 +2,7 @@
 #include "controller_mapping.hpp"
 #include <raylib.h>
 
-namespace forza {
+namespace ambaretto {
 constexpr int menu_height = 32;
 enum class MenuCommand {
     None, Resume, Pause, Quit, Cities, Recover, CarDefaults, Map, Tuning, Graphics, AimMode, Controllers, Controls, About,
@@ -43,4 +43,4 @@ private:
     BindingCapture capture_;
     std::string status_, devices_;
 };
-} // namespace forza
+} // namespace ambaretto

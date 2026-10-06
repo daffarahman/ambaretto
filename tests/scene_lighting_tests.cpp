@@ -18,9 +18,9 @@ int main() {
     InitWindow(640, 480, "Lighting checks");
     require(IsWindowReady(), "A graphics context is required for lighting checks");
     const Camera3D camera{{7, 6, 8}, {0, 0, 0}, {0, 1, 0}, 55, CAMERA_PERSPECTIVE};
-    auto daylight = forza::DayNight().lighting();
+    auto daylight = ambaretto::DayNight().lighting();
     daylight.sun_direction = Vector3Normalize({-.6f, .7f, .3f}); daylight.day = 1;
-    forza::GraphicsSettings settings;
+    ambaretto::GraphicsSettings settings;
     settings.shadows = 3; settings.shadow_distance = 30;
     const char* vertex = R"GLSL(#version 330
 in vec3 vertexPosition; in vec3 vertexNormal; in vec4 vertexColor;
@@ -28,7 +28,7 @@ uniform mat4 mvp; out vec3 position; out vec3 normal; out vec4 color;
 void main() { position=vertexPosition; normal=vertexNormal; color=vertexColor; gl_Position=mvp*vec4(vertexPosition,1); }
 )GLSL";
     std::string fragment = "#version 330\nin vec3 position; in vec3 normal; in vec4 color; uniform vec3 sunDirection; uniform vec3 cameraPosition; out vec4 finalColor;\n";
-    fragment += forza::scene_lighting_glsl();
+    fragment += ambaretto::scene_lighting_glsl();
     fragment += R"GLSL(
 void main() {
     vec3 n=normalize(normal);
@@ -39,7 +39,7 @@ void main() {
     const Shader shader = LoadShaderFromMemory(vertex, fragment.c_str());
     require(IsShaderValid(shader) && shader.id != rlGetShaderIdDefault(), "Lighting receiver shader must compile");
     {
-        forza::SceneLighting lighting;
+        ambaretto::SceneLighting lighting;
         const auto render = [&] {
             BeginDrawing();
             if (lighting.begin_shadow({0, 0, 0}, daylight, settings)) {
@@ -66,7 +66,7 @@ void main() {
         require(shadowed + 100 < pixel({2, 0, -.7f}), "Turning shadows off must remove the cube's cast shadow");
         const Vector3 sample{3, 0, 3};
         const int baseline = pixel(sample);
-        forza::SceneLight lamp{{3, 2, 3}, {1, 1, 1}, 8};
+        ambaretto::SceneLight lamp{{3, 2, 3}, {1, 1, 1}, 8};
         lighting.set_lights(&lamp, 1); settings.local_lights = true; refresh();
         require(pixel(sample) > baseline + 100, "Nearby light must illuminate an object surface");
         settings.local_lights = false; refresh();
@@ -83,7 +83,7 @@ void main() {
         require(!lighting.warning(), "Changing shadow resolution must preserve GPU support");
         const Vector3 origin{2000, 0, 2000};
         const Camera3D wall_camera{{2008, 6, 2010}, {2000, 4, 2000}, {0, 1, 0}, 55, CAMERA_PERSPECTIVE};
-        daylight = forza::DayNight().lighting();
+        daylight = ambaretto::DayNight().lighting();
         settings.shadows = 3; settings.shadow_distance = 150; settings.soft_shadows = true;
         SetWindowSize(1280, 720);
         const auto wall = [&] {

@@ -1,4 +1,4 @@
-param([string]$Game = (Join-Path $PSScriptRoot '..\build\ucrt64-release\forzaambazon.exe'))
+param([string]$Game = (Join-Path $PSScriptRoot '..\build\ucrt64-release\Ambaretto.exe'))
 
 $preview = Join-Path $PSScriptRoot '..\build\engine-audio-smoke.png'
 $output = & $Game --tuning --screenshot $preview 2>&1

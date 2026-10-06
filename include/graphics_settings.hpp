@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace forza {
+namespace ambaretto {
 enum class GraphicsPreset { Low, Balanced, High, Custom };
 inline constexpr std::array<int, 6> graphics_fps_limits{{30, 60, 120, 144, 240, 0}};
 struct GraphicsSettings {
@@ -26,4 +26,4 @@ struct GraphicsSettings {
     bool load(const std::filesystem::path& path, std::string& error);
     bool save(const std::filesystem::path& path, std::string& error) const;
 };
-} // namespace forza
+} // namespace ambaretto

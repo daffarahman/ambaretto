@@ -8,7 +8,7 @@
 #include <stdexcept>
 
 namespace {
-using namespace forza;
+using namespace ambaretto;
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 void tick(PhysicsWorld& world, Car& car, int count, Input input = {}) {
     for (int i = 0; i < count; ++i) { car.step(input); world.step(); }

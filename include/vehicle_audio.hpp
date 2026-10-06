@@ -4,7 +4,7 @@
 #include <array>
 #include <vector>
 
-namespace forza {
+namespace ambaretto {
 class Traffic;
 class Police;
 struct TrafficCar;
@@ -48,4 +48,4 @@ private:
     std::array<const TrafficCar*, npc_voices> selected_{};
     float selection_time_ = 0;
 };
-} // namespace forza
+} // namespace ambaretto

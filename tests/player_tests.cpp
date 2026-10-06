@@ -10,23 +10,23 @@ namespace {
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
-void tick(forza::PhysicsWorld& world, forza::Character& character, forza::FootInput input, int steps) {
+void tick(ambaretto::PhysicsWorld& world, ambaretto::Character& character, ambaretto::FootInput input, int steps) {
     for (int i = 0; i < steps; ++i) { world.step(); character.step(input); }
 }
 void character_movement() {
-    forza::PhysicsWorld world(false);
-    forza::Character character(world);
-    character.reset(forza::Vec3(0, 0.08f, 0));
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Character character(world);
+    character.reset(ambaretto::Vec3(0, 0.08f, 0));
     tick(world, character, {}, 120);
     require(character.grounded() && std::abs(character.position().GetY()) < 0.08f, "character did not stand on ground");
-    tick(world, character, {forza::Vec3(0, 0, -1), false, false}, 120);
+    tick(world, character, {ambaretto::Vec3(0, 0, -1), false, false}, 120);
     require(character.position().GetZ() < -2.8f, "walking did not move forward");
     const float start = character.position().GetZ();
-    tick(world, character, {forza::Vec3(0, 0, -1), true, false}, 120);
+    tick(world, character, {ambaretto::Vec3(0, 0, -1), true, false}, 120);
     require(start - character.position().GetZ() > 6, "sprint did not increase movement speed");
     tick(world, character, {}, 120);
     require(character.velocity().Length() < 0.2f, "character did not stop after releasing movement");
-    character.step({forza::Vec3::sZero(), false, true});
+    character.step({ambaretto::Vec3::sZero(), false, true});
     float peak = character.position().GetY();
     bool airborne = false;
     for (int i = 0; i < 150; ++i) {
@@ -38,7 +38,7 @@ void character_movement() {
     std::cout << "Character jump: " << peak << " m; walking and sprint passed\n";
 }
 void health_regeneration() {
-    using namespace forza;
+    using namespace ambaretto;
     Environment map;
     PhysicsWorld world(false);
     Car car(world);
@@ -89,7 +89,7 @@ void health_regeneration() {
 }
 
 void articulated_ragdoll() {
-    using namespace forza;
+    using namespace ambaretto;
     PhysicsWorld world(false);
     Character character(world), observer(world);
     const Vec3 feet(0, .08f, 0), inherited(6, 2, -4);
@@ -140,24 +140,24 @@ void articulated_ragdoll() {
 }
 
 void city_collisions_and_interaction() {
-    const forza::Environment map;
-    forza::PhysicsWorld world(map);
-    forza::Car car(world);
-    forza::Player player(world, car, map);
+    const ambaretto::Environment map;
+    ambaretto::PhysicsWorld world(map);
+    ambaretto::Car car(world);
+    ambaretto::Player player(world, car, map);
     for (int i = 0; i < 120; ++i) player.step({}, {});
-    require(player.driving() && player.interact() == forza::Interaction::Exited && !player.driving(), "could not exit car");
+    require(player.driving() && player.interact() == ambaretto::Interaction::Exited && !player.driving(), "could not exit car");
     const auto parked = car.position();
     for (int i = 0; i < 240; ++i) player.step({}, {});
     require((car.position() - parked).Length() < 0.8f, "parked car rolled away");
     require(player.character().grounded(), "exit did not place character on terrain");
-    require(player.can_enter() && player.interact() == forza::Interaction::Entered, "could not enter nearby car");
-    require(player.interact() == forza::Interaction::Exited, "second exit failed");
-    for (int i = 0; i < 180; ++i) player.step({}, {forza::Vec3(-1, 0, 0), true, false});
-    require(!player.can_enter() && player.interact() == forza::Interaction::TooFar, "entered a car from too far away");
+    require(player.can_enter() && player.interact() == ambaretto::Interaction::Entered, "could not enter nearby car");
+    require(player.interact() == ambaretto::Interaction::Exited, "second exit failed");
+    for (int i = 0; i < 180; ++i) player.step({}, {ambaretto::Vec3(-1, 0, 0), true, false});
+    require(!player.can_enter() && player.interact() == ambaretto::Interaction::TooFar, "entered a car from too far away");
     player.reset();
     for (int i = 0; i < 150; ++i) player.step({1, 0, false}, {});
     const auto bailout_velocity = car.velocity(), bailout_position = car.position();
-    require(bailout_velocity.Length() > 2.5f && player.interact() == forza::Interaction::Exited
+    require(bailout_velocity.Length() > 2.5f && player.interact() == ambaretto::Interaction::Exited
         && player.on_foot() && player.character().ragdolling(), "moving car exit did not trigger a ragdoll");
     require((player.character().velocity() - bailout_velocity).Length() < 3.3f && !player.can_enter(),
         "bailout lost vehicle momentum or allowed immediate reentry");
@@ -168,34 +168,34 @@ void city_collisions_and_interaction() {
 
     const auto& building = map.buildings().front();
     const float x = building.center.GetX(), z = building.center.GetZ();
-    require(!player.character().can_stand_at(forza::Vec3(x, map.height(x, z) + 0.08f, z)), "exit collision check accepted a building interior");
+    require(!player.character().can_stand_at(ambaretto::Vec3(x, map.height(x, z) + 0.08f, z)), "exit collision check accepted a building interior");
     const float beside = x + building.size.GetX() / 2 + 1.3f;
-    car.reset(forza::Vec3(beside, map.height(beside, z) + 0.56f, z));
-    require(player.interact() == forza::Interaction::Exited && player.position().GetX() > car.position().GetX(),
+    car.reset(ambaretto::Vec3(beside, map.height(beside, z) + 0.56f, z));
+    require(player.interact() == ambaretto::Interaction::Exited && player.position().GetX() > car.position().GetX(),
             "did not use opposite door when driver-side exit was blocked");
     auto& character = player.character();
     const float approach = z + building.size.GetZ() / 2 + 12;
-    character.reset(forza::Vec3(x, map.height(x, approach) + 0.08f, approach));
-    tick(world, character, {forza::Vec3(0, 0, -1), true, false}, 300);
+    character.reset(ambaretto::Vec3(x, map.height(x, approach) + 0.08f, approach));
+    tick(world, character, {ambaretto::Vec3(0, 0, -1), true, false}, 300);
     require(character.position().GetZ() > z + building.size.GetZ() / 2, "character walked through a building");
-    character.reset(forza::Vec3(0, map.height(0, 105) + 0.08f, 105));
-    tick(world, character, {forza::Vec3(0, 0, -1), true, false}, 1200);
+    character.reset(ambaretto::Vec3(0, map.height(0, 105) + 0.08f, 105));
+    tick(world, character, {ambaretto::Vec3(0, 0, -1), true, false}, 1200);
     require(character.position().GetZ() < 45 && character.grounded(), "character failed to walk up the city avenue");
     require(std::abs(character.position().GetY() - map.height(character.position().GetX(), character.position().GetZ())) < 0.15f,
             "character did not follow terrain elevation");
     car.reset(map.spawn());
-    character.reset(forza::Vec3(0, map.height(0, 113) + 0.08f, 113));
-    for (int i = 0; i < 240; ++i) player.step({}, {forza::Vec3(0, 0, -1), true, false});
+    character.reset(ambaretto::Vec3(0, map.height(0, 113) + 0.08f, 113));
+    for (int i = 0; i < 240; ++i) player.step({}, {ambaretto::Vec3(0, 0, -1), true, false});
     require(character.position().GetZ() > car.position().GetZ() + 1.7f,
             "character walked through the parked car");
-    const forza::Vec3 camera_origin(x, building.center.GetY(), approach);
-    require(world.camera_fraction(camera_origin, forza::Vec3(0, 0, -30)) < 0.5f, "camera passed through building");
+    const ambaretto::Vec3 camera_origin(x, building.center.GetY(), approach);
+    require(world.camera_fraction(camera_origin, ambaretto::Vec3(0, 0, -30)) < 0.5f, "camera passed through building");
     player.reset();
     require(player.driving() && player.character().velocity().Length() < 0.001f, "reset retained on-foot state or motion");
 }
 
 void ragdoll_impact_damage() {
-    using namespace forza;
+    using namespace ambaretto;
     PhysicsWorld flat(false);
     Character character(flat);
     character.reset(Vec3(0, 30, 0));
@@ -251,15 +251,15 @@ void ragdoll_impact_damage() {
 }
 
 void car_coasting_and_direction_changes() {
-    const forza::Environment map;
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
-    forza::Player player(world, car, map);
-    const auto advance = [&](forza::Input input, int steps) {
+    const ambaretto::Environment map;
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
+    ambaretto::Player player(world, car, map);
+    const auto advance = [&](ambaretto::Input input, int steps) {
         for (int i = 0; i < steps; ++i) player.step(input, {});
     };
     const auto speed = [&] { return car.velocity().Dot(car.forward()); };
-    car.reset(forza::Vec3(0, .56f, 0));
+    car.reset(ambaretto::Vec3(0, .56f, 0));
     advance({}, 240);
     for (float direction : {1.0f, -1.0f}) {
         advance({direction}, 240);
@@ -281,7 +281,7 @@ void car_coasting_and_direction_changes() {
     }
     advance({0, 0, false, true}, 240);
     require(std::abs(speed()) < .1f, "player parking brake no longer stops the car");
-    car.reset(forza::Vec3(0, .56f, 0));
+    car.reset(ambaretto::Vec3(0, .56f, 0));
     advance({}, 240);
     advance({-1}, 12);
     require(speed() < -.25f, "recovery retained the old drive direction");
@@ -289,12 +289,12 @@ void car_coasting_and_direction_changes() {
 }
 
 void mouse_camera() {
-    forza::ThirdPersonCamera camera;
+    ambaretto::ThirdPersonCamera camera;
     require(camera.move_direction(1, 1).Length() <= 1.001f, "diagonal movement is faster");
     for (float yaw : {0.f, 1.2f, -2.4f}) {
         camera.reset(yaw);
-        const auto right = camera.forward().Cross(forza::Vec3::sAxisY());
-        const auto head = forza::Vec3(20, 1.7f, -15);
+        const auto right = camera.forward().Cross(ambaretto::Vec3::sAxisY());
+        const auto head = ambaretto::Vec3(20, 1.7f, -15);
         require(std::abs((camera.shoulder_focus(head, .4f, -right) - head).Dot(right) + .4f) < .001f,
             "left peek did not move the camera to the left shoulder");
         require(std::abs((camera.shoulder_focus(head, .4f, right) - head).Dot(right) - .4f) < .001f,
@@ -303,31 +303,31 @@ void mouse_camera() {
             "ordinary aim changed its default shoulder");
     }
     camera.reset();
-    camera.look(300, 0, 0, false, forza::Vec3(0, 0, -1), 0, 1.0f / 60);
+    camera.look(300, 0, 0, false, ambaretto::Vec3(0, 0, -1), 0, 1.0f / 60);
     require(camera.move_direction(1, 0).GetX() > 0.6f, "mouse look did not rotate camera-relative movement");
-    camera.look(0, 10000, 0, false, forza::Vec3(0, 0, -1), 0, 1.0f / 60);
+    camera.look(0, 10000, 0, false, ambaretto::Vec3(0, 0, -1), 0, 1.0f / 60);
     require(camera.pitch() <= 1.12f, "mouse pitch flipped camera");
-    camera.look(0, 0, 1000, false, forza::Vec3(0, 0, -1), 0, 1.0f / 60);
-    require(camera.desired_position(forza::Vec3::sZero(), false).Length() >= 2.49f, "camera zoom entered the character");
-    camera.look(0, -10000, -1000, false, forza::Vec3(0, 0, -1), 0, forza::fixed_step);
-    require(camera.desired_position(forza::Vec3(0, .3f, 0), false).GetY() >= .3f,
+    camera.look(0, 0, 1000, false, ambaretto::Vec3(0, 0, -1), 0, 1.0f / 60);
+    require(camera.desired_position(ambaretto::Vec3::sZero(), false).Length() >= 2.49f, "camera zoom entered the character");
+    camera.look(0, -10000, -1000, false, ambaretto::Vec3(0, 0, -1), 0, ambaretto::fixed_step);
+    require(camera.desired_position(ambaretto::Vec3(0, .3f, 0), false).GetY() >= .3f,
         "low swimming orbit put camera underwater");
-    require(forza::ThirdPersonCamera::above_water(forza::Vec3(0, -4, 0)).GetY() >= .3f,
+    require(ambaretto::ThirdPersonCamera::above_water(ambaretto::Vec3(0, -4, 0)).GetY() >= .3f,
         "smoothed/collision-adjusted camera can sink below water");
     for (bool flying : {false, true}) {
         constexpr float frame = 1.0f / 60;
         camera.reset();
-        camera.look(400, 0, 0, !flying, forza::Vec3(0, 0, -1), 12, frame, flying);
+        camera.look(400, 0, 0, !flying, ambaretto::Vec3(0, 0, -1), 12, frame, flying);
         const float manual_yaw = camera.yaw();
         const auto idle_frame = [&]() {
             camera.recoil(0);
-            camera.look(0, 0, 0, !flying, forza::Vec3(0, 0, -1), 12, frame, flying);
+            camera.look(0, 0, 0, !flying, ambaretto::Vec3(0, 0, -1), 12, frame, flying);
         };
         for (int i = 0; i < 90; ++i) idle_frame();
         require(std::abs(camera.yaw() - manual_yaw) < .001f, "vehicle camera recentered before the look delay");
         for (int i = 0; i < 150; ++i) idle_frame();
         require(std::abs(camera.yaw()) < .03f, "recoil update prevented vehicle camera recentering");
-        camera.look(200, 0, 0, !flying, forza::Vec3(0, 0, -1), 12, frame, flying);
+        camera.look(200, 0, 0, !flying, ambaretto::Vec3(0, 0, -1), 12, frame, flying);
         const float renewed_yaw = camera.yaw();
         for (int i = 0; i < 90; ++i) idle_frame();
         require(std::abs(camera.yaw() - renewed_yaw) < .001f, "manual look did not restart vehicle recenter delay");
@@ -335,7 +335,7 @@ void mouse_camera() {
 }
 
 void on_foot_camera() {
-    using namespace forza;
+    using namespace ambaretto;
     const Vec3 facing(0, 0, -1);
     for (int fps : {30, 60, 120}) {
         const float dt = 1.f / fps;
@@ -407,7 +407,7 @@ void on_foot_camera() {
 }
 
 void surface_swimming() {
-    using namespace forza;
+    using namespace ambaretto;
     const Environment map;
     PhysicsWorld world(map);
     Car car(world);
@@ -485,7 +485,7 @@ void surface_swimming() {
     std::cout << "Swimming: car/plane exits, falling, strokes, controls, surface buoyancy, bridge and shore passed\n";
 }
 void nearby_respawns() {
-    using namespace forza;
+    using namespace ambaretto;
     Environment map;
     PhysicsWorld world(map);
     Car car(world);
@@ -520,9 +520,9 @@ void nearby_respawns() {
     check(sea, nearest_road + 40);
 }
 void model_tree_collisions() {
-    const forza::Environment map;
-    forza::PhysicsWorld world(map);
-    forza::Character character(world);
+    const ambaretto::Environment map;
+    ambaretto::PhysicsWorld world(map);
+    ambaretto::Character character(world);
     // Pick an isolated tree outside the city so nearby buildings or other
     // trunks cannot make a collision query pass for the wrong reason.
     for (const auto& tree : map.trees()) {
@@ -531,11 +531,11 @@ void model_tree_collisions() {
         for (const auto& other : map.trees())
             if (&other != &tree && (tree.base - other.base).Length() < 10) isolated = false;
         if (!isolated) continue;
-        require(!character.can_stand_at(tree.base + forza::Vec3(0, .08f, 0)), "character can overlap the model's tree trunk");
-        require(character.can_stand_at(tree.base + forza::Vec3(0, tree.height * .75f, 0)), "tree has an invisible trunk collider in its upper foliage");
-        const forza::Vec3 across(0, 0, -4);
-        require(world.camera_fraction(tree.base + forza::Vec3(0, 1, 2), across) < .5f, "camera passed through the model's tree trunk");
-        require(world.camera_fraction(tree.base + forza::Vec3(0, tree.height * .85f, 2), across) > .99f,
+        require(!character.can_stand_at(tree.base + ambaretto::Vec3(0, .08f, 0)), "character can overlap the model's tree trunk");
+        require(character.can_stand_at(tree.base + ambaretto::Vec3(0, tree.height * .75f, 0)), "tree has an invisible trunk collider in its upper foliage");
+        const ambaretto::Vec3 across(0, 0, -4);
+        require(world.camera_fraction(tree.base + ambaretto::Vec3(0, 1, 2), across) < .5f, "camera passed through the model's tree trunk");
+        require(world.camera_fraction(tree.base + ambaretto::Vec3(0, tree.height * .85f, 2), across) > .99f,
             "tree foliage unexpectedly blocks the camera");
         return;
     }

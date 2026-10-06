@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace forza {
+namespace ambaretto {
 enum class PlaneType { Trainer, F18, Boeing747 };
 struct PlaneSpecs {
     const char* name;
@@ -74,4 +74,4 @@ private:
     VehicleDamage damage_;
 };
 std::vector<std::unique_ptr<Plane>> parked_aircraft(PhysicsWorld& world, const Environment& environment);
-} // namespace forza
+} // namespace ambaretto

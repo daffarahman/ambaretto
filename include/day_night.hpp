@@ -5,7 +5,7 @@
 #include <cmath>
 #include <string_view>
 
-namespace forza {
+namespace ambaretto {
 struct Daylight {
     Vector3 horizon, zenith, sun_direction, sun_color, ambient;
     float day, night;
@@ -79,4 +79,4 @@ inline void apply_daylight(Shader shader, const Daylight& light) {
     SetShaderValue(shader, GetShaderLocation(shader, "horizonColor"), &light.horizon, SHADER_UNIFORM_VEC3);
     SetShaderValue(shader, GetShaderLocation(shader, "daylight"), &light.day, SHADER_UNIFORM_FLOAT);
 }
-} // namespace forza
+} // namespace ambaretto

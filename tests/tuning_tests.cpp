@@ -10,15 +10,15 @@ void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 bool near(float a, float b, float tolerance = .001f) { return std::abs(a - b) < tolerance; }
-void tick(forza::PhysicsWorld& world, forza::Car& car, int steps) {
+void tick(ambaretto::PhysicsWorld& world, ambaretto::Car& car, int steps) {
     for (int i = 0; i < steps; ++i) {
         car.step({0, 0, false, true}); world.step();
         require(std::isfinite(car.position().GetY()) && std::isfinite(car.velocity().Length()), "non-finite tuned physics");
     }
 }
 void live_physics() {
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
     tick(world, car, 480);
     const float height = car.position().GetY(), compression = car.wheels()[0].compression;
     auto tuning = car.tuning();
@@ -33,7 +33,7 @@ void live_physics() {
         require(near(wheel.mount.GetY(), .28f), "mount height did not update wheel attachment points");
         require(wheel.normal_force > 1000 && wheel.normal_force <= tuning.max_spring_force, "invalid tuned spring force");
     }
-    car.reset(forza::Vec3(0, 1, 0));
+    car.reset(ambaretto::Vec3(0, 1, 0));
     require(near(car.tuning().rest_length, .74f) && near(car.tuning().wheel_radius, .45f), "reset erased tuning");
     require(near(car.wheels()[0].center.GetY(), 1 + .28f - .74f), "reset did not use tuned suspension geometry");
     car.set_tuning({});
@@ -45,8 +45,8 @@ void live_physics() {
     std::cout << "Live tuning: ride height, tire contact, springs, reset, steering passed\n";
 }
 void validation_and_isolation() {
-    forza::PhysicsWorld world(false), other_world(false);
-    forza::Car car(world), other(other_world);
+    ambaretto::PhysicsWorld world(false), other_world(false);
+    ambaretto::Car car(world), other(other_world);
     auto tuning = car.tuning();
     tuning.wheel_radius = std::numeric_limits<float>::quiet_NaN();
     tuning.spring_rate = std::numeric_limits<float>::infinity();
@@ -55,7 +55,7 @@ void validation_and_isolation() {
     tuning.wheelbase = -100; tuning.track_width = std::numeric_limits<float>::infinity();
     tuning.top_speed = std::numeric_limits<float>::infinity(); tuning.acceleration = -100;
     car.set_tuning(tuning);
-    for (const auto& control : forza::tuning_controls) {
+    for (const auto& control : ambaretto::tuning_controls) {
         const float value = car.tuning().*(control.value);
         require(std::isfinite(value) && value >= control.min && value <= control.max, "unsafe tuning value escaped validation");
     }
@@ -65,8 +65,8 @@ void validation_and_isolation() {
     for (const auto& wheel : car.wheels()) require(wheel.normal_force <= 4500, "spring force cap was ignored");
 }
 void wheel_spacing() {
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
     const auto original_position = car.position();
     auto tuning = car.tuning();
     tuning.wheelbase = 3.1f; tuning.track_width = 1.92f;
@@ -79,8 +79,8 @@ void wheel_spacing() {
     require(near((wheels[2].ground_point - wheels[0].ground_point).Length(), 3.1f), "wheelbase did not move ground contacts");
     tick(world, car, 480);
     for (const auto& wheel : wheels) require(wheel.grounded, "edited wheel spacing lost suspension support");
-    car.reset(forza::Vec3(0, 1, 0), .8f);
-    const auto across = car.rotate(forza::Vec3::sAxisX());
+    car.reset(ambaretto::Vec3(0, 1, 0), .8f);
+    const auto across = car.rotate(ambaretto::Vec3::sAxisX());
     require(near((wheels[1].center - wheels[0].center).Dot(across), 1.92f), "reset lost track width on a rotated chassis");
     require(near((wheels[0].center - wheels[2].center).Dot(car.forward()), 3.1f), "reset lost wheelbase on a rotated chassis");
     require(near(car.tuning().wheelbase, 3.1f) && near(car.tuning().track_width, 1.92f), "reset erased wheel spacing settings");
@@ -90,13 +90,13 @@ void wheel_spacing() {
     std::cout << "Wheel spacing: live geometry, ground contacts, support, rotated reset and defaults passed\n";
 }
 void panel_input() {
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
-    forza::TuningPanel panel;
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
+    ambaretto::TuningPanel panel;
     constexpr int width = 1280, height = 720;
     const auto rect = panel.bounds(width, height);
     const Vector2 slider{rect.x + 18 + 174, rect.y + 111 + 28};
-    forza::TuningPanelInput input;
+    ambaretto::TuningPanelInput input;
     input.mouse = slider; input.pressed = input.down = true;
     panel.update(car, width, height, input);
     input.pressed = false; input.mouse.x = width + 300.0f;
@@ -143,19 +143,19 @@ void panel_input() {
     require(panel.update(car, width, height, input).reset_car, "reset car action did not reach game controls");
     input.mouse.x = rect.x + 290;
     require(panel.update(car, width, height, input).close, "close action did not reach game controls");
-    const auto close = forza::ui::window_close(rect);
+    const auto close = ambaretto::ui::window_close(rect);
     input.mouse = {close.x+close.width/2,close.y+close.height/2};
     require(panel.update(car,width,height,input).close,"title-bar close button did not close tuning");
     require(!panel.contains({100, 200}, width, height), "panel consumes camera interaction outside its bounds");
     std::cout << "Panel input: dragging, release, focus loss, precision, tabs, reset and close passed\n";
 }
 void engine_performance() {
-    forza::PhysicsWorld world(false);
-    forza::Car car(world);
+    ambaretto::PhysicsWorld world(false);
+    ambaretto::Car car(world);
     const auto drive = [&](int steps) {
         for (int i = 0; i < steps; ++i) {
             car.step({1, 0, false}); world.step();
-            require(std::isfinite(car.velocity().Length()) && car.rotate(forza::Vec3::sAxisY()).GetY() > .98f,
+            require(std::isfinite(car.velocity().Length()) && car.rotate(ambaretto::Vec3::sAxisY()).GetY() > .98f,
                 "high-speed driving became unstable");
         }
         return car.velocity().Dot(car.forward()) * 3.6f;
@@ -181,12 +181,12 @@ void engine_performance() {
     tuning.top_speed = 400 / 3.6f; car.set_tuning(tuning);
     require(near(drive(120 * 10), 400, 1.5f), "maximum speed setting could not sustain 400 km/h");
     tuning.top_speed = 360 / 3.6f; car.set_tuning(tuning);
-    car.reset(forza::Vec3(0, .56f, 0));
+    car.reset(ambaretto::Vec3(0, .56f, 0));
     require(near(car.tuning().top_speed * 3.6f, 360, .01f) && near(car.tuning().acceleration, 12),
         "reset erased engine tuning");
     tuning.acceleration = 2; car.set_tuning(tuning); tick(world, car, 120);
     const float slow = drive(240);
-    car.reset(forza::Vec3(0, .56f, 0)); tuning.acceleration = 12; car.set_tuning(tuning); tick(world, car, 120);
+    car.reset(ambaretto::Vec3(0, .56f, 0)); tuning.acceleration = 12; car.set_tuning(tuning); tick(world, car, 120);
     const float fast = drive(240);
     require(fast > slow + 35, "acceleration slider did not change engine response");
     std::cout << "Engine: " << four_seconds << " km/h after 4 seconds, " << stock << " stock / " << tuned

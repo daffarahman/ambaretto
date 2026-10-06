@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <array>
 
-namespace forza {
+namespace ambaretto {
 struct WorldMapLayout {
     Rectangle window, viewport;
     std::array<Rectangle,5> buttons;
@@ -60,4 +60,4 @@ struct WorldMapView {
         constrain(viewport, extent);
     }
 };
-} // namespace forza
+} // namespace ambaretto

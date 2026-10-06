@@ -16,7 +16,7 @@
 #include <windows.h>
 #endif
 
-namespace forza {
+namespace ambaretto {
 const std::array<const char*, action_count> action_labels{{
     "Walk forward", "Walk backward", "Walk left", "Walk right", "Enter vehicle", "Sprint", "Jump", "Respawn on foot",
     "Weapon wheel (hold)", "Fire weapon", "Aim weapon", "Reload weapon", "Enter / leave cover",
@@ -302,7 +302,7 @@ bool ControllerMapping::save(const std::filesystem::path& path, std::string& err
     auto temporary = path; temporary += ".tmp";
     std::ofstream file(temporary, std::ios::trunc);
     if (!file) { error = "Cannot write controller mappings"; return false; }
-    file << "; Forza Ambazon - independent on-foot, car and plane bindings; gamepad bindings use any connected pad\nversion=2\ndeadzone=" << deadzone << "\nauto_lock=" << int(auto_lock) << '\n';
+    file << "; Ambaretto - independent on-foot, car and plane bindings; gamepad bindings use any connected pad\nversion=2\ndeadzone=" << deadzone << "\nauto_lock=" << int(auto_lock) << '\n';
     for (int a = 0; a < action_count; ++a) {
         file << '\n' << '[' << ids[a] << "]\n";
         for (auto b : bindings[a]) {
@@ -324,4 +324,4 @@ bool ControllerMapping::save(const std::filesystem::path& path, std::string& err
     if (!replaced) { error = "Cannot replace controller mappings; previous file kept"; return false; }
     return true;
 }
-} // namespace forza
+} // namespace ambaretto

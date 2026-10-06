@@ -5,7 +5,7 @@
 #include "scene_lighting.hpp"
 #include <raylib.h>
 
-namespace forza {
+namespace ambaretto {
 class Police;
 class EnvironmentRenderer {
 public:
@@ -37,4 +37,4 @@ private:
     int land_camera_ = -1, water_camera_ = -1, water_time_ = -1, tree_camera_ = -1, sign_emission_ = -1;
     bool trees_ready_ = false;
 };
-} // namespace forza
+} // namespace ambaretto

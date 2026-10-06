@@ -3,7 +3,7 @@
 #include "plane.hpp"
 #include "weapons.hpp"
 
-namespace forza {
+namespace ambaretto {
 class Traffic;
 class Pedestrians;
 class Police;
@@ -133,4 +133,4 @@ private:
     bool flying_ = false;
     bool coasting_ = false;
 };
-} // namespace forza
+} // namespace ambaretto

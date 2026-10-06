@@ -3,7 +3,7 @@
 #include <random>
 #include <vector>
 
-namespace forza {
+namespace ambaretto {
 enum class Crime { VehicleTheft, Gunfire, Assault, Homicide, OfficerAssault, OfficerHomicide, PoliceVehicleTheft, Count };
 struct CrimeData { const char* name; int points, minimum_stars; float report_range, repeat_delay; };
 const CrimeData& crime_data(Crime crime);
@@ -94,4 +94,4 @@ private:
     bool view_set_ = false;
     unsigned spawn_sequence_ = 0;
 };
-} // namespace forza
+} // namespace ambaretto

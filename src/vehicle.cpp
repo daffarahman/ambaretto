@@ -39,7 +39,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 constexpr JPH::ObjectLayer ground_layer = 0;
 constexpr JPH::ObjectLayer vehicle_layer = 1;
@@ -1605,4 +1605,4 @@ void Car::step(Input input, float dt) {
                          (input.handbrake || std::abs(lateral_speed) > 3);
     }
 }
-} // namespace forza
+} // namespace ambaretto

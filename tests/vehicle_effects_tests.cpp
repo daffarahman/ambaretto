@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
     InitWindow(256, 256, "Vehicle shader checks");
     int result = 0;
     {
-        forza::CarRenderer renderer;
+        ambaretto::CarRenderer renderer;
         const auto texture = LoadRenderTexture(256, 256);
         const Camera3D camera{{0, 2, 10}, {0, 2, 0}, {0, 1, 0}, 8, CAMERA_ORTHOGRAPHIC};
         const auto render = [&](bool wreck, float age, float time, bool covered = false) {

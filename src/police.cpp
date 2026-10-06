@@ -9,7 +9,7 @@
 #include <queue>
 #include <tuple>
 
-namespace forza {
+namespace ambaretto {
 namespace {
 Vec3 flat(Vec3 p) { p.SetY(0); return p; }
 float cross(Vec3 a, Vec3 b) { return a.GetX() * b.GetZ() - a.GetZ() * b.GetX(); }
@@ -548,4 +548,4 @@ void Police::clear() {
         if (!unit.claimed) { unit.active = false; unit.car->set_simulated(false); }
     }
 }
-} // namespace forza
+} // namespace ambaretto

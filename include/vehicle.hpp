@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-namespace forza {
+namespace ambaretto {
 class Environment;
 class Character;
 class Plane;
@@ -137,4 +137,4 @@ private:
     bool player_controlled_ = false;
     VehicleDamage damage_;
 };
-} // namespace forza
+} // namespace ambaretto

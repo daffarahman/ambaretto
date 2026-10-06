@@ -9,7 +9,7 @@
 #include <vector>
 
 namespace {
-using namespace forza;
+using namespace ambaretto;
 void require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
 Vec3 flat(Vec3 p) { p.SetY(0); return p; }
 float segment_distance(Vec3 p, Vec3 a, Vec3 b) {

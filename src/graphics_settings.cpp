@@ -16,7 +16,7 @@
 #include <windows.h>
 #endif
 
-namespace forza {
+namespace ambaretto {
 bool GraphicsSettings::operator==(const GraphicsSettings& b) const {
     return shadows == b.shadows && soft_shadows == b.soft_shadows && shadow_distance == b.shadow_distance &&
         local_lights == b.local_lights && view_distance == b.view_distance && brightness == b.brightness &&
@@ -116,7 +116,7 @@ bool GraphicsSettings::save(const std::filesystem::path& path, std::string& erro
     if (!file) { error = "Cannot write graphics settings; previous file kept"; return false; }
     file.imbue(std::locale::classic());
     file << std::setprecision(std::numeric_limits<float>::max_digits10)
-        << "; Forza Ambazon graphics. Shadow quality: 0=Off, 1=512, 2=1024, 3=2048.\n"
+        << "; Ambaretto graphics. Shadow quality: 0=Off, 1=512, 2=1024, 3=2048.\n"
         << "; Distances are metres; brightness is 0.6-1.5; frame limit 0 is unlimited.\n"
         << "version=1\nshadows=" << shadows << "\nsoft_shadows=" << int(soft_shadows)
         << "\nshadow_distance=" << shadow_distance << "\nlocal_lights=" << int(local_lights)
@@ -134,4 +134,4 @@ bool GraphicsSettings::save(const std::filesystem::path& path, std::string& erro
     if (!replaced) { error = "Cannot replace graphics settings; previous file kept"; return false; }
     return true;
 }
-} // namespace forza
+} // namespace ambaretto

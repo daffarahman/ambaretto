@@ -4,7 +4,7 @@
 #include <array>
 #include <raylib.h>
 
-namespace forza {
+namespace ambaretto {
 struct SceneLight {
     Vector3 position{};
     Vector3 color{1, 1, 1};
@@ -42,4 +42,4 @@ private:
     bool shadow_active_ = false, shadow_rendered_ = false;
     const char* warning_ = nullptr;
 };
-} // namespace forza
+} // namespace ambaretto

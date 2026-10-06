@@ -3,7 +3,7 @@
 #include <vector>
 #include <map>
 
-namespace forza {
+namespace ambaretto {
 class Plane;
 class Police;
 struct Road;
@@ -61,4 +61,4 @@ private:
     std::vector<Junction> intersections_;
     std::map<int, const Car*> junctions_;
 };
-} // namespace forza
+} // namespace ambaretto

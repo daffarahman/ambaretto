@@ -3,7 +3,7 @@
 #include <optional>
 #include <random>
 
-namespace forza {
+namespace ambaretto {
 class Character;
 class Pedestrians;
 class Police;
@@ -73,4 +73,4 @@ private:
     float cooldown_ = 0, reload_time_ = 0;
     std::minstd_rand random_{731};
 };
-} // namespace forza
+} // namespace ambaretto

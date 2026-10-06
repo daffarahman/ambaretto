@@ -1,7 +1,7 @@
 #pragma once
 #include <array>
 
-namespace forza {
+namespace ambaretto {
 struct CarTuning {
     float wheel_radius = 0.3f;
     float rest_length = 0.58f;
@@ -46,4 +46,4 @@ inline constexpr std::array<TuningControl, 15> tuning_controls{{
 }};
 inline constexpr int suspension_controls = 7;
 inline constexpr int handling_controls = 6;
-} // namespace forza
+} // namespace ambaretto

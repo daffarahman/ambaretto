@@ -8,8 +8,8 @@
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
-void weapon_pickups(const forza::Environment& map) {
-    using namespace forza;
+void weapon_pickups(const ambaretto::Environment& map) {
+    using namespace ambaretto;
     PhysicsWorld world(map);
     Car car(world);
     Car blocker(world); blocker.set_simulated(false);
@@ -70,8 +70,8 @@ void weapon_pickups(const forza::Environment& map) {
     require(police.pickups().empty(), "reset recreated a drop from a dead officer in an owned car");
     std::cout << "Police drops: each gun type, one drop per officer, pickup radius, on-foot ammo refill, despawning and expiry passed\n";
 }
-void speeding(const forza::Environment& map) {
-    using namespace forza;
+void speeding(const ambaretto::Environment& map) {
+    using namespace ambaretto;
     PhysicsWorld world(false);
     Car car(world);
     Police police(world, map);
@@ -90,8 +90,8 @@ void speeding(const forza::Environment& map) {
     require(police.wanted().stars() == 1, "speeding check had no police witness");
     std::cout << "Speeding: driving above 144 km/h past police did not start a pursuit\n";
 }
-void vehicle_combat(const forza::Environment& map) {
-    using namespace forza;
+void vehicle_combat(const ambaretto::Environment& map) {
+    using namespace ambaretto;
     PhysicsWorld world(map);
     Car car(world);
     Police police(world, map);
@@ -174,7 +174,7 @@ void vehicle_combat(const forza::Environment& map) {
 }
 }
 int main() {
-    using namespace forza;
+    using namespace ambaretto;
     try {
         WantedLevel wanted;
         const Vec3 origin(0, 3.2f, 0);
