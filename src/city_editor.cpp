@@ -1,4 +1,5 @@
 #include "city.hpp"
+#include "desktop.hpp"
 #include "ui_font.hpp"
 #include "menu_bar.hpp"
 #include "graphics_panel.hpp"
@@ -14,6 +15,8 @@
 #include <cmath>
 #include <limits>
 #include <set>
+#include <sstream>
+#include <fstream>
 
 namespace ambaretto {
 namespace {
@@ -54,10 +57,62 @@ bool save(City& city,const std::filesystem::path& directory,std::string& status,
     if (!city.save(directory,status)) return false;
     dirty = false; status = "City saved"; return true;
 }
+template<class T> std::string snapshot(const T& design) { std::ostringstream file; design.write(file); return file.str(); }
+template<class T, class Save> bool leave_draft(const T& design, const std::string& original, Save save_design, std::string& status) {
+    if (snapshot(design)==original) return true;
+    bool interactive=false;
+    while (true) {
+        const bool native_close=WindowShouldClose();
+        BeginDrawing(); ui::draw_desktop();
+        const Rectangle r{(GetScreenWidth()-720)/2.f,(GetScreenHeight()-274)/2.f,720,274};
+        ui::draw_window(r,"Unsaved changes"); ui::draw_window_close(r);
+        text("Save changes to "+fit(design.name,18,430)+"?",r.x+24,r.y+64,18);
+        text("Other open windows keep their own drafts.",r.x+24,r.y+103,17);
+        text(fit(status,16,672),r.x+24,r.y+146,16,accent);
+        const bool saving=button({r.x+24,r.y+210,208,40},"Save",true,true,interactive);
+        const bool discard=button({r.x+256,r.y+210,208,40},"Discard",false,true,interactive);
+        const bool cancel=native_close || close_clicked(r,interactive) || button({r.x+488,r.y+210,208,40},"Cancel",false,true,interactive) || (interactive && IsKeyPressed(KEY_ESCAPE));
+        EndDrawing(); interactive=true;
+        if (cancel) {cancel_app_close(); return false;}
+        if (discard || (saving && save_design())) return true;
+    }
+}
+template<class Load, class Builder> void open_design_app(Load load, const char* title, const std::string& screenshot, Builder builder) {
+    auto library=load(); using Design=typename decltype(library)::value_type;
+    int selection=library.empty() ? -1 : 0, scroll=0, frames=0; bool interactive=false;
+    while (!app_should_close()) {
+        const Rectangle r{(GetScreenWidth()-880)/2.f,70,880,float(GetScreenHeight()-140)};
+        const int rows=std::max(1,int((r.height-188)/38));
+        if (interactive && !library.empty()) {
+            if (IsKeyPressed(KEY_DOWN)) selection=std::min(int(library.size())-1,selection+1);
+            if (IsKeyPressed(KEY_UP)) selection=std::max(0,selection-1);
+            if (IsKeyPressed(KEY_UP)||IsKeyPressed(KEY_DOWN)) scroll=std::clamp(scroll,selection-rows+1,selection);
+            if (hit({r.x+24,r.y+128,520,float(rows*38)})) scroll-=int(GetMouseWheelMove());
+        }
+        scroll=std::clamp(scroll,0,std::max(0,int(library.size())-rows));
+        BeginDrawing(); ui::draw_desktop(); ui::draw_window(r,title); ui::draw_window_close(r);
+        text("Start with a new design or open a saved one.",r.x+24,r.y+63,20,accent);
+        text("Saved designs",r.x+24,r.y+102,17);
+        for (int row=0;row<rows && scroll+row<int(library.size());++row)
+            if (button({r.x+24,r.y+128+row*38.f,520,34},library[scroll+row].name,selection==scroll+row,true,interactive)) selection=scroll+row;
+        if (library.empty()) text("No saved designs yet.",r.x+24,r.y+138,18);
+        const bool create=button({r.x+576,r.y+128,280,46},"Create new",true,true,interactive) || (interactive && IsKeyPressed(KEY_INSERT));
+        const bool open=button({r.x+576,r.y+192,280,46},"Open / edit selected",false,selection>=0,interactive) || (interactive && selection>=0 && IsKeyPressed(KEY_ENTER));
+        const bool refresh=button({r.x+576,r.y+256,280,40},"Refresh saved",false,true,interactive);
+        const bool close=close_clicked(r,interactive) || button({r.x+576,r.y+r.height-64,280,40},"Close app",false,true,interactive) || (interactive && IsKeyPressed(KEY_ESCAPE));
+        text("Choose a design to edit",r.x+24,r.y+r.height-47,17);
+        EndDrawing(); interactive=true;
+        if (!screenshot.empty() && ++frames>=3) {auto image=LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); break;}
+        if (close) break;
+        if (refresh) {library=load(); selection=library.empty() ? -1 : 0; scroll=0;}
+        if (create) {builder(Design{}); break;}
+        if (open) {builder(library[selection]); break;}
+    }
+}
 std::optional<int> start_clock(int minutes) {
     std::string value = TextFormat("%02i:%02i",minutes/60,minutes%60), error;
     bool interactive = false;
-    while (!WindowShouldClose()) {
+    while (!app_should_close()) {
         BeginDrawing(); ui::draw_desktop();
         Rectangle r{(GetScreenWidth()-620)/2.f,(GetScreenHeight()-276)/2.f,620,276};
         ui::draw_window(r,"City start time");
@@ -81,7 +136,7 @@ std::optional<int> start_clock(int minutes) {
 }
 void help_dialog(bool editing, bool about) {
     bool interactive = false;
-    while (!WindowShouldClose()) {
+    while (!app_should_close()) {
         BeginDrawing(); ui::draw_desktop();
         Rectangle r{(GetScreenWidth()-760)/2.f,(GetScreenHeight()-394)/2.f,760,394};
         ui::draw_window(r,about ? "About Ambaretto" : "Keyboard reference");
@@ -119,7 +174,7 @@ std::optional<std::string> ground_texture_picker(const std::string& current) {
         selected = found==textures.end() ? 0 : int(found-textures.begin()); scroll = selected;
     };
     select_current();
-    while (!WindowShouldClose()) {
+    while (!app_should_close()) {
         const float height = std::min(660.f,float(GetScreenHeight()-64));
         const Rectangle r{(GetScreenWidth()-600)/2.f,(GetScreenHeight()-height)/2,600,height};
         const int rows = std::max(1,int((height-190)/42));
@@ -325,7 +380,19 @@ void main() {
         undo.push_back(mesh); if (undo.size()>32) undo.erase(undo.begin()); redo.clear();
         mesh = std::move(next); field = -1; status = "Updated"; return true;
     };
-    while (!WindowShouldClose()) {
+    std::string original=snapshot(mesh);
+    const auto save_design=[&]() {
+        if (!mesh.save(directory,status)) return false;
+        if (saved_designs) {
+            const auto found=std::find_if(saved_designs->begin(),saved_designs->end(),[&](const auto& d){return d.name==mesh.name;});
+            if (found==saved_designs->end()) saved_designs->push_back(mesh); else *found=mesh;
+        }
+        original=snapshot(mesh); library=saved_buildings(directory,status); status="Building saved"; return true;
+    };
+    const auto leave=[&]() {return leave_draft(mesh,original,save_design,status);};
+    while (true) {
+        if (app_should_close()) { if (leave()) break; interactive=false; continue; }
+        int load_design=-1;
         const float height = float(GetScreenHeight());
         const Rectangle window{8,44,float(GetScreenWidth()-16),height-108}, view{414,84,float(GetScreenWidth()-438),height-244};
         MenuState menu_state; menu_state.undo = !undo.empty() && !grab; menu_state.redo = !redo.empty() && !grab;
@@ -335,10 +402,13 @@ void main() {
         const bool click = can_edit && IsMouseButtonPressed(MOUSE_BUTTON_LEFT), in_view = can_edit && hit(view);
         const bool ctrl = IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL), shift = IsKeyDown(KEY_LEFT_SHIFT)||IsKeyDown(KEY_RIGHT_SHIFT);
         if (can_edit && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) slider_drag = -1;
-        if (command==MenuCommand::CloseCreator || (can_edit && close_clicked(window))) break;
-        if (can_edit && IsKeyPressed(KEY_ESCAPE) && !grab) { if (slice) slice = false; else if (field>=0) field = -1; else break; }
+        if (command==MenuCommand::CloseCreator || (can_edit && close_clicked(window))) { if (leave()) break; interactive=false; continue; }
+        if (can_edit && IsKeyPressed(KEY_ESCAPE) && !grab) { if (slice) slice = false; else if (field>=0) field = -1; else {if (leave()) break; interactive=false; continue;} }
         if (command==MenuCommand::SavedBuildings) { tab = 3; slice = false; field = -1; }
-        if (command==MenuCommand::NewBuilding) { commit(BuildingMesh{}); selected = {{{2},{},{4}}}; tab = 0; slice = false; }
+        if (command==MenuCommand::NewBuilding) {
+            if (leave()) { mesh={}; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={{{2},{},{4}}}; tab=0; slice=false; }
+            interactive=false; continue;
+        }
         if ((can_edit || command==MenuCommand::Undo || command==MenuCommand::Redo) && !grab && field<0) {
             if ((command==MenuCommand::Undo || (ctrl && IsKeyPressed(KEY_Z))) && !undo.empty()) { redo.push_back(mesh); mesh = std::move(undo.back()); undo.pop_back(); selected = {}; slice = false; status = "Undone"; }
             if ((command==MenuCommand::Redo || (ctrl && IsKeyPressed(KEY_Y))) && !redo.empty()) { undo.push_back(mesh); mesh = std::move(redo.back()); redo.pop_back(); selected = {}; slice = false; status = "Redone"; }
@@ -595,7 +665,7 @@ void main() {
             } else text("Add a texture overlay, then click its face.",20,338,14);
         } else {
             if (control({20,288,180,30},"Refresh saved")) { library = saved_buildings(directory,status); library_selection = -1; scroll = 0; }
-            if (control({210,288,180,30},"Load selected",false,library_selection>=0)) { next = library[library_selection]; changed = align(next); selected = {}; tab = 0; }
+            if (control({210,288,180,30},"Open selected",false,library_selection>=0)) load_design=library_selection;
             const Rectangle list{20,330,370,height-482}; const int rows = std::max(1,int(list.height/34));
             if (can_edit && hit(list)) scroll -= int(GetMouseWheelMove());
             scroll = std::clamp(scroll,0,std::max(0,int(library.size())-rows));
@@ -604,21 +674,20 @@ void main() {
         }
         if (changed) commit(std::move(next));
         if (control({20,height-122,180,36},"Save building",true) || command==MenuCommand::SaveBuilding || (can_edit && !grab && ctrl && IsKeyPressed(KEY_S))) {
-            if (mesh.save(directory,status)) {
-                if (saved_designs) {
-                    const auto found = std::find_if(saved_designs->begin(),saved_designs->end(),[&](const auto& design){return design.name==mesh.name;});
-                    if (found==saved_designs->end()) saved_designs->push_back(mesh); else *found = mesh;
-                }
-                library = saved_buildings(directory,status); status = "Building saved";
-            }
+            save_design();
         }
-        const bool use = control({210,height-122,180,36},"Use in map",true) || command==MenuCommand::UseBuilding;
+        const bool use = control({210,height-122,180,36},"Save and close",true) || command==MenuCommand::UseBuilding;
         const bool cancel = control({view.x+view.width-142,height-122,142,36},"Close");
         text(fit(status,17,GetScreenWidth()-40.f),20,height-49,17,accent); menu.draw(menu_state);
         text("BUILDING CREATOR",GetScreenWidth()-212.f,8,16,background); EndDrawing(); interactive = true;
         if (!screenshot.empty() && ++frames>=3) { auto capture = LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break; }
-        if (cancel) break;
-        if (use && mesh.validate(status)) { result = mesh; break; }
+        if (cancel) { if (leave()) break; interactive=false; }
+        if (use && save_design()) { result = mesh; break; }
+        if (load_design>=0) {
+            const auto loaded=library[load_design];
+            if (leave()) { mesh=loaded; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={}; tab=0; }
+            interactive=false;
+        }
     }
     if (preview.id) UnloadRenderTexture(preview);
     for (const auto& entry : images) if (entry.second.id) UnloadTexture(entry.second);
@@ -631,7 +700,7 @@ std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::pat
     PhysicsWorld world(false); Car car(world); car.set_simulated(false); TuningPanel tuning;
     std::string status; auto bodies = car_models(car_asset_directory("cars"),status);
     auto wheels = car_models(car_asset_directory("wheels"),status); auto library = saved_cars(directory,status);
-    int tab = design.body.empty() && !library.empty() ? 3 : 0, scroll = 0, drag = -1, frames = 0;
+    int tab = 0, scroll = 0, drag = -1, frames = 0;
     float yaw = 2.44f, pitch = .35f, zoom = 1;
     bool interactive = false, naming = false; RenderTexture2D preview{}; std::optional<CarDesign> result;
     MenuBar menu(MenuMode::CarCreator);
@@ -640,21 +709,28 @@ std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::pat
         car.set_design(physical); car.reset({0,car.ride_height(),0},0);
     };
     sync();
+    std::string original=snapshot(design);
     const auto save_design = [&]() {
         if (!renderer.available(design,status) || !design.save(directory,status)) return false;
         if (saved_designs) {
             auto found = std::find_if(saved_designs->begin(),saved_designs->end(),[&](const auto& d){return d.name==design.name;});
             if (found==saved_designs->end()) saved_designs->push_back(design); else *found = design;
         }
-        library = saved_cars(directory,status); status = "Car saved"; return true;
+        original=snapshot(design); library = saved_cars(directory,status); status = "Car saved"; return true;
     };
-    while (!WindowShouldClose()) {
+    const auto leave=[&]() {return leave_draft(design,original,save_design,status);};
+    while (true) {
+        if (app_should_close()) { if (leave()) break; interactive=false; continue; }
+        int load_design=-1;
         const int width = GetScreenWidth(), height = GetScreenHeight();
         const auto command = interactive ? menu.update() : MenuCommand::None;
         const bool active = interactive && !menu.blocking() && !menu.interacted() && IsWindowFocused();
         const bool ctrl = IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL);
-        if (command==MenuCommand::CloseCreator || (active && IsKeyPressed(KEY_ESCAPE))) break;
-        if (command==MenuCommand::NewCar) { design = {}; sync(); tab = scroll = 0; naming = false; status.clear(); }
+        if (command==MenuCommand::CloseCreator || (active && IsKeyPressed(KEY_ESCAPE))) { if (leave()) break; interactive=false; continue; }
+        if (command==MenuCommand::NewCar) {
+            if (leave()) {design={}; original=snapshot(design); sync(); tab=scroll=0; naming=false; status.clear();}
+            interactive=false; continue;
+        }
         if (!active || !IsMouseButtonDown(MOUSE_BUTTON_LEFT)) drag = -1;
         if (tab==2 && active) {
             TuningPanelInput in; in.mouse = GetMousePosition(); in.pressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
@@ -723,20 +799,26 @@ std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::pat
                 const int index=scroll+row; const auto label=tab==3 ? library[index].name : models[index];
                 const bool selected=tab==3 ? design.name==label : (tab==1 ? design.wheel : design.body)==label;
                 if (control({20,y+row*32,370,28},label,selected)) {
-                    if (tab==3) { design=library[index]; sync(); tab=0; scroll=0; break; }
+                    if (tab==3) { load_design=index; break; }
                     if (tab==1) design.wheel=label; else design.body=label;
                     std::string error; status = renderer.available(design,error) ? "Body and wheel ready" : error;
                 }
             }
         }
         const bool saving=control({20,float(height-72),172,34},"Save car",true) || command==MenuCommand::SaveCar || (active && ctrl && IsKeyPressed(KEY_S));
-        const bool use=control({208,float(height-72),172,34},"Use in map",true) || command==MenuCommand::UseCar;
+        const bool use=control({208,float(height-72),172,34},"Save and close",true) || command==MenuCommand::UseCar;
         const bool close=control({396,float(height-72),172,34},"Close");
         if ((saving||use) && save_design() && use) result=design;
         text(fit(status.empty() ? "Choose a body and wheel, size the body, then save." : status,16,width-40.f),20,height-27.f,16,accent);
         menu.draw(); text("CAR EDITOR",width-136.f,8,16,background); EndDrawing(); interactive=true;
         if (!screenshot.empty() && ++frames>=3) { auto capture=LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break; }
-        if (close || result) break;
+        if (result) break;
+        if (close) { if (leave()) break; interactive=false; }
+        if (load_design>=0) {
+            const auto loaded=library[load_design];
+            if (leave()) { design=loaded; original=snapshot(design); sync(); tab=scroll=0; naming=false; status.clear(); }
+            interactive=false;
+        }
     }
     if (preview.id) UnloadRenderTexture(preview);
     return result;
@@ -758,17 +840,24 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
     float yaw=2.65f,pitch=.2f,zoom=1,accumulator=0;
     bool interactive=false,naming=false,guides=true; RenderTexture2D preview{}; std::optional<CharacterDesign> result;
     MenuBar menu(MenuMode::CharacterCreator);
+    std::string original=snapshot(design);
     const auto save_design=[&]() {
         if (!renderer.available(design,status) || !design.save(directory,status)) return false;
-        library=saved_characters(directory,status); status="Character saved"; return true;
+        original=snapshot(design); library=saved_characters(directory,status); status="Character saved"; return true;
     };
-    while (!WindowShouldClose()) {
+    const auto leave=[&]() {return leave_draft(design,original,save_design,status);};
+    while (true) {
+        if (app_should_close()) { if (leave()) break; interactive=false; continue; }
+        int load_design=-1;
         const int width=GetScreenWidth(),height=GetScreenHeight();
         const auto command=interactive ? menu.update() : MenuCommand::None;
         const bool active=interactive && !menu.blocking() && !menu.interacted() && IsWindowFocused();
         const bool ctrl=IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL);
-        if (command==MenuCommand::CloseCreator || (active && IsKeyPressed(KEY_ESCAPE))) break;
-        if (command==MenuCommand::NewCharacter) { design={}; tab=slot=scroll=pose=0; naming=false; character.reset({0,.08f,0}); status.clear(); }
+        if (command==MenuCommand::CloseCreator || (active && IsKeyPressed(KEY_ESCAPE))) { if (leave()) break; interactive=false; continue; }
+        if (command==MenuCommand::NewCharacter) {
+            if (leave()) {design={}; original=snapshot(design); tab=slot=scroll=pose=0; naming=false; character.reset({0,.08f,0}); status.clear();}
+            interactive=false; continue;
+        }
         if (!active || !IsMouseButtonDown(MOUSE_BUTTON_LEFT)) drag=-1;
         accumulator+=std::min(GetFrameTime(),.1f);
         while (accumulator>=fixed_step) {
@@ -834,7 +923,7 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
             if (library.empty()) text("No saved characters yet",20,246,15);
             for (int row=0;row<rows && scroll+row<int(library.size());++row) {
                 const auto& saved=library[scroll+row];
-                if (control({20,244+row*32.f,370,28},saved.name+" / "+character_type_names[int(saved.type)],saved.name==design.name)) {design=saved; tab=scroll=0; status.clear(); break;}
+                if (control({20,244+row*32.f,370,28},saved.name+" / "+character_type_names[int(saved.type)],saved.name==design.name)) {load_design=scroll+row; break;}
             }
         }
         const char* poses[]={"Idle","Walk","Run","Ragdoll"};
@@ -844,19 +933,120 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
         }
         if (control({view.x+456,view.y+view.height+10,view.width-456,26},"Rig",guides)) guides=!guides;
         const bool saving=control({20,float(height-64),172,34},"Save character",true) || command==MenuCommand::SaveCharacter || (active && ctrl && IsKeyPressed(KEY_S));
-        const bool use=control({208,float(height-64),172,34},"Use in map",true) || command==MenuCommand::UseCharacter;
+        const bool use=control({208,float(height-64),172,34},"Save and close",true) || command==MenuCommand::UseCharacter;
         const bool close=control({396,float(height-64),140,34},"Close");
         if ((saving || use) && save_design() && use) result=design;
         text(fit(status.empty() ? "Fit GLBs to the rig; paired limbs and shoes mirror automatically." : status,15,width-40.f),20,height-24.f,15,accent);
         menu.draw(); text("CHARACTER CREATOR",width-224.f,8,16,background); EndDrawing(); interactive=true;
         if (!screenshot.empty() && ++frames>=3) {auto capture=LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break;}
-        if (close || result) break;
+        if (result) break;
+        if (close) { if (leave()) break; interactive=false; }
+        if (load_design>=0) {
+            const auto loaded=library[load_design];
+            if (leave()) {design=loaded; original=snapshot(design); tab=scroll=0; naming=false; status.clear();}
+            interactive=false;
+        }
     }
     if (preview.id) UnloadRenderTexture(preview);
     return result;
 }
 
+void design_app(DesktopApp app,const std::filesystem::path& root,const std::string& screenshot,bool create_new,const std::filesystem::path& draft) {
+    EnableCursor(); std::string error;
+    if (app==DesktopApp::Buildings) {
+        SetWindowTitle("Ambaretto - Buildings"); BuildingMesh mesh;
+        if (!draft.empty() && !BuildingMesh::load(draft,mesh,error)) {TraceLog(LOG_ERROR,"%s",error.c_str()); return;}
+        const auto build=[&](BuildingMesh value){building_builder(std::move(value),root/"buildings",screenshot);};
+        if (create_new || !draft.empty()) build(mesh);
+        else open_design_app([&]{return saved_buildings(root/"buildings",error);},"Buildings / Create or open",screenshot,build);
+    } else if (app==DesktopApp::Cars) {
+        SetWindowTitle("Ambaretto - Cars"); CarDesign design;
+        if (!draft.empty() && !CarDesign::load(draft,design,error)) {TraceLog(LOG_ERROR,"%s",error.c_str()); return;}
+        const auto build=[&](CarDesign value){car_builder(std::move(value),root/"cars",screenshot);};
+        if (create_new || !draft.empty()) build(design);
+        else open_design_app([&]{return saved_cars(root/"cars",error);},"Cars / Create or open",screenshot,build);
+    } else if (app==DesktopApp::Characters) {
+        SetWindowTitle("Ambaretto - Characters"); CharacterDesign design;
+        if (!draft.empty() && !CharacterDesign::load(draft,design,error)) {TraceLog(LOG_ERROR,"%s",error.c_str()); return;}
+        const auto build=[&](CharacterDesign value){character_builder(std::move(value),root/"characters",screenshot);};
+        if (create_new || !draft.empty()) build(design);
+        else open_design_app([&]{return saved_characters(root/"characters",error);},"Characters / Create or open",screenshot,build);
+    }
+}
+void settings_app(ControllerMapping& controls,GraphicsSettings& graphics) {
+    SetWindowTitle("Ambaretto - Settings"); EnableCursor();
+    const auto root=std::filesystem::path(GetApplicationDirectory());
+    MenuBar menu(MenuMode::Cities); GraphicsPanel panel;
+    std::string status; bool interactive=false;
+    while (true) {
+        if (app_should_close()) {
+            if (menu.save_pending(controls,root/"controller-mappings.ini")) break;
+            cancel_app_close(); status="Cannot save controller mappings; retry Save & close.";
+        }
+        if (interactive && menu.dialog_open()) menu.update(controls,root/"controller-mappings.ini",true,read_controllers());
+        if (panel.visible() && interactive && !menu.blocking()) {
+            const auto action=panel.update();
+            if (action==GraphicsPanelAction::Apply && panel.pending().save(root/"graphics-settings.ini",status)) {
+                graphics=panel.pending(); panel.close(); status="Graphics settings saved";
+                if (graphics.vsync) SetWindowState(FLAG_VSYNC_HINT); else ClearWindowState(FLAG_VSYNC_HINT);
+                SetTargetFPS(graphics.fps_limit);
+            } else if (action==GraphicsPanelAction::Cancel) panel.close();
+        }
+        const bool active=interactive && !panel.visible() && !menu.blocking();
+        BeginDrawing(); ui::draw_desktop();
+        const Rectangle r{(GetScreenWidth()-600)/2.f,(GetScreenHeight()-320)/2.f,600,320};
+        ui::draw_window(r,"Settings"); ui::draw_window_close(r);
+        const bool open_graphics=button({r.x+24,r.y+76,552,46},"Graphics",false,true,active);
+        const bool open_controls=button({r.x+24,r.y+146,552,46},"Controller mapping",false,true,active);
+        const bool close=close_clicked(r,active) || button({r.x+24,r.y+230,552,40},"Close app",false,true,active) || (active && IsKeyPressed(KEY_ESCAPE));
+        text(status,r.x+24,r.y+280,16,accent);
+        if (panel.visible()) panel.draw(float(GetFPS()),status);
+        if (menu.dialog_open()) menu.draw(controls,root/"controller-mappings.ini");
+        EndDrawing(); interactive=true;
+        if (close) break;
+        if (open_graphics) {panel.open(graphics); interactive=false;}
+        if (open_controls) {menu.show(MenuCommand::Controllers); interactive=false;}
+    }
+    menu.save_pending(controls,root/"controller-mappings.ini");
+}
+
 namespace {
+template<class T> bool edit_in_window(DesktopApp app,const T& design,const char* header,const char* extension,std::string& status) {
+    const auto path=std::filesystem::path(GetApplicationDirectory())/".desktop"/(City::create("").id+extension);
+    std::error_code ec; std::filesystem::create_directories(path.parent_path(),ec);
+    if (ec) {status="Cannot open draft: "+ec.message(); return false;}
+    std::ofstream file(path); file<<header<<'\n'; design.write(file); file.close();
+    if (!file) {status="Cannot write editor draft"; return false;}
+    const bool opened=launch_app(app,status,path); std::filesystem::remove(path,ec); return opened;
+}
+std::optional<CarDesign> choose_car(const std::optional<CarDesign>& current,const std::filesystem::path& directory) {
+    std::string status; auto library=saved_cars(directory,status);
+    if (current && std::none_of(library.begin(),library.end(),[&](const auto& d){return d.name==current->name;})) library.push_back(*current);
+    CarRenderer renderer; int selected=library.empty() ? -1 : 0,scroll=0; bool interactive=false;
+    while (!app_should_close()) {
+        const Rectangle r{(GetScreenWidth()-720)/2.f,70,720,float(GetScreenHeight()-140)};
+        const int rows=std::max(1,int((r.height-220)/38));
+        if (interactive && hit({r.x+24,r.y+104,672,float(rows*38)})) scroll-=int(GetMouseWheelMove());
+        scroll=std::clamp(scroll,0,std::max(0,int(library.size())-rows));
+        std::string model_error; const bool ready=selected>=0 && renderer.available(library[selected],model_error);
+        BeginDrawing(); ui::draw_desktop(); ui::draw_window(r,"Choose a saved car"); ui::draw_window_close(r);
+        text("Save in the Cars app, then refresh this list.",r.x+24,r.y+64,18);
+        for (int row=0;row<rows && scroll+row<int(library.size());++row)
+            if (button({r.x+24,r.y+104+row*38.f,672,34},library[scroll+row].name,selected==scroll+row,true,interactive)) selected=scroll+row;
+        if (library.empty()) text("No saved cars yet",r.x+24,r.y+110,18);
+        const bool create=button({r.x+24,r.y+r.height-108,208,36},"Cars app",false,true,interactive);
+        const bool refresh=button({r.x+256,r.y+r.height-108,208,36},"Refresh saved",false,true,interactive);
+        const bool use=button({r.x+488,r.y+r.height-108,208,36},"Choose car",true,ready,interactive);
+        const bool close=close_clicked(r,interactive) || (interactive && IsKeyPressed(KEY_ESCAPE));
+        text(fit(status.empty() ? model_error : status,15,672),r.x+24,r.y+r.height-48,15,accent);
+        EndDrawing(); interactive=true;
+        if (close) return {};
+        if (use) return library[selected];
+        if (create) launch_app(DesktopApp::Cars,status);
+        if (refresh) {library=saved_cars(directory,status); renderer.refresh(); selected=library.empty() ? -1 : 0; scroll=0;}
+    }
+    return {};
+}
 std::optional<CharacterDesign> choose_player_character(const std::optional<CharacterDesign>& current,const std::filesystem::path& directory) {
     CharacterRenderer renderer; SceneLighting lighting; GraphicsSettings graphics; graphics.shadows=0;
     DayNight day; day.set_time("09:00"); PhysicsWorld world(false); Character character(world); character.reset({0,.08f,0});
@@ -867,7 +1057,7 @@ std::optional<CharacterDesign> choose_player_character(const std::optional<Chara
     if (current) for (int i=0;i<int(library.size());++i) if (library[i].name==current->name) selection=i;
     RenderTexture2D preview=LoadRenderTexture(360,300);
     std::optional<CharacterDesign> result;
-    while (!WindowShouldClose()) {
+    while (!app_should_close()) {
         const Rectangle window{(GetScreenWidth()-800)/2.f,(GetScreenHeight()-466)/2.f,800,466};
         Camera3D camera{{2,1.7f,-4},{0,.9f,0},{0,1,0},2.5f,CAMERA_ORTHOGRAPHIC};
         const bool ready=selection>=0 && renderer.available(library[selection],status);
@@ -885,13 +1075,13 @@ std::optional<CharacterDesign> choose_player_character(const std::optional<Chara
             if (button({list.x,list.y+row*32.f,list.width,28},library[scroll+row].name,selection==scroll+row,true,interactive,16)) selection=scroll+row;
         const bool use=button({window.x+24,window.y+392,220,36},"Use character",true,ready,interactive);
         const bool create=button({window.x+264,window.y+392,250,36},"Character creator",false,true,interactive);
-        const bool close=close_clicked(window,interactive) || button({window.x+534,window.y+392,242,36},"Cancel",false,true,interactive) || (interactive && IsKeyPressed(KEY_ESCAPE));
+        const bool reload=button({window.x+534,window.y+392,152,36},"Refresh",false,true,interactive);
+        const bool close=close_clicked(window,interactive) || button({window.x+704,window.y+392,72,36},"Back",false,true,interactive) || (interactive && IsKeyPressed(KEY_ESCAPE));
         text(fit(status,14,750),window.x+24,window.y+368,14,accent); MenuBar(MenuMode::Cities).draw(); EndDrawing(); interactive=true;
         if (use) {result=library[selection]; break;}
         if (close) break;
-        if (create) {
-            const auto made=character_builder({},directory);
-            if (made && made->type==CharacterType::Player) {result=made; break;}
+        if (create) launch_app(DesktopApp::Characters,status);
+        if (reload) {
             library=saved_characters(directory,status);
             library.erase(std::remove_if(library.begin(),library.end(),[](const auto& design){return design.type!=CharacterType::Player;}),library.end());
             renderer.refresh(); selection=library.empty() ? -1 : 0; scroll=0; interactive=false;
@@ -956,8 +1146,13 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
     const auto cars = saved_cars(directory.parent_path()/"cars",library_error);
     City refreshed = city;
     const auto characters=saved_characters(characters_directory,library_error);
-    const bool character_changed=refreshed.update_player_character(characters);
-    if (refreshed.update_car_designs(cars,update_error)>0 || character_changed) {
+    bool designs_changed=refreshed.update_player_character(characters);
+    designs_changed|=refreshed.update_car_designs(cars,update_error)>0;
+    for (const auto& design : designs) {
+        std::string error; const int count=refreshed.update_building_design(design,error);
+        if (count<0) update_error+=design.name+": "+error+"; "; else designs_changed|=count>0;
+    }
+    if (designs_changed) {
         commit(std::move(refreshed)); status = "Saved designs updated / Ctrl+Z to undo";
     }
     if (!update_error.empty()) status = "Map update rejected: "+update_error;
@@ -965,9 +1160,11 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
     int frames = 0; bool first_frame = true;
     while (true) {
         float dt = std::min(GetFrameTime(),.1f); save_time += dt; preview_time += dt;
-        if (screenshot.empty() && WindowShouldClose() && !close_failed) {
+        const bool close_requested=screenshot.empty() && app_should_close();
+        if (!close_requested) close_failed=false;
+        if (close_requested && !close_failed) {
             if (finish(EditorResult::Quit)) return EditorResult::Quit;
-            close_failed = true;
+            cancel_app_close(); close_failed = true;
         }
         if (dirty && !painting && save_time>1) { save(city,directory,status,dirty); save_time = -4; }
         MenuState menu_state;
@@ -980,14 +1177,28 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         menu_state.diagonal = diagonal_roads; menu_state.elevation = elevation_direction;
         menu_state.top = top; menu_state.grid = grid; menu_state.tool = int(tool);
         const auto command = first_frame ? MenuCommand::None : menu.update(menu_state);
-        if (command==MenuCommand::CharacterCreator || command==MenuCommand::ChoosePlayerCharacter) {
-            const auto design=command==MenuCommand::CharacterCreator ? character_builder({},characters_directory) : choose_player_character(city.player_character,characters_directory);
-            City next=city; const auto saved=saved_characters(characters_directory,status);
-            bool changed=next.update_player_character(saved);
-            if (design && design->type==CharacterType::Player) {changed|=!next.player_character || !(*next.player_character==*design); next.player_character=design;}
+        if (command==MenuCommand::CharacterCreator) {launch_app(DesktopApp::Characters,status); continue;}
+        if (command==MenuCommand::ChoosePlayerCharacter) {
+            if (const auto design=choose_player_character(city.player_character,characters_directory)) {
+                City next=city; next.player_character=design; commit(std::move(next)); status="Player selected: "+design->name;
+            }
+            character_renderer.refresh(); painting=dragging=false; first_frame=true; continue;
+        }
+        if (command==MenuCommand::RefreshDesigns) {
+            City next=city; std::string errors, issue;
+            bool changed=next.update_player_character(saved_characters(characters_directory,status));
+            changed|=next.update_car_designs(saved_cars(directory.parent_path()/"cars",status),issue)>0;
+            errors=issue;
+            for (const auto& design : saved_buildings(buildings_directory,status)) {
+                const int count=next.update_building_design(design,issue);
+                if (count<0) errors+=design.name+": "+issue+"; "; else changed|=count>0;
+                if (building_mesh && building_mesh->name==design.name) building_mesh=design;
+            }
+            if (selected_car) for (const auto& design : saved_cars(directory.parent_path()/"cars",status)) if (design.name==selected_car->name) selected_car=design;
             if (changed) commit(std::move(next));
-            character_renderer.refresh(); status=design ? std::string(character_type_names[int(design->type)])+" character saved: "+design->name : "Character selection closed";
-            painting=dragging=false; first_frame=true; continue;
+            refresh_designs(); car_renderer.refresh(); character_renderer.refresh();
+            status=errors.empty() ? "Saved designs refreshed / Ctrl+Z to undo map changes" : "Some designs could not update: "+errors;
+            continue;
         }
         const int builder_request = command==MenuCommand::BuildingCreator || command==MenuCommand::EditBuilding ? 0 : -1;
         const bool car_request = command==MenuCommand::CarEditor || command==MenuCommand::EditCar || command==MenuCommand::PlaceCar;
@@ -1261,49 +1472,17 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         text("CITY EDITOR",GetScreenWidth()-150.f,8,16,background);
         EndDrawing();
         if (car_request) {
-            const int edited_index = command==MenuCommand::EditCar && menu_state.car_selection ? selected_vehicle : -1;
-            const auto initial = edited_index>=0 ? city.vehicles[edited_index].car.value_or(CarDesign{}) : selected_car.value_or(CarDesign{});
-            std::vector<CarDesign> saved;
-            const auto edited = car_builder(initial,directory.parent_path()/"cars",{},&saved);
-            City next=city; bool changed=false; std::string update_error;
-            for (const auto& design : saved) {
-                const int count=next.update_car_design(design,status,edited_index>=0 && (initial.name==design.name || (edited && edited->name==design.name)) ? edited_index : -1);
-                if (count<0) update_error=status; else changed |= count>0;
-                if (selected_car && selected_car->name==design.name) selected_car=design;
-            }
-            if (changed) commit(std::move(next));
-            if (edited) { selected_car=*edited; choose_tool(5); vehicle_kind=0; }
-            else if (edited_index>=0) selected_vehicle=edited_index;
-            car_renderer.refresh();
-            status = !update_error.empty() ? "Map update rejected: "+update_error : changed ? "Placed cars updated / Ctrl+Z to undo" : edited ? "Click the map to place "+edited->name : "Car editor closed";
+            if (command==MenuCommand::PlaceCar) {
+                if (const auto chosen=choose_car(selected_car,directory.parent_path()/"cars")) {selected_car=chosen; choose_tool(5); vehicle_kind=0; status="Click the map to place "+chosen->name;}
+            } else if (command==MenuCommand::EditCar && menu_state.car_selection) {
+                edit_in_window(DesktopApp::Cars,city.vehicles[selected_vehicle].car.value_or(CarDesign{}),"AMBARETTO_CAR 2",".car",status);
+            } else launch_app(DesktopApp::Cars,status);
             painting=dragging=false; first_frame=true; continue;
         }
         if (builder_request>=0) {
-            const int edited_index = edit_building ? selected_building : -1;
-            const BuildingMesh initial = edit_building ? city.buildings[edited_index].shape() : building_mesh.value_or(preview.shape());
-            std::vector<BuildingMesh> saved;
-            const auto edited = building_builder(initial,buildings_directory,{},0,&saved);
-            City next = city; bool map_changed = false; std::string update_error;
-            const auto update_design = [&](const BuildingMesh& design,int replace = -1) {
-                const int changed = next.update_building_design(design,status,replace);
-                if (changed<0) update_error = design.name+": "+status;
-                else map_changed |= changed>0;
-            };
-            for (const auto& design : saved) {
-                update_design(design,edited_index>=0 && initial.name==design.name ? edited_index : -1);
-                if (building_mesh && building_mesh->name==design.name) building_mesh = design;
-            }
-            if (edited) {
-                building_mesh = *edited;
-                update_design(*edited,edited_index);
-            }
-            if (map_changed) commit(std::move(next));
-            if (edited_index>=0) selected_building = edited_index;
-            else if (edited) choose_tool(3);
-            refresh_designs();
-            if (!update_error.empty()) status = "Map update rejected: "+update_error;
-            else if (map_changed) status = "Placed buildings updated / Ctrl+Z to undo";
-            painting = dragging = false; first_frame = true; continue;
+            if (edit_building) edit_in_window(DesktopApp::Buildings,city.buildings[selected_building].shape(),"AMBARETTO_BUILDING 2",".building",status);
+            else launch_app(DesktopApp::Buildings,status);
+            painting=dragging=false; first_frame=true; continue;
         }
         first_frame = false;
         if (!screenshot.empty() && ++frames>=3) { auto image = LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); return EditorResult::Quit; }
@@ -1350,7 +1529,11 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         for (std::size_t i = 0; i<cities.size(); ++i) if (cities[i].id==selected.id) selection = int(i);
     };
     refresh(); int frames = 0; bool accept_input = false;
-    while (!WindowShouldClose() || !screenshot.empty()) {
+    while (true) {
+        if (screenshot.empty() && app_should_close()) {
+            if (menu.save_pending(controls,mapping_path)) return false;
+            cancel_app_close(); status="Cannot save controller mappings; retry Save & close.";
+        }
         if (open_editor) {
             open_editor = false;
             auto result = editor(selected,directory,screenshot);
@@ -1391,8 +1574,8 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         if (menu.blocking() || menu.interacted()) graphics_panel.cancel_drag();
         if (menu.blocking() || menu.interacted() || graphics_panel.visible()) can_choose = false;
         if (command==MenuCommand::Quit) return false;
-        if (command==MenuCommand::CarEditor) { car_builder({},directory.parent_path()/"cars"); accept_input=false; continue; }
-        if (command==MenuCommand::CharacterCreator) { character_builder({},characters_directory); character_renderer.refresh(); accept_input=false; continue; }
+        if (command==MenuCommand::CarEditor) { launch_app(DesktopApp::Cars,status); accept_input=false; continue; }
+        if (command==MenuCommand::CharacterCreator) { launch_app(DesktopApp::Characters,status); accept_input=false; continue; }
         if (command==MenuCommand::ChoosePlayerCharacter && has) {
             if (const auto chosen=choose_player_character(cities[selection].player_character,characters_directory)) {
                 City next=cities[selection]; next.player_character=chosen;
@@ -1422,10 +1605,10 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         scroll = std::clamp(scroll,0,std::max(0,int(cities.size())-rows));
         if (can_choose && hit({x,y+98,600,height-118})) scroll = std::clamp(scroll-int(GetMouseWheelMove()),0,std::max(0,int(cities.size())-rows));
         BeginDrawing(); ui::draw_desktop();
-        ui::draw_window({x,y,940,height},"City directory");
+        ui::draw_window({x,y,940,height},"Cities / Create or open");
         ui::draw_window_close({x,y,940,height});
         if (close_clicked({x,y,940,height},can_choose)) { EndDrawing(); return false; }
-        text("Ambaretto / CITIES",x+20,y+48,20,accent);
+        text("Create a new map or select a city to open / edit.",x+20,y+48,18,accent);
         DrawRectangleRec({x,y+108,600,height-118},panel);
         if (cities.empty()) text("No cities",x+24,y+138,22);
         for (int row = 0; row<rows && row+scroll<int(cities.size()); ++row) {
@@ -1441,12 +1624,12 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         const float spacing = std::clamp((GetScreenHeight()-160)/560.f,.8f,1.f);
         // Modal drawing happens last; only its own controls can receive input.
         if (modal==0) {
-            if (button({bx,by,280,44},"+ New city",true,true,can_choose)||(can_choose && IsKeyPressed(KEY_INSERT))) new_city();
-            if (button({bx,by+64*spacing,280,44},"Edit / build",false,has,can_choose)) { selected = cities[selection]; open_editor = true; }
+            if (button({bx,by,280,44},"Create new city",true,true,can_choose)||(can_choose && IsKeyPressed(KEY_INSERT))) new_city();
+            if (button({bx,by+64*spacing,280,44},"Open / edit city",false,has,can_choose)) { selected = cities[selection]; open_editor = true; }
             if (button({bx,by+124*spacing,280,44},"Play city",true,menu_state.play,can_choose)) { selected = cities[selection]; EndDrawing(); return true; }
             if (button({bx,by+194*spacing,280,40},"Rename",false,has,can_choose)) { modal = 2; name = cities[selection].name; }
             if (button({bx,by+248*spacing,280,40},"Delete city",false,has,can_choose)) modal = 3;
-            if (button({bx,by+318*spacing,280,40},"Quit",false,true,can_choose)) { EndDrawing(); return false; }
+            if (button({bx,by+318*spacing,280,40},"Close app",false,true,can_choose)) { EndDrawing(); return false; }
             if (button({bx,by+374*spacing,280,40},"Choose player character",false,has,can_choose,16)) {
                 EndDrawing();
                 if (const auto chosen=choose_player_character(cities[selection].player_character,characters_directory)) {
@@ -1456,8 +1639,8 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
                 character_renderer.refresh(); accept_input=false; continue;
             }
         } else {
-            button({bx,by,280,44},"+ New city",true,false);
-            button({bx,by+64*spacing,280,44},"Edit / build",false,false);
+            button({bx,by,280,44},"Create new city",true,false);
+            button({bx,by+64*spacing,280,44},"Open / edit city",false,false);
             button({bx,by+124*spacing,280,44},"Play city",true,false);
             button({bx,by+194*spacing,280,40},"Rename",false,false);
             button({bx,by+248*spacing,280,40},"Delete city",false,false);

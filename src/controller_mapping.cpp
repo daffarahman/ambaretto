@@ -26,7 +26,7 @@ const std::array<const char*, action_count> action_labels{{
     "Pitch down", "Pitch up", "Bank left", "Bank right", "Throttle up", "Throttle down", "Rudder left", "Rudder right",
     "Toggle flaps", "Wheel brake", "Exit plane", "Recover plane",
     "Camera left", "Camera right", "Camera up", "Camera down", "Zoom in", "Zoom out",
-    "World map", "Capture / release mouse"
+    "World map", "Pause / resume"
 }};
 const std::array<ActionGroup, 4> action_groups{{
     {"On foot", Action::FootForward, Action::Forward},

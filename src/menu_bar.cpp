@@ -7,12 +7,12 @@ namespace ambaretto {
 namespace {
 constexpr Color blue = ui::dos_blue, gray = ui::dos_white, ink = ui::dos_blue, selected = ui::dos_light_blue;
 struct Item { const char* label; MenuCommand command; const char* shortcut = ""; };
-constexpr Item files[] = {{"Capture mouse", MenuCommand::Resume}, {"Release mouse", MenuCommand::Pause}, {"End Game", MenuCommand::Cities}};
+constexpr Item files[] = {{"Resume", MenuCommand::Resume, "Esc"}, {"End Game / Desktop", MenuCommand::Cities}};
 constexpr Item edits[] = {{"Recover vehicle", MenuCommand::Recover}, {"Restore car tuning", MenuCommand::CarDefaults}};
 constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Aim mode", MenuCommand::AimMode}};
 constexpr Item main_settings[] = {{"Graphics...", MenuCommand::Graphics}, {"Controller mapping...", MenuCommand::Controllers}, {"Car editor...", MenuCommand::CarEditor}, {"Character creator...", MenuCommand::CharacterCreator}};
 constexpr Item helps[] = {{"Controls...", MenuCommand::Controls}, {"About...", MenuCommand::About}};
-constexpr Item editor_files[] = {{"Save city", MenuCommand::SaveCity, "Ctrl+S"}, {"Start time...", MenuCommand::StartTime}, {"Play city", MenuCommand::PlayCity}, {"Cities...", MenuCommand::Cities, "Esc"}, {"Quit", MenuCommand::Quit}};
+constexpr Item editor_files[] = {{"Save city", MenuCommand::SaveCity, "Ctrl+S"}, {"Start time...", MenuCommand::StartTime}, {"Play city", MenuCommand::PlayCity}, {"Cities...", MenuCommand::Cities, "Esc"}, {"Close app", MenuCommand::Quit}, {"Refresh saved designs", MenuCommand::RefreshDesigns}};
 constexpr Item editor_edits[] = {{"Undo", MenuCommand::Undo, "Ctrl+Z"}, {"Redo", MenuCommand::Redo, "Ctrl+Y"}, {"Delete selection", MenuCommand::DeleteSelection, "Del"}, {"Select / edit", MenuCommand::SelectTool, "1"}, {"Bulldoze", MenuCommand::BulldozeTool, "7"}};
 constexpr Item tiles[] = {{"Island / expand",MenuCommand::LandTool,"2"}, {"Road: L-shaped",MenuCommand::RoadBend,"3"}, {"Road: diagonal",MenuCommand::RoadDiagonal},
     {"Ground texture...",MenuCommand::GroundTool,"9"},
@@ -25,19 +25,19 @@ constexpr Item objects[] = {{"Player spawn",MenuCommand::SpawnTool,"5"}, {"Choos
     {"Car editor...",MenuCommand::CarEditor}, {"Edit selected car...",MenuCommand::EditCar},
     {"Character creator...",MenuCommand::CharacterCreator}, {"Choose player character...",MenuCommand::ChoosePlayerCharacter}};
 constexpr Item views[] = {{"Top view", MenuCommand::TopView, "V"}, {"Show grid", MenuCommand::Grid, "G"}, {"Rotate left", MenuCommand::RotateLeft, "Q"}, {"Rotate right", MenuCommand::RotateRight, "E"}, {"Zoom in", MenuCommand::ZoomIn}, {"Zoom out", MenuCommand::ZoomOut}};
-constexpr Item city_files[] = {{"New city...", MenuCommand::NewCity, "Ins"}, {"Quit", MenuCommand::Quit}};
-constexpr Item city_actions[] = {{"Edit / build", MenuCommand::EditCity, "E"}, {"Play city", MenuCommand::PlayCity, "Enter"}, {"Rename...", MenuCommand::RenameCity, "F2"}, {"Delete city...", MenuCommand::DeleteCity, "Del"}, {"Choose player character...", MenuCommand::ChoosePlayerCharacter}};
+constexpr Item city_files[] = {{"Create new city...", MenuCommand::NewCity, "Ins"}, {"Close app", MenuCommand::Quit}};
+constexpr Item city_actions[] = {{"Open / edit city", MenuCommand::EditCity, "E"}, {"Play city", MenuCommand::PlayCity, "Enter"}, {"Rename...", MenuCommand::RenameCity, "F2"}, {"Delete city...", MenuCommand::DeleteCity, "Del"}, {"Choose player character...", MenuCommand::ChoosePlayerCharacter}};
 struct Menu { const char* title; const Item* items; int count; };
-constexpr Menu game_menus[] = {{"File", files, 3}, {"Edit", edits, 2}, {"Settings", settings, 3}, {"Help", helps, 2}};
-constexpr Menu editor_menus[] = {{"File", editor_files, 5}, {"Edit", editor_edits, int(std::size(editor_edits))}, {"Tiles", tiles, int(std::size(tiles))},
+constexpr Menu game_menus[] = {{"File", files, int(std::size(files))}, {"Edit", edits, 2}, {"Settings", settings, 3}, {"Help", helps, 2}};
+constexpr Menu editor_menus[] = {{"File", editor_files, int(std::size(editor_files))}, {"Edit", editor_edits, int(std::size(editor_edits))}, {"Tiles", tiles, int(std::size(tiles))},
     {"Buildings", buildings, int(std::size(buildings))}, {"Objects", objects, int(std::size(objects))}, {"View", views, 6}, {"Help", helps, 2}};
 constexpr Menu city_menus[] = {{"File", city_files, 2}, {"City", city_actions, int(std::size(city_actions))}, {"Settings", main_settings, int(std::size(main_settings))}, {"Help", helps, 2}};
 constexpr Item creator_files[] = {{"New building",MenuCommand::NewBuilding}, {"Save building",MenuCommand::SaveBuilding,"Ctrl+S"}, {"Saved buildings",MenuCommand::SavedBuildings},
-    {"Use in map",MenuCommand::UseBuilding}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
+    {"Save and close",MenuCommand::UseBuilding}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
 constexpr Menu creator_menus[] = {{"File",creator_files,int(std::size(creator_files))}, {"Edit",editor_edits,2}};
-constexpr Item car_files[] = {{"New car",MenuCommand::NewCar}, {"Save car",MenuCommand::SaveCar,"Ctrl+S"}, {"Use in map",MenuCommand::UseCar}, {"Close editor",MenuCommand::CloseCreator,"Esc"}};
+constexpr Item car_files[] = {{"New car",MenuCommand::NewCar}, {"Save car",MenuCommand::SaveCar,"Ctrl+S"}, {"Save and close",MenuCommand::UseCar}, {"Close editor",MenuCommand::CloseCreator,"Esc"}};
 constexpr Menu car_menus[] = {{"File",car_files,int(std::size(car_files))}};
-constexpr Item character_files[] = {{"New character",MenuCommand::NewCharacter}, {"Save character",MenuCommand::SaveCharacter,"Ctrl+S"}, {"Use in map",MenuCommand::UseCharacter}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
+constexpr Item character_files[] = {{"New character",MenuCommand::NewCharacter}, {"Save character",MenuCommand::SaveCharacter,"Ctrl+S"}, {"Save and close",MenuCommand::UseCharacter}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
 constexpr Menu character_menus[] = {{"File",character_files,int(std::size(character_files))}};
 const Menu* menus(MenuMode mode) { return mode == MenuMode::Editor ? editor_menus : mode == MenuMode::Cities ? city_menus : mode==MenuMode::Creator ? creator_menus : mode==MenuMode::CarCreator ? car_menus : mode==MenuMode::CharacterCreator ? character_menus : game_menus; }
 int menu_count(MenuMode mode) { return mode == MenuMode::Editor ? int(std::size(editor_menus)) : mode==MenuMode::Creator ? int(std::size(creator_menus)) : mode==MenuMode::CarCreator || mode==MenuMode::CharacterCreator ? 1 : 4; }
@@ -314,7 +314,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             "Plane throttle: Shift/Ctrl or RT/LT. Rudder: arrows or LB/RB. Flaps: F / X.",
             "Camera: mouse / right stick. Zoom: wheel / D-pad down or left.",
             "Recover vehicle: R / D-pad up. Respawn on foot: F5 / D-pad up. Map: F2 / Back.",
-            "Esc: release mouse / close. Start: capture/release mouse. F10: menubar.",
+            "Esc / Start: pause on map / resume. F10: menubar.",
             "Tuning: drag sliders; arrows adjust; Shift is fine adjustment.",
             "Tuning camera: right-drag outside panel; scroll to zoom. The map pauses physics."
         };

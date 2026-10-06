@@ -51,6 +51,7 @@ int main(int argc, char** argv) {
         dispatch(3,0,MenuCommand::BuildingTool); dispatch(3,1,MenuCommand::BuildingCreator);
         dispatch(4,11,MenuCommand::CarEditor);
         dispatch(4,13,MenuCommand::CharacterCreator); dispatch(4,14,MenuCommand::ChoosePlayerCharacter);
+        dispatch(0,5,MenuCommand::RefreshDesigns);
         MenuBar character_creator(MenuMode::CharacterCreator); character_creator.open(); input={}; input.vertical=1; character_creator.update({},input); input={}; input.enter=true;
         require(character_creator.update({},input)==MenuCommand::SaveCharacter,"Character creator Save menu is missing");
         state.car_selection=true; dispatch(4,12,MenuCommand::EditCar); state.car_selection=false;
@@ -107,8 +108,10 @@ int main(int argc, char** argv) {
         game.open(); input = {}; input.vertical = -1; game.update({},input);
         input = {}; input.enter = true;
         require(game.update({},input) == MenuCommand::Cities, "End Game was not the last File item");
+        game.open(); input={}; input.enter=true;
+        require(game.update({},input)==MenuCommand::Resume,"File > Resume is missing");
         input = {}; input.escape = true;
-        require(game.update({},input) == MenuCommand::Pause && game.interacted() && !game.blocking(), "Escape did not release the gameplay cursor");
+        require(game.update({},input) == MenuCommand::Pause && game.interacted() && !game.blocking(), "Escape did not request pause / map");
         game.open();
         require(game.update({},input) == MenuCommand::None && !game.blocking(), "Escape in a menu changed gameplay instead of closing the menu");
 
