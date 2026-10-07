@@ -421,7 +421,6 @@ bool mesh_slider(Rectangle r,float& value,float lo,float hi,int id,int& dragging
 std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesystem::path& directory,const std::string& screenshot,int initial_tab,std::vector<BuildingMesh>* saved_designs) {
     int tab = initial_tab==2 ? 1 : initial_tab==3 ? 2 : 0, mode = 0, decal = 0;
     int field = -1, scroll = 0, frames = 0, slider_drag = -1, handle = -1;
-    bool open_saved=initial_tab==4;
     std::array<std::vector<int>,3> selected{{{2},{},{4}}}; std::vector<int> moving;
     std::vector<BuildingMesh> undo, redo; std::optional<BuildingMesh> grab;
     Vector2 grab_start{}; bool keyboard_grab = false, slice = false, xray = false, interactive = false, decal_texture = false;
@@ -476,7 +475,6 @@ void main() {
         if (can_edit && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) slider_drag = -1;
         if (command==MenuCommand::CloseCreator || (can_edit && close_clicked(window))) { if (leave()) break; interactive=false; continue; }
         if (can_edit && IsKeyPressed(KEY_ESCAPE) && !grab) { if (slice) slice = false; else if (field>=0) field = -1; else {if (leave()) break; interactive=false; continue;} }
-        if (command==MenuCommand::SavedBuildings) open_saved=true;
         if (command==MenuCommand::NewBuilding) {
             if (leave()) { mesh={}; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={{{2},{},{4}}}; tab=0; slice=false; }
             interactive=false; continue;
@@ -656,7 +654,6 @@ void main() {
         if (resized) { auto next = mesh; if (next.set_footprint(width,depth,status,true)) commit(std::move(next)); }
         const char* tabs[] = {"Mesh","Texture","Decals"}; const Rectangle tab_boxes[] = {{20,244,82,30},{108,244,108,30},{222,244,90,30}};
         for (int i = 0; i<3; ++i) if (control(tab_boxes[i],tabs[i],tab==i)) { tab = i; scroll = 0; field = -1; slice = false; if (i==1) decal_texture = false; }
-        open_saved|=control({318,244,78,30},"Open...");
         BuildingMesh next = mesh; bool changed = false;
         const bool keys = can_edit && !grab && field<0 && !ctrl;
         if (tab==0) {
@@ -748,10 +745,10 @@ void main() {
         if (!screenshot.empty() && ++frames>=3) { auto capture = LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break; }
         if (cancel) { if (leave()) break; interactive=false; }
         if (use && save_design()) { result = mesh; break; }
-        if (open_saved) {
+        if (command==MenuCommand::SavedBuildings) {
             const auto loaded=saved_picker([&]{return saved_buildings(directory,status);},"Saved buildings","Open building",mesh.name,status,directory);
             if (loaded && leave()) { mesh=*loaded; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={}; tab=0; slice=false; }
-            open_saved=false; interactive=false; field=slider_drag=-1;
+            interactive=false; field=slider_drag=-1;
         }
     }
     if (preview.id) UnloadRenderTexture(preview);
@@ -830,7 +827,6 @@ std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::pat
         const auto control = [&](Rectangle r,const std::string& label,bool selected=false,bool enabled=true) {return button(r,label,selected,enabled,active,16);};
         const char* tabs[] = {"Body","Wheel","Tuning"};
         for (int i=0;i<3;++i) if (control({20+i*96.f,44,88,30},tabs[i],tab==i)) { tab=i; scroll=0; naming=false; drag=-1; }
-        const bool open_saved=control({308,44,82,30},"Open...") || command==MenuCommand::SavedCars;
         if (tab==2) tuning.draw(car,width,height);
         else {
             const Rectangle name{20,102,370,34}; text("Name",20,82,14);
@@ -878,7 +874,7 @@ std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::pat
         if (!screenshot.empty() && ++frames>=3) { auto capture=LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break; }
         if (result) break;
         if (close) { if (leave()) break; interactive=false; }
-        if (open_saved) {
+        if (command==MenuCommand::SavedCars) {
             const auto loaded=saved_picker([&]{return saved_cars(directory,status);},"Saved cars","Open car",design.name,status,directory);
             if (loaded && leave()) { design=*loaded; original=snapshot(design); sync(); tab=scroll=0; status.clear(); }
             interactive=false; naming=false; drag=-1;
@@ -946,7 +942,6 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
         text("Right-drag: orbit / Wheel: zoom",view.x,63,14);
         const auto control=[&](Rectangle r,const std::string& label,bool selected=false,bool enabled=true) {return button(r,label,selected,enabled,active,15);};
         text("Character parts",20,50,18,accent);
-        const bool open_saved=control({210,44,180,30},"Open saved...") || command==MenuCommand::SavedCharacters;
         const Rectangle name{20,102,370,34}; text("Name",20,82,14);
         if (active && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) naming=hit(name);
         if (naming && active) input(design.name,name); else control(name,design.name);
@@ -994,7 +989,7 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
         if (!screenshot.empty() && ++frames>=3) {auto capture=LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break;}
         if (result) break;
         if (close) { if (leave()) break; interactive=false; }
-        if (open_saved) {
+        if (command==MenuCommand::SavedCharacters) {
             const auto loaded=saved_picker([&]{return saved_characters(directory,status);},"Saved characters","Open character",design.name,status,directory);
             if (loaded && leave()) {design=*loaded; original=snapshot(design); scroll=0; pose=0; character.reset({0,.08f,0}); status.clear();}
             interactive=false; naming=false; drag=-1;

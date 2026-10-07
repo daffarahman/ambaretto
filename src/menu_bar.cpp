@@ -33,12 +33,12 @@ constexpr Menu game_menus[] = {{"File", files, int(std::size(files))}, {"Edit", 
 constexpr Menu editor_menus[] = {{"File", editor_files, int(std::size(editor_files))}, {"Edit", editor_edits, int(std::size(editor_edits))}, {"Tiles", tiles, int(std::size(tiles))},
     {"Buildings", buildings, int(std::size(buildings))}, {"Objects", objects, int(std::size(objects))}, {"View", views, 6}, {"Help", helps, 2}};
 constexpr Menu city_menus[] = {{"File", city_files, int(std::size(city_files))}};
-constexpr Item creator_files[] = {{"New building",MenuCommand::NewBuilding}, {"Save building",MenuCommand::SaveBuilding,"Ctrl+S"}, {"Saved buildings...",MenuCommand::SavedBuildings},
+constexpr Item creator_files[] = {{"New building",MenuCommand::NewBuilding}, {"Save building",MenuCommand::SaveBuilding,"Ctrl+S"}, {"Open Saved Building",MenuCommand::SavedBuildings},
     {"Save and close",MenuCommand::UseBuilding}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
 constexpr Menu creator_menus[] = {{"File",creator_files,int(std::size(creator_files))}, {"Edit",editor_edits,2}};
-constexpr Item car_files[] = {{"New car",MenuCommand::NewCar}, {"Save car",MenuCommand::SaveCar,"Ctrl+S"}, {"Saved cars...",MenuCommand::SavedCars}, {"Save and close",MenuCommand::UseCar}, {"Close editor",MenuCommand::CloseCreator,"Esc"}};
+constexpr Item car_files[] = {{"New car",MenuCommand::NewCar}, {"Save car",MenuCommand::SaveCar,"Ctrl+S"}, {"Open Saved Car",MenuCommand::SavedCars}, {"Save and close",MenuCommand::UseCar}, {"Close editor",MenuCommand::CloseCreator,"Esc"}};
 constexpr Menu car_menus[] = {{"File",car_files,int(std::size(car_files))}};
-constexpr Item character_files[] = {{"New character",MenuCommand::NewCharacter}, {"Save character",MenuCommand::SaveCharacter,"Ctrl+S"}, {"Saved characters...",MenuCommand::SavedCharacters}, {"Save and close",MenuCommand::UseCharacter}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
+constexpr Item character_files[] = {{"New character",MenuCommand::NewCharacter}, {"Save character",MenuCommand::SaveCharacter,"Ctrl+S"}, {"Open Saved Character",MenuCommand::SavedCharacters}, {"Save and close",MenuCommand::UseCharacter}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
 constexpr Menu character_menus[] = {{"File",character_files,int(std::size(character_files))}};
 const Menu* menus(MenuMode mode) { return mode==MenuMode::Main ? home_menus : mode == MenuMode::Editor ? editor_menus : mode == MenuMode::Cities ? city_menus : mode==MenuMode::Creator ? creator_menus : mode==MenuMode::CarCreator ? car_menus : mode==MenuMode::CharacterCreator ? character_menus : game_menus; }
 int menu_count(MenuMode mode) { return mode==MenuMode::Main ? int(std::size(home_menus)) : mode == MenuMode::Editor ? int(std::size(editor_menus)) : mode==MenuMode::Creator ? int(std::size(creator_menus)) : mode==MenuMode::Cities || mode==MenuMode::CarCreator || mode==MenuMode::CharacterCreator ? 1 : 4; }

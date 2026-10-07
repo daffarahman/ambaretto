@@ -25,6 +25,7 @@ void reset() {steps.clear(); frame=0; title.clear(); should_close=false;}
 void window() {reset(); InitWindow(1024,600,"Menu workflow check"); SetExitKey(KEY_NULL); SetTargetFPS(120);}
 bool blue_background() {const auto image=LoadImageFromScreen(); const Color p=GetImageColor(image,20,140); UnloadImage(image); return p.r==0 && p.g==0 && p.b==170;}
 bool saved_popup() {const auto image=LoadImageFromScreen(); const Color p=GetImageColor(image,152,300); UnloadImage(image); return p.r==255 && p.g==255 && p.b==255;}
+void open_saved() {key(KEY_F10); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER);}
 void preview(const char* name) {steps.push_back([=]{require(saved_popup(),"Saved selector did not open as a popup"); auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/name).string().c_str()); UnloadImage(image);});}
 std::string contents(const std::filesystem::path& path) {std::ifstream file(path); return {std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};}
 }
@@ -110,7 +111,9 @@ int main() {
         require(building.save(root/"buildings",error),"Building fixture save failed");
         stage="building popup"; window(); {
             ui::FontResource font;
-            idle(); click(350,258); preview("saved-buildings-popup.png"); key(KEY_ENTER); click(250,495);
+            idle(); click(350,258);
+            steps.push_back([]{require(!saved_popup(),"Removed building Open button still opened the selector");});
+            open_saved(); preview("saved-buildings-popup.png"); key(KEY_ENTER); click(250,495);
             const auto result=building_builder(building,root/"buildings");
             require(result && result->name==building.name,"Building popup did not open the saved design");
         } CloseWindow();
@@ -120,7 +123,9 @@ int main() {
         require(car.save(root/"cars",error),"Car fixture save failed");
         stage="car popup"; window(); {
             ui::FontResource font;
-            idle(); click(215,159); click(350,58); preview("saved-cars-popup.png"); key(KEY_ENTER); click(740,394); click(250,545);
+            idle(); click(215,159); click(350,58);
+            steps.push_back([]{require(!saved_popup(),"Removed car Open button still opened the selector");});
+            open_saved(); preview("saved-cars-popup.png"); key(KEY_ENTER); click(740,394); click(250,545);
             const auto result=car_builder(car,root/"cars");
             require(result && result->name==car.name && result->type==CarType::Police,"Cancelling Open replaced the car draft");
         } CloseWindow();
@@ -128,7 +133,9 @@ int main() {
         require(officer.save(root/"characters",error),"Officer fixture save failed");
         stage="character popup"; window(); {
             ui::FontResource font;
-            idle(); click(300,58); preview("saved-characters-popup.png"); key(KEY_DOWN); key(KEY_ENTER); click(250,553);
+            idle(); click(300,58);
+            steps.push_back([]{require(!saved_popup(),"Removed character Open button still opened the selector");});
+            open_saved(); preview("saved-characters-popup.png"); key(KEY_DOWN); key(KEY_ENTER); click(250,553);
             const auto result=character_builder(player,root/"characters");
             require(result && result->type==CharacterType::Police,"Character popup did not open the selected officer");
         } CloseWindow();
@@ -190,19 +197,19 @@ int main() {
         }
         stage="building popup duplicate"; window(); {
             ui::FontResource font; const auto path=saved_path(building,root/"buildings"); const auto original=contents(path);
-            idle(); click(350,258); duplicate_key(); preview("duplicate-building-popup.png"); key(KEY_ENTER); click(250,495);
+            idle(); open_saved(); duplicate_key(); preview("duplicate-building-popup.png"); key(KEY_ENTER); click(250,495);
             const auto result=building_builder(building,root/"buildings");
             require(result && result->name==building.name+" copy 2" && contents(path)==original,"Building popup did not open a separate duplicate");
         } CloseWindow();
         stage="car popup duplicate"; window(); {
             ui::FontResource font; const auto path=saved_path(car,root/"cars"); const auto original=contents(path);
-            idle(); click(350,58); click(390,495); key(KEY_ENTER); click(75,159); click(250,545);
+            idle(); open_saved(); click(390,495); key(KEY_ENTER); click(75,159); click(250,545);
             const auto result=car_builder(car,root/"cars");
             require(result && result->name==car.name+" copy 2" && result->type==CarType::Civilian && contents(path)==original,"Car duplicate edits changed the source");
         } CloseWindow();
         stage="character popup duplicate"; window(); {
             ui::FontResource font; const auto path=saved_path(player,root/"characters"); const auto original=contents(path);
-            idle(); click(300,58); duplicate_key(); key(KEY_ENTER); click(75,159); click(250,553);
+            idle(); open_saved(); duplicate_key(); key(KEY_ENTER); click(75,159); click(250,553);
             const auto result=character_builder(player,root/"characters");
             require(result && result->name==player.name+" copy 2" && result->type==CharacterType::Player && contents(path)==original,"Character duplicate edits changed the source");
         } CloseWindow();
