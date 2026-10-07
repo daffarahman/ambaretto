@@ -15,7 +15,7 @@ enum class MenuCommand {
     NewBuilding, SaveBuilding, SavedBuildings, UseBuilding, CloseCreator, RotateBuilding,
     CarEditor, EditCar, NewCar, SaveCar, UseCar,
     CharacterCreator, ChoosePlayerCharacter, NewCharacter, SaveCharacter, UseCharacter, RefreshDesigns,
-    Editors, SavedCars, SavedCharacters
+    Editors, SavedCars, SavedCharacters, DuplicateCity
 };
 enum class MenuMode { Game, Editor, Cities, Creator, CarCreator, CharacterCreator, Main };
 struct MenuState {

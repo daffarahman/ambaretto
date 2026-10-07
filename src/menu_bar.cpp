@@ -26,7 +26,7 @@ constexpr Item objects[] = {{"Player spawn",MenuCommand::SpawnTool,"5"}, {"Choos
     {"Car editor...",MenuCommand::CarEditor}, {"Edit selected car...",MenuCommand::EditCar},
     {"Character creator...",MenuCommand::CharacterCreator}, {"Choose player character...",MenuCommand::ChoosePlayerCharacter}};
 constexpr Item views[] = {{"Top view", MenuCommand::TopView, "V"}, {"Show grid", MenuCommand::Grid, "G"}, {"Rotate left", MenuCommand::RotateLeft, "Q"}, {"Rotate right", MenuCommand::RotateRight, "E"}, {"Zoom in", MenuCommand::ZoomIn}, {"Zoom out", MenuCommand::ZoomOut}};
-constexpr Item city_files[] = {{"Create new city...", MenuCommand::NewCity, "Ins"}, {"Open / edit selected", MenuCommand::EditCity, "Enter"}, {"Back", MenuCommand::Quit, "Esc"}};
+constexpr Item city_files[] = {{"Create new city...", MenuCommand::NewCity, "Ins"}, {"Open / edit selected", MenuCommand::EditCity, "Enter"}, {"Duplicate selected", MenuCommand::DuplicateCity, "Ctrl+D"}, {"Back", MenuCommand::Quit, "Esc"}};
 struct Menu { const char* title; const Item* items; int count; };
 constexpr Menu home_menus[] = {{"File", home_files, int(std::size(home_files))}, {"Settings", home_settings, int(std::size(home_settings))}, {"Help", helps, int(std::size(helps))}};
 constexpr Menu game_menus[] = {{"File", files, int(std::size(files))}, {"Edit", edits, 2}, {"Settings", settings, 3}, {"Help", helps, 2}};
@@ -51,7 +51,7 @@ bool enabled(MenuCommand command, const MenuState& state) {
         case MenuCommand::EditCar: return state.car_selection;
         case MenuCommand::ChoosePlayerCharacter: return state.choose_character;
         case MenuCommand::RotateBuilding: return state.building_selection || state.tool==3;
-        case MenuCommand::DeleteSelection: case MenuCommand::EditCity: case MenuCommand::RenameCity: case MenuCommand::DeleteCity: return state.selection;
+        case MenuCommand::DeleteSelection: case MenuCommand::EditCity: case MenuCommand::RenameCity: case MenuCommand::DeleteCity: case MenuCommand::DuplicateCity: return state.selection;
         default: return true;
     }
 }

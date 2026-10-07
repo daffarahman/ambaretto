@@ -112,9 +112,12 @@ int main(int argc, char** argv) {
         state.selection = true;
         require(cities.update(state, input) == MenuCommand::EditCity, "Cities File > Edit did not dispatch");
         dispatch_menu(MenuMode::Cities,0,0,MenuCommand::NewCity);
-        dispatch_menu(MenuMode::Cities,0,2,MenuCommand::Quit);
+        cities.open(); input={}; input.vertical=2; cities.update({},input); input={}; input.enter=true;
+        require(cities.update({},input)==MenuCommand::None && cities.blocking(),"Duplicate city was enabled without a selection");
+        require(cities.update(state,input)==MenuCommand::DuplicateCity,"Cities File > Duplicate did not dispatch");
+        dispatch_menu(MenuMode::Cities,0,3,MenuCommand::Quit);
         cities.open(); input={}; input.vertical=-1; cities.update({},input); input={}; input.enter=true;
-        require(cities.update({},input)==MenuCommand::Quit,"Cities still has extra File actions");
+        require(cities.update({},input)==MenuCommand::Quit,"Back was not the last Cities File action");
         MenuBar game; game.open(2);
         require(game.update({}, input) == MenuCommand::Map, "Existing gameplay menu changed");
         game.open(2); input = {}; input.vertical = -1; game.update({},input);

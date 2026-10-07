@@ -1,4 +1,5 @@
 #include "city.hpp"
+#include "saved_copy.hpp"
 #include "ui_font.hpp"
 #include "menu_bar.hpp"
 #include "graphics_panel.hpp"
@@ -34,6 +35,7 @@ std::string fit(std::string value,int size,float width) {
     return value+"...";
 }
 bool hit(Rectangle r) { return CheckCollisionPointRec(GetMousePosition(),r); }
+bool duplicate_pressed() { return (IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_D); }
 bool close_clicked(Rectangle r, bool interactive = true) { return interactive && hit(ui::window_close(r)) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT); }
 bool button(Rectangle r, const std::string& label, bool selected = false, bool enabled = true, bool interactive = true, int size = 18) {
     const bool hover = interactive && enabled && hit(r);
@@ -77,7 +79,7 @@ template<class T, class Save> bool leave_draft(const T& design, const std::strin
     }
 }
 template<class Load> auto saved_picker(Load load,const char* title,const char* action,const std::string& current,std::string& status,
-    std::function<bool(const typename decltype(load())::value_type&,std::string&)> ready={},bool play_on_click=false)
+    const std::filesystem::path& directory={},std::function<bool(const typename decltype(load())::value_type&,std::string&)> ready={},bool play_on_click=false)
     -> std::optional<typename decltype(load())::value_type> {
     using Design=typename decltype(load())::value_type;
     status.clear(); auto library=load();
@@ -101,7 +103,7 @@ template<class Load> auto saved_picker(Load load,const char* title,const char* a
         DrawTexturePro(backdrop,{0,0,float(backdrop.width),float(backdrop.height)},{0,0,float(GetScreenWidth()),float(GetScreenHeight())},{0,0},0,WHITE);
         DrawRectangle(0,0,GetScreenWidth(),GetScreenHeight(),{0,0,0,150});
         ui::draw_window(r,title); ui::draw_window_close(r);
-        text(play_on_click ? "Click a city to play, or select with arrows and Enter." : "Select a saved design, then open it.",r.x+24,r.y+54,16,accent);
+        text(play_on_click ? "Click a city to play, or select with arrows and Enter." : "Select a saved design. Ctrl+D: duplicate selected.",r.x+24,r.y+54,16,accent);
         bool clicked=false;
         for (int row=0;row<rows && scroll+row<int(library.size());++row) {
             const int i=scroll+row;
@@ -110,12 +112,18 @@ template<class Load> auto saved_picker(Load load,const char* title,const char* a
         if (library.empty()) text("No saved items yet.",r.x+24,r.y+100,18);
         std::string reason; const bool available=selection>=0 && (!ready || ready(library[selection],reason));
         text(fit(reason.empty() ? status : reason,15,672),r.x+24,r.y+r.height-99,15,accent);
-        const bool open=button({r.x+24,r.y+r.height-62,208,38},action,true,available,active,17) || (active && IsKeyPressed(KEY_ENTER)) || (play_on_click && clicked);
-        const bool refresh=button({r.x+256,r.y+r.height-62,208,38},"Refresh saved",false,true,active,17);
-        const bool cancel=close_clicked(r,active) || button({r.x+488,r.y+r.height-62,208,38},"Cancel",false,true,active,17) || (active && IsKeyPressed(KEY_ESCAPE));
+        const bool copies=!directory.empty();
+        const auto open_label=copies ? (std::string(action).find("Open")==0 ? "Open" : "Choose") : action;
+        const bool open=button({r.x+24,r.y+r.height-62,copies ? 150.f : 208.f,38},open_label,true,available,active,17) || (active && IsKeyPressed(KEY_ENTER)) || (play_on_click && clicked);
+        const bool duplicate=copies && (button({r.x+198,r.y+r.height-62,150,38},"Duplicate",false,selection>=0,active,17) || (active && selection>=0 && duplicate_pressed()));
+        const bool refresh=button({r.x+(copies ? 372.f : 256.f),r.y+r.height-62,copies ? 150.f : 208.f,38},copies ? "Refresh" : "Refresh saved",false,true,active,17);
+        const bool cancel=close_clicked(r,active) || button({r.x+(copies ? 546.f : 488.f),r.y+r.height-62,copies ? 150.f : 208.f,38},"Cancel",false,true,active,17) || (active && IsKeyPressed(KEY_ESCAPE));
         EndDrawing(); interactive=true;
         if (cancel) break;
         if (open && available) {result=library[selection]; break;}
+        if (duplicate) if (auto copy=duplicate_saved(library[selection],directory,library,status)) {
+            library.push_back(std::move(*copy)); selection=int(library.size())-1; scroll=std::max(0,selection-rows+1);
+        }
         if (refresh) {
             const auto name=selection>=0 ? library[selection].name : "";
             status.clear(); library=load(); selection=library.empty() ? -1 : 0; scroll=0;
@@ -138,7 +146,7 @@ std::vector<City> saved_cities(const std::filesystem::path& directory,std::strin
     std::sort(cities.begin(),cities.end(),[](const City& a,const City& b){return a.name<b.name;});
     return cities;
 }
-template<class Load, class Builder> void open_design_menu(Load load, const char* title, const std::string& screenshot, Builder builder) {
+template<class Load, class Builder> void open_design_menu(Load load, const char* title, const std::filesystem::path& directory, std::string& status, const std::string& screenshot, Builder builder) {
     auto library=load(); using Design=typename decltype(library)::value_type;
     int selection=library.empty() ? -1 : 0, scroll=0, frames=0; bool interactive=false;
     while (!WindowShouldClose()) {
@@ -159,12 +167,16 @@ template<class Load, class Builder> void open_design_menu(Load load, const char*
         if (library.empty()) text("No saved designs yet.",r.x+24,r.y+138,18);
         const bool create=button({r.x+576,r.y+128,280,46},"Create new",true,true,interactive) || (interactive && IsKeyPressed(KEY_INSERT));
         const bool open=button({r.x+576,r.y+192,280,46},"Open / edit selected",false,selection>=0,interactive) || (interactive && selection>=0 && IsKeyPressed(KEY_ENTER));
-        const bool refresh=button({r.x+576,r.y+256,280,40},"Refresh saved",false,true,interactive);
+        const bool duplicate=button({r.x+576,r.y+256,280,40},"Duplicate selected",false,selection>=0,interactive) || (interactive && selection>=0 && duplicate_pressed());
+        const bool refresh=button({r.x+576,r.y+312,280,40},"Refresh saved",false,true,interactive);
         const bool close=close_clicked(r,interactive) || button({r.x+576,r.y+r.height-64,280,40},"Back",false,true,interactive) || (interactive && IsKeyPressed(KEY_ESCAPE));
-        text("Choose a design to edit",r.x+24,r.y+r.height-47,17);
+        text(fit(status.empty() ? "Ctrl+D: duplicate selected" : status,15,540),r.x+24,r.y+r.height-47,15,accent);
         EndDrawing(); interactive=true;
         if (!screenshot.empty() && ++frames>=3) {auto image=LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); break;}
         if (close) break;
+        if (duplicate) if (auto copy=duplicate_saved(library[selection],directory,library,status)) {
+            library.push_back(std::move(*copy)); selection=int(library.size())-1; scroll=std::max(0,selection-rows+1);
+        }
         if (refresh) {library=load(); selection=library.empty() ? -1 : 0; scroll=0;}
         if (create) {builder(Design{}); break;}
         if (open) {builder(library[selection]); break;}
@@ -737,7 +749,7 @@ void main() {
         if (cancel) { if (leave()) break; interactive=false; }
         if (use && save_design()) { result = mesh; break; }
         if (open_saved) {
-            const auto loaded=saved_picker([&]{return saved_buildings(directory,status);},"Saved buildings","Open building",mesh.name,status);
+            const auto loaded=saved_picker([&]{return saved_buildings(directory,status);},"Saved buildings","Open building",mesh.name,status,directory);
             if (loaded && leave()) { mesh=*loaded; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={}; tab=0; slice=false; }
             open_saved=false; interactive=false; field=slider_drag=-1;
         }
@@ -867,7 +879,7 @@ std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::pat
         if (result) break;
         if (close) { if (leave()) break; interactive=false; }
         if (open_saved) {
-            const auto loaded=saved_picker([&]{return saved_cars(directory,status);},"Saved cars","Open car",design.name,status);
+            const auto loaded=saved_picker([&]{return saved_cars(directory,status);},"Saved cars","Open car",design.name,status,directory);
             if (loaded && leave()) { design=*loaded; original=snapshot(design); sync(); tab=scroll=0; status.clear(); }
             interactive=false; naming=false; drag=-1;
         }
@@ -983,7 +995,7 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
         if (result) break;
         if (close) { if (leave()) break; interactive=false; }
         if (open_saved) {
-            const auto loaded=saved_picker([&]{return saved_characters(directory,status);},"Saved characters","Open character",design.name,status);
+            const auto loaded=saved_picker([&]{return saved_characters(directory,status);},"Saved characters","Open character",design.name,status,directory);
             if (loaded && leave()) {design=*loaded; original=snapshot(design); scroll=0; pose=0; character.reset({0,.08f,0}); status.clear();}
             interactive=false; naming=false; drag=-1;
         }
@@ -1031,7 +1043,7 @@ bool main_menu(City& city,const std::filesystem::path& directory,ControllerMappi
             settings_menu(controls,graphics,{},command);
         } else if (command==MenuCommand::PlayCity || (!editing && chosen==0)) {
             SetWindowTitle("Ambaretto - Play"); CharacterRenderer renderer; std::string status;
-            const auto selected=saved_picker([&]{return saved_cities(directory,status);},"Play / Choose a city","Play city",city.name,status,
+            const auto selected=saved_picker([&]{return saved_cities(directory,status);},"Play / Choose a city","Play city",city.name,status,{},
                 [&](const City& value,std::string& reason){return renderer.available(value,reason);},true);
             if (selected) {city=*selected; return true;}
         } else if (editing && chosen==0) {
@@ -1052,17 +1064,17 @@ void design_menu(DesignKind kind,const std::filesystem::path& root,const std::st
         SetWindowTitle("Ambaretto - Buildings"); BuildingMesh mesh;
         const auto build=[&](BuildingMesh value){building_builder(std::move(value),root/"buildings",screenshot);};
         if (create_new) build(mesh);
-        else open_design_menu([&]{return saved_buildings(root/"buildings",error);},"Buildings / Create or open",screenshot,build);
+        else open_design_menu([&]{return saved_buildings(root/"buildings",error);},"Buildings / Create or open",root/"buildings",error,screenshot,build);
     } else if (kind==DesignKind::Car) {
         SetWindowTitle("Ambaretto - Cars"); CarDesign design;
         const auto build=[&](CarDesign value){car_builder(std::move(value),root/"cars",screenshot);};
         if (create_new) build(design);
-        else open_design_menu([&]{return saved_cars(root/"cars",error);},"Cars / Create or open",screenshot,build);
+        else open_design_menu([&]{return saved_cars(root/"cars",error);},"Cars / Create or open",root/"cars",error,screenshot,build);
     } else if (kind==DesignKind::Character) {
         SetWindowTitle("Ambaretto - Characters"); CharacterDesign design;
         const auto build=[&](CharacterDesign value){character_builder(std::move(value),root/"characters",screenshot);};
         if (create_new) build(design);
-        else open_design_menu([&]{return saved_characters(root/"characters",error);},"Characters / Create or open",screenshot,build);
+        else open_design_menu([&]{return saved_characters(root/"characters",error);},"Characters / Create or open",root/"characters",error,screenshot,build);
     }
 }
 void settings_menu(ControllerMapping& controls,GraphicsSettings& graphics,const std::string& screenshot,MenuCommand initial_settings) {
@@ -1121,14 +1133,18 @@ std::optional<CarDesign> choose_car(const std::optional<CarDesign>& current,cons
         for (int row=0;row<rows && scroll+row<int(library.size());++row)
             if (button({r.x+24,r.y+104+row*38.f,672,34},library[scroll+row].name,selected==scroll+row,true,interactive)) selected=scroll+row;
         if (library.empty()) text("No saved cars yet",r.x+24,r.y+110,18);
-        const bool create=button({r.x+24,r.y+r.height-108,208,36},"Car editor",false,true,interactive);
-        const bool refresh=button({r.x+256,r.y+r.height-108,208,36},"Refresh saved",false,true,interactive);
-        const bool use=button({r.x+488,r.y+r.height-108,208,36},"Choose car",true,ready,interactive);
+        const bool create=button({r.x+24,r.y+r.height-108,150,36},"Car editor",false,true,interactive);
+        const bool duplicate=button({r.x+198,r.y+r.height-108,150,36},"Duplicate",false,selected>=0,interactive) || (interactive && selected>=0 && duplicate_pressed());
+        const bool refresh=button({r.x+372,r.y+r.height-108,150,36},"Refresh",false,true,interactive);
+        const bool use=button({r.x+546,r.y+r.height-108,150,36},"Choose car",true,ready,interactive);
         const bool close=close_clicked(r,interactive) || (interactive && IsKeyPressed(KEY_ESCAPE));
         text(fit(status.empty() ? model_error : status,15,672),r.x+24,r.y+r.height-48,15,accent);
         EndDrawing(); interactive=true;
         if (close) return {};
         if (use) return library[selected];
+        if (duplicate) if (auto copy=duplicate_saved(library[selected],directory,library,status)) {
+            library.push_back(std::move(*copy)); selected=int(library.size())-1; scroll=std::max(0,selected-rows+1);
+        }
         if (create) {design_menu(DesignKind::Car,directory.parent_path()); interactive=false;}
         if (refresh) {library=saved_cars(directory,status); renderer.refresh(); selected=library.empty() ? -1 : 0; scroll=0;}
     }
@@ -1147,7 +1163,7 @@ std::optional<CharacterDesign> choose_player_character(const std::optional<Chara
     while (!WindowShouldClose()) {
         const Rectangle window{(GetScreenWidth()-800)/2.f,(GetScreenHeight()-466)/2.f,800,466};
         Camera3D camera{{2,1.7f,-4},{0,.9f,0},{0,1,0},2.5f,CAMERA_ORTHOGRAPHIC};
-        const bool ready=selection>=0 && renderer.available(library[selection],status);
+        std::string model_error; const bool ready=selection>=0 && renderer.available(library[selection],model_error);
         if (library.empty()) status="Create and save a Player character first.";
         renderer.set_lighting(lighting,camera,day.lighting(),graphics);
         BeginTextureMode(preview); ClearBackground({18,30,49,255}); BeginMode3D(camera); DrawGrid(10,1);
@@ -1160,13 +1176,17 @@ std::optional<CharacterDesign> choose_player_character(const std::optional<Chara
         scroll=std::clamp(scroll,0,std::max(0,int(library.size())-9));
         for (int row=0;row<9 && scroll+row<int(library.size());++row)
             if (button({list.x,list.y+row*32.f,list.width,28},library[scroll+row].name,selection==scroll+row,true,interactive,16)) selection=scroll+row;
-        const bool use=button({window.x+24,window.y+392,220,36},"Use character",true,ready,interactive);
-        const bool create=button({window.x+264,window.y+392,250,36},"Character creator",false,true,interactive);
-        const bool reload=button({window.x+534,window.y+392,152,36},"Refresh",false,true,interactive);
-        const bool close=close_clicked(window,interactive) || button({window.x+704,window.y+392,72,36},"Back",false,true,interactive) || (interactive && IsKeyPressed(KEY_ESCAPE));
-        text(fit(status,14,750),window.x+24,window.y+368,14,accent); MenuBar(MenuMode::Cities).draw(); EndDrawing(); interactive=true;
+        const bool use=button({window.x+24,window.y+392,100,36},"Use",true,ready,interactive);
+        const bool duplicate=button({window.x+140,window.y+392,150,36},"Duplicate",false,selection>=0,interactive) || (interactive && selection>=0 && duplicate_pressed());
+        const bool create=button({window.x+306,window.y+392,224,36},"Character creator",false,true,interactive,17);
+        const bool reload=button({window.x+546,window.y+392,126,36},"Refresh",false,true,interactive,17);
+        const bool close=close_clicked(window,interactive) || button({window.x+688,window.y+392,88,36},"Back",false,true,interactive) || (interactive && IsKeyPressed(KEY_ESCAPE));
+        text(fit(status.empty() ? model_error : status,14,750),window.x+24,window.y+368,14,accent); MenuBar(MenuMode::Cities).draw(); EndDrawing(); interactive=true;
         if (use) {result=library[selection]; break;}
         if (close) break;
+        if (duplicate) if (auto copy=duplicate_saved(library[selection],directory,library,status)) {
+            library.push_back(std::move(*copy)); selection=int(library.size())-1; scroll=std::max(0,selection-8);
+        }
         if (create) {design_menu(DesignKind::Character,directory.parent_path()); interactive=false;}
         if (reload) {
             library=saved_characters(directory,status);
@@ -1551,7 +1571,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         text("CITY EDITOR",GetScreenWidth()-150.f,8,16,background);
         EndDrawing();
         if (choose_building) {
-            const auto chosen=saved_picker([&]{return saved_buildings(buildings_directory,status);},"Choose a saved building","Choose building",building_mesh ? building_mesh->name : "",status);
+            const auto chosen=saved_picker([&]{return saved_buildings(buildings_directory,status);},"Choose a saved building","Choose building",building_mesh ? building_mesh->name : "",status,buildings_directory);
             if (chosen) {building_mesh=*chosen; choose_tool(3); status="Click the map to place "+chosen->name;}
             painting=dragging=false; first_frame=true; continue;
         }
@@ -1634,8 +1654,10 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         if (cities.empty()) text("No saved cities yet.",r.x+24,r.y+138,18);
         if (button({r.x+576,r.y+128,280,46},"Create new city",true,true,can_choose)) new_city();
         if (button({r.x+576,r.y+192,280,46},"Open / edit selected",false,has,can_choose)) {selected=cities[selection]; open_editor=true;}
+        const bool duplicate=command==MenuCommand::DuplicateCity || (can_choose && has && duplicate_pressed())
+            || button({r.x+576,r.y+256,280,40},"Duplicate selected",false,has,can_choose);
         const bool back=close_clicked(r,can_choose) || button({r.x+576,r.y+r.height-64,280,40},"Back",false,true,can_choose);
-        text(fit(status,15,832),r.x+24,r.y+r.height-47,15,accent);
+        text(fit(status,15,540),r.x+24,r.y+r.height-47,15,accent);
         if (creating) {
             const bool modal_input=was_creating && IsWindowFocused();
             ui::draw_desktop();
@@ -1682,6 +1704,9 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         menu.draw(state);
         EndDrawing(); accept_input=true;
         if (back) return false;
+        if (duplicate) if (auto copy=duplicate_saved(cities[selection],directory,cities,status)) {
+            selected=*copy; cities.push_back(std::move(*copy)); selection=int(cities.size())-1; scroll=std::max(0,selection-rows+1);
+        }
         if (!screenshot.empty() && ++frames>=3) {auto image=LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); return false;}
     }
     return false;

@@ -6,6 +6,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <fstream>
+#include "saved_copy.hpp"
 
 namespace {
 std::vector<std::function<void()>> steps;
@@ -19,6 +20,7 @@ void event(unsigned type,int a=0,int b=0) {PlayAutomationEvent({0,type,{a,b,0,0}
 void idle(int count=2) {while (count-->0) steps.push_back([]{});}
 void click(int x,int y) {steps.push_back([=]{event(7,x,y); event(6,MOUSE_BUTTON_LEFT);}); steps.push_back([]{event(5,MOUSE_BUTTON_LEFT);}); idle();}
 void key(int code) {steps.push_back([=]{event(2,code);}); steps.push_back([=]{event(1,code);}); idle();}
+void duplicate_key() {steps.push_back([]{event(2,KEY_LEFT_CONTROL); event(2,KEY_D);}); steps.push_back([]{event(1,KEY_D); event(1,KEY_LEFT_CONTROL);}); idle();}
 void reset() {steps.clear(); frame=0; title.clear(); should_close=false;}
 void window() {reset(); InitWindow(1024,600,"Menu workflow check"); SetExitKey(KEY_NULL); SetTargetFPS(120);}
 bool blue_background() {const auto image=LoadImageFromScreen(); const Color p=GetImageColor(image,20,140); UnloadImage(image); return p.r==0 && p.g==0 && p.b==170;}
@@ -45,7 +47,7 @@ extern "C" void __wrap_EndDrawing() {
 int main() {
     using namespace ambaretto;
     SetTraceLogLevel(LOG_WARNING);
-    const auto root=std::filesystem::path(GetApplicationDirectory())/"menu-workflow-test";
+        const auto root=std::filesystem::path(GetApplicationDirectory())/("menu-workflow-test-"+City::create("test").id);
     std::string error;
     try {
         std::filesystem::create_directories(root);
@@ -68,6 +70,8 @@ int main() {
         // New car stays blank even when a library exists; a failed Save cannot close its draft.
         stage="new car / invalid save"; window(); {
             ui::FontResource font;
+            idle(); click(760,345); duplicate_key();
+            steps.push_back([&]{require(!std::filesystem::exists(root/"cars"),"Empty design list enabled duplication");});
             click(760,220); click(215,159); click(450,545); click(280,394); idle(3); click(740,394);
             click(450,545); click(500,394);
             design_menu(DesignKind::Car,root);
@@ -148,7 +152,7 @@ int main() {
         stage="play-only city selector"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=unavailable;
             idle(); key(KEY_F10); key(KEY_ENTER); preview("play-city-selector.png");
-            click(220,170); key(KEY_E); key(KEY_INSERT); key(KEY_DELETE); key(KEY_F2); key(KEY_ENTER);
+            click(220,170); key(KEY_E); key(KEY_INSERT); key(KEY_DELETE); key(KEY_F2); duplicate_key(); key(KEY_ENTER);
             steps.push_back([]{require(title=="Ambaretto - Play" && saved_popup(),"Unavailable city started playing or opened an editor");});
             click(220,207);
             require(main_menu(selected,play_directory,controls,graphics) && selected.id==playable.id,"Clicking a playable city did not start Play");
@@ -167,10 +171,74 @@ int main() {
             require(selected.name=="New city" && !selected.spawn && !selected.player_character,"New empty city was not created");
             require(contents(playable_path)==original_playable && contents(unavailable_path)==original_unavailable,"City chooser changed the existing maps");
         } CloseWindow();
+        // Each creation menu duplicates to disk, selects the copy, and leaves the source alone.
+        for (auto kind:{DesignKind::Building,DesignKind::Car,DesignKind::Character}) {
+            stage="design menu duplicate"; window(); {
+                ui::FontResource font;
+                const auto original_path=kind==DesignKind::Building ? saved_path(building,root/"buildings")
+                    : kind==DesignKind::Car ? saved_path(car,root/"cars") : saved_path(player,root/"characters");
+                const auto original=contents(original_path);
+                const auto copy_path=kind==DesignKind::Building ? root/"buildings/building-Menu test building copy.building"
+                    : kind==DesignKind::Car ? root/"cars/car-Menu test car copy.car" : root/"characters/character-Menu test player copy.character";
+                idle(); click(760,345);
+                steps.push_back([=]{require(std::filesystem::exists(copy_path),"Duplicate menu button did not save a copy");});
+                if (kind==DesignKind::Building) steps.push_back([]{auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/"duplicate-design-menu.png").string().c_str()); UnloadImage(image);});
+                key(KEY_ESCAPE);
+                design_menu(kind,root);
+                require(contents(original_path)==original,"Duplicating from a menu changed the original design");
+            } CloseWindow();
+        }
+        stage="building popup duplicate"; window(); {
+            ui::FontResource font; const auto path=saved_path(building,root/"buildings"); const auto original=contents(path);
+            idle(); click(350,258); duplicate_key(); preview("duplicate-building-popup.png"); key(KEY_ENTER); click(250,495);
+            const auto result=building_builder(building,root/"buildings");
+            require(result && result->name==building.name+" copy 2" && contents(path)==original,"Building popup did not open a separate duplicate");
+        } CloseWindow();
+        stage="car popup duplicate"; window(); {
+            ui::FontResource font; const auto path=saved_path(car,root/"cars"); const auto original=contents(path);
+            idle(); click(350,58); click(390,495); key(KEY_ENTER); click(75,159); click(250,545);
+            const auto result=car_builder(car,root/"cars");
+            require(result && result->name==car.name+" copy 2" && result->type==CarType::Civilian && contents(path)==original,"Car duplicate edits changed the source");
+        } CloseWindow();
+        stage="character popup duplicate"; window(); {
+            ui::FontResource font; const auto path=saved_path(player,root/"characters"); const auto original=contents(path);
+            idle(); click(300,58); duplicate_key(); key(KEY_ENTER); click(75,159); click(250,553);
+            const auto result=character_builder(player,root/"characters");
+            require(result && result->name==player.name+" copy 2" && result->type==CharacterType::Player && contents(path)==original,"Character duplicate edits changed the source");
+        } CloseWindow();
+        stage="city duplicate"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=city;
+            const auto original_path=saved_path(city,root/"cities"); const auto original=contents(original_path);
+            idle(); key(KEY_F10); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER);
+            steps.push_back([&]{require(selected.id!=city.id && selected.name==city.name+" copy" && std::filesystem::exists(saved_path(selected,root/"cities")),"Cities File > Duplicate did not save a new city");});
+            key(KEY_UP); click(760,345);
+            steps.push_back([&]{require(selected.name==city.name+" copy 2","City button reused the previous copy name"); auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/"duplicate-city-menu.png").string().c_str()); UnloadImage(image);});
+            key(KEY_ENTER);
+            steps.push_back([]{require(title=="Ambaretto - City editor","Duplicated city did not open in the editor");});
+            key(KEY_ESCAPE); click(760,485);
+            require(!city_menu(selected,root/"cities",controls,graphics),"Duplicate city started Play");
+            require(contents(original_path)==original,"Duplicate city changed its original");
+        } CloseWindow();
+        stage="placement selector duplicates"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
+            City selected=city; selected.id=City::create("test").id; selected.name="Placement duplicate test";
+            require(selected.save(root/"cities",error),"Placement selector fixture failed");
+            idle(); key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); key(KEY_DOWN); key(KEY_ENTER);
+            duplicate_key();
+            steps.push_back([&]{require(std::filesystem::exists(root/"cars/car-Menu test car copy 3.car"),"Car placement selector did not duplicate"); auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/"duplicate-car-selector.png").string().c_str()); UnloadImage(image);});
+            click(760,440);
+            key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); for (int i=0;i<14;++i) key(KEY_DOWN); key(KEY_ENTER);
+            duplicate_key();
+            steps.push_back([]{auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/"duplicate-player-selector.png").string().c_str()); UnloadImage(image);});
+            click(210,475); key(KEY_ESCAPE); click(760,485);
+            require(!city_menu(selected,root/"cities",controls,graphics,true),"Placement duplicate started a game");
+            require(selected.player_character && selected.player_character->name==player.name+" copy 3" && selected.vehicles.empty(),"Placement selectors lost the duplicate or leaked a placement");
+        } CloseWindow();
         stage="empty Play list"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected;
-            idle(); key(KEY_ENTER); key(KEY_ENTER); key(KEY_ESCAPE); key(KEY_ESCAPE);
+            idle(); key(KEY_ENTER); key(KEY_ENTER); duplicate_key(); key(KEY_ESCAPE); key(KEY_ESCAPE);
             require(!main_menu(selected,root/"empty/cities",controls,graphics),"Empty Play list started a game");
+            require(!std::filesystem::exists(root/"empty/cities"),"Play duplicated or edited an empty library");
         } CloseWindow();
         // Pause freezes actual Jolt steps; resume continues; End Game returns to the menu.
         stage="game pause / resume / main menu"; reset(); unsigned paused_steps=0;

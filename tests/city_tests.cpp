@@ -1,4 +1,5 @@
 #include "city.hpp"
+#include "saved_copy.hpp"
 #include "environment.hpp"
 #include "pedestrians.hpp"
 #include "police.hpp"
@@ -1237,6 +1238,52 @@ void car_designs(const std::filesystem::path& directory) {
     for(int i=0;i<240;++i) player.step({},{});
     require(no_patrol.wanted().stars()>=3 && std::none_of(no_patrol.units().begin(),no_patrol.units().end(),[](const auto& u){return u.active;}),"Regular-only library spawned stock police cars");
 }
+void saved_copies(const std::filesystem::path& directory) {
+    std::string error;
+    const auto bytes=[](const std::filesystem::path& path) {std::ifstream file(path); return std::string(std::istreambuf_iterator<char>(file),{});};
+    const auto check=[&](auto source) {
+        using Design=decltype(source);
+        source.name=std::string(48,'X');
+        require(source.save(directory,error),"Duplicate fixture save failed");
+        const auto original_path=saved_path(source,directory);
+        const auto original=bytes(original_path);
+        std::vector<Design> library{source};
+        auto first=duplicate_saved(source,directory,library,error);
+        require(first && first->name==std::string(43,'X')+" copy", "Duplicate name exceeded the limit or lost its suffix");
+        if constexpr (std::is_same_v<Design,City>) require(first->id!=source.id,"Duplicate city reused its identifier");
+        library.push_back(*first);
+        auto second=duplicate_saved(source,directory,library,error);
+        require(second && second->name==std::string(41,'X')+" copy 2", "Repeated duplication reused a name");
+        library.push_back(*second);
+        if constexpr (!std::is_same_v<Design,City>) {
+            auto occupied=source; occupied.name=std::string(41,'X')+" copy 3";
+            std::ofstream(saved_path(occupied,directory))<<"Unreadable existing save";
+            auto next=duplicate_saved(source,directory,library,error);
+            require(next && next->name==std::string(41,'X')+" copy 4" && bytes(saved_path(occupied,directory))=="Unreadable existing save", "Duplicate overwrote an existing file outside the loaded library");
+        }
+        Design loaded;
+        require(Design::load(saved_path(*first,directory),loaded,error),"Duplicate could not be reopened");
+        loaded.name=source.name;
+        if constexpr (std::is_same_v<Design,City>) loaded.id=source.id;
+        const auto scratch=directory/"copy-roundtrip";
+        require(loaded.save(scratch,error) && bytes(saved_path(loaded,scratch))==original,"Duplicate lost saved content");
+        std::filesystem::remove(saved_path(loaded,scratch)); std::filesystem::remove(scratch);
+        first->name="Edited copy";
+        if constexpr (std::is_same_v<Design,City>) first->start_minutes=0;
+        else if constexpr (std::is_same_v<Design,BuildingMesh>) first->texture="copy.png";
+        else if constexpr (std::is_same_v<Design,CarDesign>) first->type=CarType::Police;
+        else first->type=CharacterType::NPC;
+        require(first->save(directory,error) && bytes(original_path)==original,"Editing a duplicate changed its original");
+        const auto blocked=directory/"blocked-copy-folder";
+        std::ofstream(blocked)<<"Keep this file";
+        require(!duplicate_saved(source,blocked,library,error) && !error.empty() && bytes(blocked)=="Keep this file" && bytes(original_path)==original,"Failed duplication damaged existing data");
+    };
+    BuildingMesh building; building.texture="original.png"; building.decals.push_back({0,"sign.png",.5f,.5f,.2f,.2f});
+    CarDesign car; car.body="body.glb"; car.wheel="wheel.glb"; car.offset={.1f,.2f,.3f}; car.tuning.top_speed=40;
+    CharacterDesign character; for (auto& part:character.parts) {part.model="part.glb"; part.offset={.1f,.2f,.3f};}
+    auto city=fixture(); city.player_character=character; city.buildings.front().mesh=building; city.vehicles.front().car=car;
+    check(building); check(car); check(character); check(city);
+}
 void gameplay() {
     City city = fixture(); Environment map(city); PhysicsWorld world(map);
     require(map.land_islands().size()==1 && map.trees().size()==city.trees.size() && map.ports().empty() && map.bridge_segments().empty(),"legacy city objects leaked into new city");
@@ -1298,6 +1345,7 @@ int main(int argc,char** argv) {
         }
         const auto directory = std::filesystem::temp_directory_path()/("ambaretto-city-test-"+City::create("test").id);
         data_and_saves(directory); building_meshes(directory); building_mesh_editing(directory); building_design_updates(directory); building_rotation(directory); generated_terrain(directory); trees_and_time(directory); ground_paint(directory); custom_ground_textures(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay(); car_designs(directory);
+        saved_copies(directory);
         // Remove only files in this run's unique test directory; no recursive deletion.
         for (const auto& entry : std::filesystem::directory_iterator(directory)) std::filesystem::remove(entry.path());
         std::filesystem::remove(directory);
