@@ -286,25 +286,38 @@ std::optional<std::string> ground_texture_picker(const std::string& current) {
     }
     unload(); return result;
 }
-bool pick(const Environment* environment, Camera3D camera, Vector2 mouse, CityCell& cell, Vec3& point) {
+bool pick(const Environment* environment, Camera3D camera, Vector2 mouse, CityCell& cell, Vec3& point, bool shoreline = false) {
     const Ray ray = GetScreenToWorldRay(mouse,camera);
     if (std::abs(ray.direction.y)<.0001f) return false;
-    float distance = (City::level-ray.position.y)/ray.direction.y;
+    const float floor = shoreline ? Environment::water_level : City::level;
+    float distance = (floor-ray.position.y)/ray.direction.y;
     if (distance < 0) return false;
     // ponytail: scan the cached 128 x 128 terrain mesh; add a picking index if larger maps need it.
     if (environment) for (const auto& t : environment->triangles()) {
         const auto& vertices = environment->vertices();
         const auto hit = GetRayCollisionTriangle(ray,vector(vertices[t.a]),vector(vertices[t.b]),vector(vertices[t.c]));
-        if (hit.hit && hit.distance<distance && hit.point.y>=City::level-.001f) distance = hit.distance;
+        if (hit.hit && hit.distance<distance && hit.point.y>=floor-.001f) distance = hit.distance;
     }
     const auto p = Vector3Add(ray.position,Vector3Scale(ray.direction,distance));
     point = Vec3(p.x,p.y,p.z);
-    cell = City::cell(p.x,p.z); return City::contains(cell);
+    cell = City::cell(p.x,p.z);
+    if (shoreline && environment && environment->city()) {
+        if (environment->terrain_height(p.x,p.z)<Environment::water_level) return false;
+        const auto owner = environment->city()->shore_cell(point);
+        if (!owner) return false;
+        cell = *owner;
+    }
+    return City::contains(cell);
 }
 void tile_outline(const City& city, CityCell p, Color color) {
     const auto patch = city.ground_patch(p);
     for (int i = 0; i < 4; ++i)
         DrawLine3D(vector(patch[i]+Vec3(0,.16f,0)),vector(patch[(i+1)%4]+Vec3(0,.16f,0)),color);
+    if (city.tile(p)!=CityTile::Water && city.ramp_axis(p)==3) {
+        const auto triangles = city.ground_triangles(p);
+        // These vertices form the shared diagonal in either terrain split.
+        DrawLine3D(vector(triangles[0][2]+Vec3(0,.16f,0)),vector(triangles[1][0]+Vec3(0,.16f,0)),color);
+    }
 }
 void draw_city(const City& city, bool grid,const CarRenderer& cars,const Camera3D& camera) {
     for (int z = 0; z < City::width; ++z) for (int x = 0; x < City::width; ++x) {
@@ -1658,7 +1671,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         // 30-degree elevation produces a 2:1 dimetric ground grid.
         camera.target = vector(focus); camera.position = vector(focus+(top ? Vec3(0,800,.01f) : Vec3(std::sin(yaw)*600,600/std::sqrt(3.f),std::cos(yaw)*600)));
         camera.up = top ? Vector3{0,0,-1} : Vector3{0,1,0};
-        const bool picked = in_view && pick(preview_environment.get(),camera,mouse,hover,brush_point);
+        const bool picked = in_view && pick(preview_environment.get(),camera,mouse,hover,brush_point,tool==Tool::Ground);
         if (!in_view || IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) painting = false;
         if (!IsWindowFocused()) dragging = false;
         if (picked && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {

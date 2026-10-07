@@ -14,7 +14,7 @@ std::size_t walking_count(const Pedestrians& pedestrians, const Environment& map
     std::size_t count = 0;
     for (const auto& person : pedestrians.people()) if (person.enabled) {
         const Vec3 p = person.character->position();
-        require(map.terrain_height(p.GetX(), p.GetZ()) > 1, "pedestrian spawned in water");
+        require(map.terrain_height(p.GetX(), p.GetZ()) > Environment::water_level + .1f, "pedestrian spawned in water");
         require(person.character->can_stand_at(p), "pedestrian spawned inside a building or obstacle");
         ++count;
     }
@@ -58,10 +58,10 @@ void city_turns(bool crowded=false,int rotation=0) {
         if (crowded) for (std::size_t j=0;j<progress.size();++j) if (pedestrians.people()[j].enabled) {
             const Vec3 current=pedestrians.people()[j].character->position();
             progress[j]=std::max(progress[j],(current-starts[j]).Length());
-            require(map.terrain_height(current.GetX(),current.GetZ())>1,"Passing pedestrian left the turn's terrain");
+            require(map.terrain_height(current.GetX(),current.GetZ())>Environment::water_level+.1f,"Passing pedestrian left the turn's terrain");
         }
         cells.emplace(cell.x,cell.z); distance=std::max(distance,(p-start).Length());
-        require(map.terrain_height(p.GetX(),p.GetZ())>1 && std::abs(p.GetY()-map.terrain_height(p.GetX(),p.GetZ()))<.2f,"Pedestrian left the turn's terrain");
+        require(map.terrain_height(p.GetX(),p.GetZ())>Environment::water_level+.1f && std::abs(p.GetY()-map.terrain_height(p.GetX(),p.GetZ()))<.2f,"Pedestrian left the turn's terrain");
     }
     if (!crowded) require(cells.size()>=3 && distance>15,"Pedestrian stayed on a tiny turn segment instead of continuing along the street");
     if (crowded) {
@@ -86,7 +86,7 @@ void city_bridge() {
         world.step(); pedestrians.step(starter,nullptr,{500,100,500});
         for (const auto& person:pedestrians.people()) if (person.enabled) {
             const Vec3 p=person.character->position();
-            require(map.terrain_height(p.GetX(),p.GetZ())>1 && std::abs(p.GetY()-map.terrain_height(p.GetX(),p.GetZ()))<.2f,"Pedestrian walked into bridge water");
+            require(map.terrain_height(p.GetX(),p.GetZ())>Environment::water_level+.1f && std::abs(p.GetY()-map.terrain_height(p.GetX(),p.GetZ()))<.2f,"Pedestrian walked into bridge water");
         }
     }
 }

@@ -27,6 +27,7 @@ public:
     void world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police = nullptr) const;
 private:
     void load_city(const Environment& environment);
+    void load_water(const Environment& environment);
     const Environment* environment_ = nullptr;
     void load_trees(const Environment& environment);
     void load_map(const Environment& environment);
@@ -37,11 +38,11 @@ private:
     std::vector<Chunk> city_chunks_, tree_chunks_, ground_chunks_;
     std::vector<SceneLight> local_lights_;
     Model terrain_{}, grass_{}, sand_{}, roads_{}, ocean_{}, trees_{}, signs_{}, lights_{}, glows_{}, map_{};
-    Texture2D soil_texture_{}, grass_texture_{}, sand_texture_{}, asphalt_texture_{}, tree_texture_{}, sign_texture_{};
+    Texture2D soil_texture_{}, grass_texture_{}, sand_texture_{}, asphalt_texture_{}, tree_texture_{}, sign_texture_{}, water_depth_{};
     BuildingRenderer custom_buildings_;
     std::map<std::string,Texture2D> ground_textures_;
     Shader land_shader_{}, water_shader_{}, tree_shader_{}, sky_shader_{}, light_shader_{}, minimap_shader_{};
-    int land_camera_ = -1, water_camera_ = -1, water_time_ = -1, tree_camera_ = -1, sign_emission_ = -1;
+    int land_camera_ = -1, water_camera_ = -1, water_time_ = -1, water_zenith_ = -1, tree_camera_ = -1, sign_emission_ = -1;
     bool trees_ready_ = false;
 };
 } // namespace ambaretto

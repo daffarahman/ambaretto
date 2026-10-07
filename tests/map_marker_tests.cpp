@@ -78,6 +78,10 @@ void custom_ground_pixels(RenderTexture2D target) {
         const Environment map(city); EnvironmentRenderer scenery(map); Image image = render_city(scenery,target,camera);
         const auto a = pixel(image,{63,64}), b = pixel(image,{65,64});
         require(a.r>a.g*3 && a.r>a.b*3 && b.g>b.r*3 && b.g>b.b*3,"custom ground textures did not render on the correct ramp tiles");
+        const Vec3 coast = City::center({66,64})+Vec3(City::half_block+2,0,0);
+        const auto shore_pixel = GetWorldToScreenEx({coast.GetX(),map.terrain_height(coast.GetX(),coast.GetZ()),coast.GetZ()},camera,image.width,image.height);
+        const Color shore = GetImageColor(image,int(shore_pixel.x),int(shore_pixel.y));
+        require(shore.g>shore.r*3 && shore.g>shore.b*3,"the visible beach did not inherit its adjoining land's custom texture");
         UnloadImage(image);
     }
     std::filesystem::remove(folder/red_name); std::filesystem::remove(folder/green_name);
@@ -92,6 +96,39 @@ void custom_ground_pixels(RenderTexture2D target) {
     std::filesystem::current_path(previous);
     for (const auto& path : {folder,root/"assets",root}) std::filesystem::remove(path);
     std::cout << "Custom ground: folder discovery, multiple textures, slopes and missing-file fallback passed\n";
+}
+void coastal_water_pixels(RenderTexture2D target) {
+    using namespace ambaretto;
+    City city = City::create("Coastal water rendering"); std::string error;
+    require(city.add_land({62,62},{66,66},error),"coastal water fixture failed");
+    const Environment map(city); EnvironmentRenderer scenery(map);
+    const Vec3 edge = City::center({66,64})+Vec3(City::half_block,0,0);
+    const Vec3 shallow = edge+Vec3(7,0,0), deep = edge+Vec3(43,0,0);
+    const Camera3D camera = city_camera((shallow+deep)/2);
+    const auto color_at = [&](Image image,Vec3 point) {
+        const auto screen = GetWorldToScreenEx({point.GetX(),0,point.GetZ()},camera,image.width,image.height);
+        int r = 0, g = 0, b = 0;
+        for (int y = int(screen.y)-3; y<=int(screen.y)+3; ++y)
+            for (int x = int(screen.x)-3; x<=int(screen.x)+3; ++x) {
+                const Color color = GetImageColor(image,x,y);
+                r += color.r; g += color.g; b += color.b;
+            }
+        return Color{static_cast<unsigned char>(r/49),static_cast<unsigned char>(g/49),static_cast<unsigned char>(b/49),255};
+    };
+    Image day = render_city(scenery,target,camera,"09:00");
+    const Color near = color_at(day,shallow), far = color_at(day,deep);
+    require(near.r>far.r+50 && near.g>far.g+60 && near.b>near.r+15,
+        "shoreline water must be pale aqua and brighter than deep water");
+    require(far.b>far.r+45 && far.b>far.g+25,"offshore water must transition to deep blue");
+    ExportImage(day,"city-coastal-water-day.png");
+    Image night = render_city(scenery,target,camera,"00:00");
+    const Color dark = color_at(night,shallow);
+    const int day_brightness = int(near.r)+near.g+near.b, night_brightness = int(dark.r)+dark.g+dark.b;
+    require(night_brightness>12 && night_brightness<day_brightness*.6f,
+        "shoreline water must remain visible and darken at night");
+    ExportImage(night,"city-coastal-water-night.png");
+    UnloadImage(day); UnloadImage(night);
+    std::cout << "Water: pale aqua shoreline, deep blue offshore and readable night lighting passed\n";
 }
 void custom_building_pixels(RenderTexture2D target) {
     using namespace ambaretto;
@@ -385,6 +422,7 @@ int main(int argc, char** argv) {
         const Vec3 car_position = player + Vec3(35, 0, -25), foot_position = player + Vec3(-30, 0, -25);
         const auto texture = LoadRenderTexture(640, 480);
         custom_ground_pixels(texture);
+        coastal_water_pixels(texture);
         custom_building_pixels(texture);
         city_crosswalks(texture);
         elevated_road_pixels(texture);

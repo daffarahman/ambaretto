@@ -19,7 +19,7 @@ std::size_t next_point(const Pedestrian& person, std::size_t target, std::size_t
 
 bool Pedestrians::walkable(Vec3 p) const {
     const float ground = environment_.terrain_height(p.GetX(), p.GetZ());
-    if (ground < 1 || std::abs(environment_.ground_height(p.GetX(), p.GetZ()) - ground) > .2f) return false;
+    if (ground < Environment::water_level + .1f || std::abs(environment_.ground_height(p.GetX(), p.GetZ()) - ground) > .2f) return false;
     if (!environment_.city()) for (const auto& airport : airports) if (airport.contains(p.GetX(), p.GetZ())) return false;
     for (const auto& building : environment_.buildings()) {
         const Vec3 relative = p - building.solid_center(), half = building.solid_size() / 2;

@@ -25,19 +25,13 @@ constexpr const char* ground_files[] = {"soil.png","grass.png","beach-sand.png",
 float coast_height(const City& city,float x,float z) {
     const auto cell = City::cell(x,z);
     if (city.land(cell)) return city.height(x,z);
-    float distance_sq = 32*32, shore_height = City::level;
-    constexpr int reach = int(32 / City::block) + 1;
-    for (int pz = cell.z-reach; pz <= cell.z+reach; ++pz) for (int px = cell.x-reach; px <= cell.x+reach; ++px) {
-        if (!city.land({px,pz})) continue;
-        const float left = (px-City::width/2)*City::block, top = (pz-City::width/2)*City::block;
-        const float dx = std::max({left-x,0.f,x-left-City::block}), dz = std::max({top-z,0.f,z-top-City::block});
-        if (dx*dx+dz*dz < distance_sq) {
-            distance_sq = dx*dx+dz*dz;
-            shore_height = city.height(std::clamp(x,left+.001f,left+City::block-.001f),
-                std::clamp(z,top+.001f,top+City::block-.001f));
-        }
-    }
-    const float distance = std::sqrt(distance_sq);
+    const auto owner = city.shore_cell(Vec3(x,0,z));
+    if (!owner) return -8;
+    const float left = (owner->x-City::width/2)*City::block, top = (owner->z-City::width/2)*City::block;
+    const float dx = std::max({left-x,0.f,x-left-City::block}), dz = std::max({top-z,0.f,z-top-City::block});
+    const float distance = std::sqrt(dx*dx+dz*dz);
+    const float shore_height = city.height(std::clamp(x,left+.001f,left+City::block-.001f),
+        std::clamp(z,top+.001f,top+City::block-.001f));
     const auto smooth = [](float t) { return t*t*(3-2*t); };
     // The shore reaches shallow water, then tapers to the seabed.
     return distance <= 10 ? shore_height-(shore_height+1)*smooth(distance/10) : -1-7*smooth((distance-10)/22);
@@ -97,7 +91,17 @@ Environment::Environment(const City& city) : city_(std::make_shared<City>(city))
             const auto a = point(x,z), b = point(x,z+1), c = point(x+1,z+1), d = point(x+1,z);
             const auto cell = City::cell(a.GetX()+city_mesh_spacing/2,a.GetZ()+city_mesh_spacing/2);
             if (city.land(cell) || std::max({a.GetY(),b.GetY(),c.GetY(),d.GetY()})<=-8) continue;
-            quad(a,b,c,d,Surface::Soil);
+            const auto owner = city.shore_cell((a+b+c+d)/4);
+            Surface surface = Surface::Sand;
+            if (owner) {
+                const int tile = City::index(*owner);
+                const auto custom = city.ground_textures.find(tile);
+                if (city.ground[tile]!=CityGround::Soil || (custom!=city.ground_textures.end() && custom->second=="soil.png")) {
+                    const Surface surfaces[] = {Surface::Soil,Surface::Grass,Surface::Sand,Surface::Road};
+                    surface = surfaces[int(city.ground[tile])];
+                }
+            }
+            quad(a,b,c,d,surface);
         }
     }
     const auto network = city.road_network();
@@ -449,7 +453,11 @@ bool City::paint_ground(CityCell a, CityCell b, CityGround texture, std::string&
     if (!contains(a) || !contains(b) || int(texture)>3) return fail(error,"Draw ground inside the map using a valid texture.");
     for (int z = std::min(a.z,b.z); z <= std::max(a.z,b.z); ++z)
         for (int x = std::min(a.x,b.x); x <= std::max(a.x,b.x); ++x)
-            if (land({x,z})) { ground[index({x,z})] = texture; ground_textures.erase(index({x,z})); }
+            if (land({x,z})) {
+                const int tile = index({x,z}); ground[tile] = texture;
+                if (texture==CityGround::Soil) ground_textures[tile] = "soil.png";
+                else ground_textures.erase(tile);
+            }
     return true;
 }
 bool City::paint_ground(CityCell a, CityCell b, const std::string& texture, std::string& error) {
@@ -465,6 +473,23 @@ std::string City::ground_texture(CityCell p) const {
     if (!contains(p)) return {};
     const auto found = ground_textures.find(index(p));
     return found!=ground_textures.end() ? found->second : ground_files[int(ground[index(p)])];
+}
+std::optional<CityCell> City::shore_cell(Vec3 point) const {
+    if (!std::isfinite(point.GetX()) || !std::isfinite(point.GetZ())
+        || std::abs(point.GetX())>=extent+32 || std::abs(point.GetZ())>=extent+32) return {};
+    const auto p = cell(point.GetX(),point.GetZ());
+    if (land(p)) return p;
+    std::optional<CityCell> nearest;
+    float distance_sq = 32*32;
+    constexpr int reach = int(32 / block)+1;
+    for (int z = p.z-reach; z<=p.z+reach; ++z) for (int x = p.x-reach; x<=p.x+reach; ++x) {
+        const CityCell candidate{x,z}; if (!land(candidate)) continue;
+        const float left = (x-width/2)*block, top = (z-width/2)*block;
+        const float dx = std::max({left-point.GetX(),0.f,point.GetX()-left-block});
+        const float dz = std::max({top-point.GetZ(),0.f,point.GetZ()-top-block});
+        if (dx*dx+dz*dz<distance_sq) { distance_sq = dx*dx+dz*dz; nearest = candidate; }
+    }
+    return nearest;
 }
 bool City::change_elevation(CityCell a, CityCell b, int direction, std::string& error) {
     error.clear();
@@ -613,7 +638,8 @@ std::vector<CityRoadNode> City::road_network() const {
     return merged;
 }
 std::vector<Vec3> City::road_bend(CityCell p,float radius) const {
-    return CityRoadNode{p,p,{},road_mask(p)}.bend(0,radius);
+    CityRoadNode node{p,p,{},road_mask(p)}; node.height = tile_height(p);
+    return node.bend(0,radius);
 }
 std::vector<CityCell> City::neighbors(CityCell p) const {
     std::vector<CityCell> result;

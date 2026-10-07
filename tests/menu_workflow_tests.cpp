@@ -317,6 +317,29 @@ int main() {
             require(City::load(directory/(placed.id+".city"),loaded,error) && loaded.spawn==placed.spawn && loaded.vehicles.size()==1
                 && (loaded.vehicles[0].position-*loaded.spawn).Length()<.01f,"Overlapping player and vehicle did not persist");
         } CloseWindow();
+        stage="dry beach ground painting"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
+            City coast=City::create("Beach painting workflow"); const CityCell owner{64,64};
+            const auto directory=root/"beach-cities";
+            require(coast.add_land(owner,owner,error) && coast.set_spawn(owner,error) && coast.save(directory,error),"Beach painting fixture failed");
+            const Vec3 focus=*coast.spawn;
+            Vec3 beach=City::center(owner)+Vec3(City::half_block+2,0,0);
+            const Environment fixture(coast); beach.SetY(fixture.terrain_height(beach.GetX(),beach.GetZ()));
+            require(beach.GetY()>Environment::water_level && beach.GetY()<City::level
+                && !coast.land(City::cell(beach.GetX(),beach.GetZ())),"Fixture must click dry beach below the flat island");
+            idle(); key(KEY_V); key(KEY_NINE); key(KEY_ENTER); city_click(focus,beach);
+            steps.push_back([&]{require(coast.ground_textures.size()==1 && coast.ground_textures.at(City::index(owner))=="soil.png"
+                && coast.land_count()==1,"Ground tool did not paint the dry beach's owning land tile");});
+            shortcut(KEY_Z); steps.push_back([&]{require(coast.ground_textures.empty(),"Beach painting did not undo");});
+            shortcut(KEY_Y); steps.push_back([&]{require(coast.ground_textures.size()==1 && coast.ground_textures.at(City::index(owner))=="soil.png","Beach painting did not redo");});
+            city_click(focus,beach+Vec3(40,0,0));
+            steps.push_back([&]{require(coast.ground_textures.size()==1 && coast.land_count()==1,"Offshore Ground click changed the island"); capture("city-beach-painting.png");});
+            shortcut(KEY_S);
+            steps.push_back([&]{City loaded; require(City::load(directory/(coast.id+".city"),loaded,error)
+                && loaded.ground_textures==coast.ground_textures,"Beach painting did not save");});
+            key(KEY_ESCAPE); click(760,485);
+            require(!city_menu(coast,directory,controls,graphics,true),"Beach painting editor started Play");
+        } CloseWindow();
         stage="map building popup"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
             idle(); click(100,130); preview("map-building-popup.png"); key(KEY_ENTER);

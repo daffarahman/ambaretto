@@ -308,11 +308,9 @@ void main() {
 const char* water_vertex = R"GLSL(#version 330
 in vec3 vertexPosition;
 uniform mat4 mvp;
-uniform float time;
 out vec3 position;
 void main() {
     position = vertexPosition;
-    position.y += sin(position.x * 0.06 + time * 0.7) * 0.10 + cos(position.z * 0.08 + time) * 0.08;
     gl_Position = mvp * vec4(position, 1.0);
 })GLSL";
 const std::string water_fragment = std::string(R"GLSL(#version 330
@@ -320,24 +318,44 @@ in vec3 position;
 uniform vec3 cameraPosition;
 uniform float time;
 uniform vec3 horizonColor;
+uniform vec3 zenithColor;
 uniform vec3 sunDirection;
 uniform vec3 sunColor;
 uniform vec3 ambientLight;
 uniform float daylight;
+uniform sampler2D texture0;
+uniform float depthExtent;
 out vec4 finalColor;
 )GLSL") + scene_lighting_glsl() + R"GLSL(
 void main() {
-    vec3 color = mix(vec3(0.10, 0.60, 0.67), vec3(0.06, 0.34, 0.52),
-        0.5 + 0.5 * sin(position.x * 0.0007 + position.z * 0.0005));
-    vec2 footprint = fwidth(position.xz * 0.5);
-    float ripples = sin(position.x * 0.5 + position.z * 0.36 + time * 1.5) * sin(position.z * 0.21 - time) * exp(-dot(footprint, footprint));
-    color += 0.028 * ripples;
+    vec2 uv = position.xz / (2.0 * depthExtent) + 0.5;
+    vec2 dimensions = vec2(textureSize(texture0, 0));
+    vec2 depthUV = (uv * (dimensions - 1.0) + 0.5) / dimensions;
+    float depth = texture(texture0, depthUV).r * 12.0;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) depth = 12.0;
+    vec3 color = mix(vec3(0.62, 0.88, 0.87), vec3(0.055, 0.62, 0.77), smoothstep(0.0, 2.8, depth));
+    color = mix(color, vec3(0.025, 0.20, 0.43), smoothstep(2.0, 8.0, depth));
+    vec2 footprint = fwidth(position.xz * 0.7);
+    float detail = exp(-dot(footprint, footprint));
+    float waveA = position.x * 0.52 + position.z * 0.31 + time * 1.2;
+    float waveB = position.x * -0.24 + position.z * 0.63 - time * 0.9;
+    float ripples = sin(waveA) * sin(waveB) * detail;
+    vec3 n = normalize(vec3(-(cos(waveA) * 0.025 - cos(waveB) * 0.012) * detail,
+        1.0, -(cos(waveA) * 0.015 + cos(waveB) * 0.031) * detail));
+    color += ripples * 0.015;
     float shadow = scene_shadow(position, vec3(0, 1, 0), sunDirection);
-    color = color * (ambientLight * 0.8 + 0.6 * daylight * shadow) + horizonColor * (0.10 + 0.16 * (1.0 - daylight));
+    color *= ambientLight * 0.8 + 0.6 * daylight * shadow;
     vec3 view = normalize(cameraPosition - position);
-    float reflection = pow(max(dot(reflect(-view, vec3(0, 1, 0)), sunDirection), 0.0), 90.0);
-    color += reflection * sunColor * daylight * shadow * (0.5 + 0.5 * ripples);
-    color += scene_local_light(position, vec3(0, 1, 0), view, 32.0) * 0.2;
+    vec3 reflected = reflect(-view, n);
+    float fresnel = 0.04 + 0.28 * pow(1.0 - max(dot(view, n), 0.0), 5.0);
+    vec3 sky = mix(horizonColor, zenithColor, smoothstep(0.0, 0.7, reflected.y));
+    color = mix(color, sky, fresnel);
+    float glint = pow(max(dot(reflected, sunDirection), 0.0), 110.0);
+    color += glint * sunColor * daylight * shadow * 0.65;
+    float shore = (1.0 - smoothstep(0.05, 0.65, depth)) * smoothstep(0.7, 1.0,
+        0.5 + 0.5 * sin(depth * 12.0 - time * 1.6 + ripples));
+    color += vec3(0.10, 0.12, 0.11) * shore * daylight * shadow;
+    color += scene_local_light(position, n, view, 48.0) * 0.2;
     float fog = smoothstep(viewDistance * 0.65, viewDistance, distance(position.xz, cameraPosition.xz));
     finalColor = vec4(mix(color, horizonColor, fog) * brightness, 1.0);
 })GLSL";
@@ -853,16 +871,13 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         signs.sign(p + Vec3(0, 6, 0), side, 7, 2.3f, 7);
         city.box(p + Vec3(0, 3, 0), Vec3(.18f, 6, .18f), concrete);
     }
-    for (int z = -80; z < 80; ++z) for (int x = -80; x < 80; ++x) {
-        const Vec3 a(x * 250.0f, 0, z * 250.0f), b = a + Vec3(250, 0, 0), c = a + Vec3(0, 0, 250), d = a + Vec3(250, 0, 250);
-        water.quad(a, c, d, b, WHITE);
-    }
+    water.quad({-20000,0,-20000},{-20000,0,20000},{20000,0,20000},{20000,0,-20000},WHITE);
     terrain_ = ground.upload(); grass_ = grass.upload(); sand_ = sand.upload(); roads_ = roads.upload();
     for (Model model : city.upload_chunks()) city_chunks_.push_back(chunk(model));
     ocean_ = water.upload(); signs_ = signs.upload();
     lights_ = lights.upload(); glows_ = glows.upload();
     land_shader_ = LoadShaderFromMemory(land_vertex, land_fragment.c_str());
-    water_shader_ = LoadShaderFromMemory(water_vertex, water_fragment.c_str());
+    load_water(env);
     sky_shader_ = LoadShaderFromMemory(nullptr, sky_fragment);
     light_shader_ = LoadShaderFromMemory(land_vertex, light_fragment);
     if (lights_.materials) lights_.materials[0].shader = light_shader_;
@@ -872,10 +887,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     for (auto& part : city_chunks_) part.model.materials[0].shader = land_shader_;
     if (terrain_.materials && soil_texture_.id) SetMaterialTexture(&terrain_.materials[0], MATERIAL_MAP_DIFFUSE, soil_texture_);
     if (roads_.materials && asphalt_texture_.id) SetMaterialTexture(&roads_.materials[0], MATERIAL_MAP_DIFFUSE, asphalt_texture_);
-    ocean_.materials[0].shader = water_shader_;
     land_camera_ = GetShaderLocation(land_shader_, "cameraPosition");
-    water_camera_ = GetShaderLocation(water_shader_, "cameraPosition");
-    water_time_ = GetShaderLocation(water_shader_, "time");
     load_trees(env);
     if (!tree_shader_.id) {
         tree_shader_ = LoadShaderFromMemory(tree_vertex, tree_fragment.c_str());
@@ -909,20 +921,28 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     for (const auto& t : env.triangles()) if (t.surface != Surface::Seabed && !t.deck) {
         const Vec3 center = (env.vertices()[t.a]+env.vertices()[t.b]+env.vertices()[t.c])/3;
         const auto p = City::cell(center.GetX(),center.GetZ());
-        const auto custom = city.ground_textures.find(City::index(p));
-        if (city.land(p) && custom!=city.ground_textures.end()) {
+        const auto owner = city.land(p) ? std::optional<CityCell>(p) : city.shore_cell(center);
+        const auto custom = owner ? city.ground_textures.find(City::index(*owner)) : city.ground_textures.end();
+        Surface surface = t.surface;
+        if (custom!=city.ground_textures.end()) {
             const auto& name = custom->second;
-            if (!ground_textures_.count(name)) ground_textures_[name] = load_terrain_texture(name.c_str());
-            if (ground_textures_[name].id) {
-                painted[name].triangle(env.vertices()[t.a],env.vertices()[t.b],env.vertices()[t.c],WHITE);
-                continue;
+            if (name=="soil.png") surface = Surface::Soil;
+            else if (name=="grass.png") surface = Surface::Grass;
+            else if (name=="beach-sand.png") surface = Surface::Sand;
+            else if (name=="asphalt.png") surface = Surface::Road;
+            else {
+                if (!ground_textures_.count(name)) ground_textures_[name] = load_terrain_texture(name.c_str());
+                if (ground_textures_[name].id) {
+                    painted[name].triangle(env.vertices()[t.a],env.vertices()[t.b],env.vertices()[t.c],WHITE);
+                    continue;
+                }
             }
         }
-        MeshBuilder& mesh = t.surface == Surface::Grass ? grass : t.surface == Surface::Sand ? sand : t.surface == Surface::Road ? roads : ground;
-        const Color tint = t.surface == Surface::Grass ? (grass_texture_.id ? WHITE : surface_color(t.surface))
-            : t.surface == Surface::Sand ? (sand_texture_.id ? WHITE : surface_color(t.surface))
-            : t.surface == Surface::Road ? (asphalt_texture_.id ? WHITE : surface_color(t.surface))
-            : soil_texture_.id ? WHITE : surface_color(t.surface);
+        MeshBuilder& mesh = surface == Surface::Grass ? grass : surface == Surface::Sand ? sand : surface == Surface::Road ? roads : ground;
+        const Color tint = surface == Surface::Grass ? (grass_texture_.id ? WHITE : surface_color(surface))
+            : surface == Surface::Sand ? (sand_texture_.id ? WHITE : surface_color(surface))
+            : surface == Surface::Road ? (asphalt_texture_.id ? WHITE : surface_color(surface))
+            : soil_texture_.id ? WHITE : surface_color(surface);
         mesh.triangle(env.vertices()[t.a],env.vertices()[t.b],env.vertices()[t.c],tint);
     }
     if (std::any_of(city.elevation.begin(),city.elevation.end(),[](auto h){return h>0;})) {
@@ -1014,7 +1034,7 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     for (Model model : buildings.upload_chunks()) city_chunks_.push_back(chunk(model));
     for (Model model : markings.upload_chunks()) city_chunks_.push_back(chunk(model));
     land_shader_ = LoadShaderFromMemory(land_vertex,land_fragment.c_str());
-    water_shader_ = LoadShaderFromMemory(water_vertex,water_fragment.c_str());
+    load_water(env);
     sky_shader_ = LoadShaderFromMemory(nullptr,sky_fragment);
     light_shader_ = LoadShaderFromMemory(land_vertex,light_fragment);
     for (Model* model : {&terrain_,&grass_,&sand_,&roads_}) if (model->materials) model->materials[0].shader = land_shader_;
@@ -1029,10 +1049,7 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     if (grass_.materials && grass_texture_.id) SetMaterialTexture(&grass_.materials[0],MATERIAL_MAP_DIFFUSE,grass_texture_);
     if (sand_.materials && sand_texture_.id) SetMaterialTexture(&sand_.materials[0],MATERIAL_MAP_DIFFUSE,sand_texture_);
     if (roads_.materials && asphalt_texture_.id) SetMaterialTexture(&roads_.materials[0],MATERIAL_MAP_DIFFUSE,asphalt_texture_);
-    ocean_.materials[0].shader = water_shader_;
     land_camera_ = GetShaderLocation(land_shader_,"cameraPosition");
-    water_camera_ = GetShaderLocation(water_shader_,"cameraPosition");
-    water_time_ = GetShaderLocation(water_shader_,"time");
     load_trees(env);
     if (!tree_shader_.id) {
         tree_shader_ = LoadShaderFromMemory(tree_vertex,tree_fragment.c_str());
@@ -1040,6 +1057,32 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     }
     sign_emission_ = GetShaderLocation(tree_shader_,"emissiveStrength");
     load_map(env);
+}
+
+void EnvironmentRenderer::load_water(const Environment& env) {
+    water_shader_ = LoadShaderFromMemory(water_vertex,water_fragment.c_str());
+    water_camera_ = GetShaderLocation(water_shader_,"cameraPosition");
+    water_time_ = GetShaderLocation(water_shader_,"time");
+    water_zenith_ = GetShaderLocation(water_shader_,"zenithColor");
+    // ponytail: 513-square depth field (~3 m city / 20 m legacy); increase only for finer shores.
+    constexpr int size = 513;
+    const float extent = env.city() ? City::extent+3*City::block : Environment::extent;
+    std::vector<unsigned char> depth(size*size);
+    for (int z = 0; z<size; ++z) for (int x = 0; x<size; ++x) {
+        const float px = -extent+2*extent*x/(size-1), pz = -extent+2*extent*z/(size-1);
+        depth[z*size+x] = static_cast<unsigned char>(std::lround(std::clamp(
+            (Environment::water_level-env.terrain_height(px,pz))/12.f,0.f,1.f)*255));
+    }
+    // One R8 field is shared by the whole ocean; waves and reflections stay in the shader.
+    water_depth_ = LoadTextureFromImage({depth.data(),size,size,1,PIXELFORMAT_UNCOMPRESSED_GRAYSCALE});
+    if (water_depth_.id) {
+        SetTextureFilter(water_depth_,TEXTURE_FILTER_BILINEAR);
+        SetTextureWrap(water_depth_,TEXTURE_WRAP_CLAMP);
+        SetMaterialTexture(&ocean_.materials[0],MATERIAL_MAP_DIFFUSE,water_depth_);
+    } else TraceLog(LOG_WARNING,"WATER: Depth texture unavailable; using deep-water colors.");
+    ocean_.materials[0].shader = water_shader_;
+    SetShaderValue(water_shader_,GetShaderLocation(water_shader_,"depthExtent"),&extent,SHADER_UNIFORM_FLOAT);
+    TraceLog(LOG_INFO,"WATER: 2 triangles, 1 draw, %i-byte shared depth field",size*size);
 }
 
 void EnvironmentRenderer::load_map(const Environment& env) {
@@ -1201,6 +1244,7 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     if (sand_texture_.id != 0) UnloadTexture(sand_texture_);
     if (asphalt_texture_.id != 0) UnloadTexture(asphalt_texture_);
     if (sign_texture_.id) UnloadTexture(sign_texture_);
+    if (water_depth_.id) UnloadTexture(water_depth_);
     for (const auto& texture : ground_textures_) if (texture.second.id) UnloadTexture(texture.second);
     UnloadModel(map_);
     UnloadShader(minimap_shader_);
@@ -1234,6 +1278,7 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Dayligh
     SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(water_shader_, water_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(water_shader_, water_time_, &time, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(water_shader_, water_zenith_, &light.zenith, SHADER_UNIFORM_VEC3);
     DrawModel(ocean_, {0, 0, 0}, 1, WHITE);
     DrawModel(terrain_, {0, 0, 0}, 1, WHITE);
     DrawModel(grass_, {0, 0, 0}, 1, WHITE);

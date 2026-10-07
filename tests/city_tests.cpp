@@ -507,9 +507,15 @@ City ground_paint(const std::filesystem::path& directory) {
     City city = City::create("Ground paint"); std::string error;
     require(city.add_land({58,58},{74,74},error),"ground island failed");
     const Environment soil(city);
-    require(std::all_of(soil.triangles().begin(),soil.triangles().end(),[](const auto& t) {
-        return t.surface==Surface::Soil || t.surface==Surface::Seabed;
-    }),"new land or shoreline still becomes grass or beach");
+    int land_triangles = 0, beach_triangles = 0;
+    for (const auto& t : soil.triangles()) {
+        if (t.surface==Surface::Seabed) continue;
+        const Vec3 center = (soil.vertices()[t.a]+soil.vertices()[t.b]+soil.vertices()[t.c])/3;
+        const bool land = city.land(City::cell(center.GetX(),center.GetZ()));
+        require(t.surface==(land ? Surface::Soil : Surface::Sand),"new land or beach uses the wrong default texture");
+        if (land) ++land_triangles; else ++beach_triangles;
+    }
+    require(land_triangles>0 && beach_triangles>0,"default soil land or sand shoreline is missing");
     const Vec3 point = City::center({62,62});
     const auto before = city.ground;
     require(city.paint_ground({60,60},{64,64},CityGround::Grass,error) && city.ground!=before,"grass rectangle did not paint");
@@ -519,7 +525,8 @@ City ground_paint(const std::filesystem::path& directory) {
     require(city.paint_ground({73,69},{69,65},CityGround::Sand,error),"reverse sand rectangle did not paint");
     require(city.paint_ground({66,69},{68,73},CityGround::Asphalt,error)
         && city.tile({67,71})==CityTile::Land && city.traffic_routes().empty(),"asphalt texture created a road instead of painting ground");
-    require(city.paint_ground({62,62},{62,62},CityGround::Soil,error) && city.ground[City::index({62,62})]==CityGround::Soil,"single-square drawing did not restore soil");
+    require(city.paint_ground({62,62},{62,62},CityGround::Soil,error) && city.ground[City::index({62,62})]==CityGround::Soil
+        && city.ground_textures.at(City::index({62,62}))=="soil.png","single-square drawing did not retain explicit soil paint");
     const auto painted = city.ground;
     require(!city.paint_ground({-1,62},{62,62},CityGround::Grass,error)
         && !city.paint_ground({62,62},{128,62},CityGround::Grass,error)
@@ -534,20 +541,23 @@ City ground_paint(const std::filesystem::path& directory) {
         && city.ground[City::index({71,67})]==CityGround::Soil,"recreated land inherited demolished paint");
     require(city.set_spawn({67,61},error) && city.save(directory,error),"painted city save failed");
     const auto path = directory/(city.id+".city"); City loaded;
-    require(City::load(path,loaded,error) && loaded.ground==city.ground,"ground textures did not round-trip");
+    require(City::load(path,loaded,error) && loaded.ground==city.ground && loaded.ground_textures==city.ground_textures,"ground textures and explicit soil paint did not round-trip");
     Environment map(loaded); PhysicsWorld world(map); GroundHit hit;
     for (const auto& t : map.triangles()) {
         if (t.deck || t.surface==Surface::Seabed) continue;
         const Vec3 a = map.vertices()[t.a], b = map.vertices()[t.b], c = map.vertices()[t.c], center = (a+b+c)/3;
         const CityCell p = City::cell(center.GetX(),center.GetZ());
         const Surface expected[] = {Surface::Soil,Surface::Grass,Surface::Sand,Surface::Road};
-        require(t.surface==(loaded.land(p) ? expected[int(loaded.ground[City::index(p)])] : Surface::Soil),"painted terrain rendered the wrong texture");
+        require(t.surface==(loaded.land(p) ? expected[int(loaded.ground[City::index(p)])] : Surface::Sand),"painted terrain rendered the wrong texture");
     }
     require(world.cast_ground(point+Vec3(0,5,0),-Vec3::sAxisY(),10,hit) && std::abs(hit.point.GetY()-City::level)<.001f,"ground painting changed collision height");
     City invalid = city; invalid.ground[0] = CityGround(255);
     require(!invalid.save(directory,error) && City::load(path,loaded,error) && loaded.ground==city.ground,"invalid paint damaged the previous save");
+    City legacy_city = city; legacy_city.ground_textures.clear();
+    require(legacy_city.save(directory,error),"legacy painted fixture save failed");
     std::ifstream saved(path); std::ostringstream contents; contents << saved.rdbuf(); saved.close();
     const std::string current = contents.str();
+    require(current.rfind("AMBARETTO_CITY 6\n",0)==0,"legacy painted fixture did not use version 6");
     const auto heights = current.rfind('\n',current.size()-2)+1;
     const auto textures = current.rfind('\n',heights-2)+1;
     std::string bad = current; bad[textures] = '4'; std::ofstream(path) << bad;
@@ -593,6 +603,50 @@ void custom_ground_textures(const std::filesystem::path& directory) {
     require(!City::load(path,loaded,error),"truncated ground filename data accepted");
     require(city.save(directory,error),"restoring custom ground fixture failed");
     std::cout << "Custom ground: filename painting, bounds, repainting, demolition, save compatibility and validation passed\n";
+}
+void beach_ground_textures(const std::filesystem::path& directory) {
+    City city = City::create("Paintable beach"); std::string error;
+    require(City::level==.8f && city.add_land({64,64},{64,64},error),"flat island height is not 75 percent lower");
+    const Vec3 center = City::center({64,64}), beach = center+Vec3(City::half_block+2,0,0);
+    const auto owner = city.shore_cell(beach);
+    require(owner && *owner==CityCell{64,64} && city.shore_cell(center)==owner
+        && !city.land(City::cell(beach.GetX(),beach.GetZ()))
+        && !city.shore_cell(center+Vec3(City::half_block+40,0,0))
+        && !city.shore_cell(Vec3(std::numeric_limits<float>::infinity(),0,0))
+        && !city.shore_cell(Vec3(std::numeric_limits<float>::max(),0,0)),
+        "beach selection did not find its nearest land or reject open water");
+    City neighbors = city;
+    require(neighbors.add_land({68,64},{68,64},error),"neighboring beach island failed");
+    const auto other_owner = neighbors.shore_cell(City::center({68,64})-Vec3(City::half_block+2,0,0));
+    require(other_owner && *other_owner==CityCell{68,64},"beach selection chose a farther island");
+    const auto visible_ground = [&](Surface surface) {
+        const Environment map(city); int beach_triangles = 0;
+        for (const auto& t : map.triangles()) {
+            const Vec3 point = (map.vertices()[t.a]+map.vertices()[t.b]+map.vertices()[t.c])/3;
+            if (point.GetY()<=Environment::water_level) continue;
+            if (t.surface!=surface) return false;
+            if (!city.land(City::cell(point.GetX(),point.GetZ()))) ++beach_triangles;
+        }
+        return beach_triangles>0;
+    };
+    const Environment original(city);
+    require(city.paint_ground(*owner,*owner,"grass.png",error) && visible_ground(Surface::Grass),
+        "painting a beach owner did not update its shoreline");
+    require(city.paint_ground(*owner,*owner,"custom beach.png",error) && city.save(directory,error),
+        "custom beach paint could not be saved");
+    const auto path = directory/(city.id+".city"); City loaded;
+    require(City::load(path,loaded,error) && loaded.shore_cell(beach)==owner
+        && loaded.ground_texture(*owner)=="custom beach.png" && loaded.ground_textures==city.ground_textures,
+        "custom shoreline texture or owner did not round-trip");
+    require(city.paint_ground(*owner,*owner,"soil.png",error) && visible_ground(Surface::Soil) && city.save(directory,error),
+        "explicit soil paint did not replace automatic beach sand");
+    require(City::load(path,loaded,error) && loaded.ground_textures.at(City::index(*owner))=="soil.png"
+        && loaded.ground==city.ground,"explicit shoreline soil paint did not round-trip");
+    const Environment painted(loaded);
+    require(painted.vertices()==original.vertices(),"beach painting changed terrain geometry");
+    require(city.paint_ground(*owner,*owner,"beach-sand.png",error) && city.ground_textures.empty() && visible_ground(Surface::Sand),
+        "sand repaint did not clear explicit soil or update the shoreline");
+    std::cout << "Beach ground: nearest owner, low island height, paint overrides and save persistence passed\n";
 }
 City terraced_ground(const std::filesystem::path& directory) {
     std::string error;
@@ -790,7 +844,7 @@ void sloping_shore() {
             && std::abs(hit.point.GetY()-height)<.002f,"shore rendering, height queries, and collision disagree");
         previous = height;
     }
-    require(map.height(edge+2,z)<City::level && map.height(edge+6,z)>0 && map.height(edge+8,z)<0
+    require(map.height(edge+2,z)<City::level && map.height(edge+4,z)>0 && map.height(edge+6,z)<0
         && std::abs(map.height(edge+32,z)+8)<.1f,"beach does not taper through shallow water to the seabed");
     require(map.height(edge-8,z)==City::level,"shore changed flat building land");
     // A convex corner rounds outward; the submerged end joins the ocean floor.
@@ -847,6 +901,11 @@ void rounded_roads() {
             require(radius>=.7f && radius<=City::block-.7f,"traffic path leaves rounded pavement"); ++samples;
         }
         require(samples>2,"traffic does not pass through the bend");
+        require(city.change_elevation({62,62},{66,66},1,error),"elevated road bend failed");
+        const auto elevated = city.road_bend(p);
+        require(std::all_of(elevated.begin(),elevated.end(),[](Vec3 point) {
+            return std::abs(point.GetY()-City::level-City::elevation_step)<.001f;
+        }),"road bend stayed at the default height after raising terrain");
     }
 }
 City single_road_turns() {
@@ -1464,7 +1523,7 @@ int main(int argc,char** argv) {
             std::cout << (std::filesystem::path(argv[2])/(city.id+".city")).string() << '\n'; return 0;
         }
         const auto directory = std::filesystem::temp_directory_path()/("ambaretto-city-test-"+City::create("test").id);
-        data_and_saves(directory); building_meshes(directory); building_mesh_editing(directory); building_design_updates(directory); building_rotation(directory); generated_terrain(directory); trees_and_time(directory); ground_paint(directory); custom_ground_textures(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay(); car_designs(directory);
+        data_and_saves(directory); building_meshes(directory); building_mesh_editing(directory); building_design_updates(directory); building_rotation(directory); generated_terrain(directory); trees_and_time(directory); ground_paint(directory); custom_ground_textures(directory); beach_ground_textures(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay(); car_designs(directory);
         through_road_routes(); saved_copies(directory); pedestrian_density_saves(directory); free_placement(directory);
         // Remove only files in this run's unique test directory; no recursive deletion.
         for (const auto& entry : std::filesystem::directory_iterator(directory)) std::filesystem::remove(entry.path());

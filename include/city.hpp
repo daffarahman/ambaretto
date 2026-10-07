@@ -51,7 +51,7 @@ struct CityRoadNode {
     std::vector<int> edges;
     unsigned mask = 0;
     std::array<CityRoadPort,4> ports{};
-    float height = 3.2f;
+    float height = .8f;
     Vec3 center() const;
     Vec3 half_size() const;
     // Quarter-ellipse across the whole turn footprint; fraction selects a lane radius.
@@ -75,7 +75,7 @@ struct Tree {
 struct City {
     static constexpr int width = 128;
     static constexpr int corner_width = width + 1;
-    static constexpr float block = 11.2f, level = 3.2f, half_block = block / 2, extent = width * block / 2;
+    static constexpr float block = 11.2f, level = .8f, half_block = block / 2, extent = width * block / 2;
     static constexpr float elevation_step = 2.f;
     static constexpr int max_elevation = 8;
     std::string id, name = "New city";
@@ -134,6 +134,7 @@ struct City {
     bool paint_ground(CityCell a, CityCell b, CityGround texture, std::string& error);
     bool paint_ground(CityCell a, CityCell b, const std::string& texture, std::string& error);
     std::string ground_texture(CityCell p) const;
+    std::optional<CityCell> shore_cell(Vec3 point) const;
     bool change_elevation(CityCell a, CityCell b, int direction, std::string& error);
     bool tree_clear(Vec3 p) const;
     void clear_trees();
