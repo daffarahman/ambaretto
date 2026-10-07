@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
             MenuCommand::GroundTool,MenuCommand::RaiseGround,MenuCommand::LowerGround};
         for (int i = 0; i<int(std::size(tile_actions)); ++i) dispatch(2,i,tile_actions[i]);
         dispatch(3,0,MenuCommand::BuildingTool); dispatch(3,1,MenuCommand::BuildingCreator);
+        dispatch(3,4,MenuCommand::SavedBuildings);
         dispatch(4,11,MenuCommand::CarEditor);
         dispatch(4,13,MenuCommand::CharacterCreator); dispatch(4,14,MenuCommand::ChoosePlayerCharacter);
         dispatch(0,5,MenuCommand::RefreshDesigns);
@@ -72,6 +73,21 @@ int main(int argc, char** argv) {
         require(creator.update(state,input)==MenuCommand::NewBuilding,"Creator File > New is missing");
         creator.open(); input = {}; input.vertical = 1; creator.update(state,input); input = {}; input.enter = true;
         require(creator.update(state,input)==MenuCommand::SaveBuilding,"Creator File > Save is missing");
+        const auto dispatch_menu=[&](MenuMode mode,int category,int item,MenuCommand expected) {
+            MenuBar bar(mode); bar.open(category); MenuInput move; move.vertical=item; bar.update({},move);
+            MenuInput accept; accept.enter=true;
+            require(bar.update({},accept)==expected,"Menu category dispatched the wrong action");
+        };
+        dispatch_menu(MenuMode::Creator,0,2,MenuCommand::SavedBuildings);
+        dispatch_menu(MenuMode::CarCreator,0,2,MenuCommand::SavedCars);
+        dispatch_menu(MenuMode::CharacterCreator,0,2,MenuCommand::SavedCharacters);
+        dispatch_menu(MenuMode::Main,0,0,MenuCommand::PlayCity);
+        dispatch_menu(MenuMode::Main,0,1,MenuCommand::Editors);
+        dispatch_menu(MenuMode::Main,0,2,MenuCommand::Quit);
+        dispatch_menu(MenuMode::Main,1,0,MenuCommand::Graphics);
+        dispatch_menu(MenuMode::Main,1,1,MenuCommand::Controllers);
+        dispatch_menu(MenuMode::Main,2,0,MenuCommand::Controls);
+        dispatch_menu(MenuMode::Main,2,1,MenuCommand::About);
         creator.open(1); require(creator.update(state,input)==MenuCommand::Undo,"Creator undo is missing");
         editor.open(); input = {}; input.horizontal = -1; editor.update(state, input);
         input = {}; input.enter = true;

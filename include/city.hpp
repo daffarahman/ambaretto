@@ -146,12 +146,12 @@ struct City {
     static City create(std::string name);
     bool generate_terrain(int tiles_x, int tiles_z, std::uint32_t seed, std::string& error);
 };
-// Returns to the city menu on Escape; returns a saved playable city on Play.
 enum class DesignKind { Building, Car, Character };
 bool main_menu(City& selected, const std::filesystem::path& directory, ControllerMapping& controls,
                GraphicsSettings& graphics, const std::string& screenshot = {});
 void design_menu(DesignKind kind, const std::filesystem::path& root, const std::string& screenshot = {}, bool create_new = false);
-void settings_menu(ControllerMapping& controls, GraphicsSettings& graphics, const std::string& screenshot = {});
+void settings_menu(ControllerMapping& controls, GraphicsSettings& graphics, const std::string& screenshot = {}, MenuCommand initial_settings = {});
+// Returns a saved playable city on Play; otherwise returns to the main menu.
 bool city_menu(City& selected, const std::filesystem::path& directory, ControllerMapping& controls,
                GraphicsSettings& graphics, bool edit_selected = false, const std::string& screenshot = {},
                bool preview_editor = false, MenuCommand initial_settings = {});
