@@ -8,12 +8,14 @@
 #include "character_renderer.hpp"
 #include "tuning_panel.hpp"
 #include "environment_renderer.hpp"
+#include "building_renderer.hpp"
 #include <raylib.h>
 #include <raymath.h>
 #include <rlgl.h>
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <set>
 #include <sstream>
 #include <functional>
@@ -416,44 +418,69 @@ bool mesh_slider(Rectangle r,float& value,float lo,float hi,int id,int& dragging
     DrawRectangleRec({r.x,r.y,r.width*t,r.height},ColorAlpha(accent,.45f)); DrawRectangleRec({r.x+r.width*t-3,r.y-2,6,r.height+4},accent);
     return old!=value;
 }
+struct BuildingPick {
+    int face = -1, decal = -1;
+    float distance = 1e9f, decal_distance = 1e9f;
+    Vec3 point = Vec3::sZero();
+};
+BuildingPick pick_building(const std::vector<BuildingTriangle>& triangles,Vector2 mouse,Camera3D camera,Rectangle view) {
+    const auto ray = GetScreenToWorldRayEx({mouse.x-view.x,mouse.y-view.y},camera,int(view.width),int(view.height));
+    BuildingPick picked;
+    for (const auto& t : triangles) {
+        const auto hit = GetRayCollisionTriangle(ray,vector(t.points[0]),vector(t.points[1]),vector(t.points[2]));
+        if (!hit.hit) continue;
+        if (t.decal) { if (hit.distance<picked.decal_distance) { picked.decal_distance = hit.distance; picked.decal = t.decal_index; } }
+        else if (hit.distance<picked.distance) { picked.distance = hit.distance; picked.face = t.face; picked.point = Vec3(hit.point.x,hit.point.y,hit.point.z); }
+    }
+    if (picked.decal_distance>picked.distance+.03f) picked.decal = -1;
+    return picked;
+}
 }
 
 std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesystem::path& directory,const std::string& screenshot,int initial_tab,std::vector<BuildingMesh>* saved_designs) {
-    int tab = initial_tab==2 ? 1 : initial_tab==3 ? 2 : 0, mode = 0, decal = 0;
-    int field = -1, scroll = 0, frames = 0, slider_drag = -1, handle = -1;
+    int tab = initial_tab==2 ? 1 : initial_tab==3 ? 2 : 0, mode = 0, decal = -1;
+    int field = -1, scroll = 0, frames = 0, slider_drag = -1, handle = -1, part = 0, shape = 0, part_page = 0, grab_decal = -1;
+    float tool_scroll = 0, decal_width = 1, decal_height = 1.5f, repeat_count = 6, repeat_spacing = 1.6f;
+    std::string decal_brush;
+    bool place_decal = false, move_decal = false, repeat_vertical = false, uv_all = false;
+    Vec3 shape_dimensions(4,4,4), shape_position(0,0,0), part_translation = Vec3::sZero(), part_rotation = Vec3::sZero(), part_scale(1,1,1);
     std::array<std::vector<int>,3> selected{{{2},{},{4}}}; std::vector<int> moving;
     std::vector<BuildingMesh> undo, redo; std::optional<BuildingMesh> grab;
-    Vector2 grab_start{}; bool keyboard_grab = false, slice = false, xray = false, interactive = false, decal_texture = false;
+    Vector2 grab_start{}; bool keyboard_grab = false, decal_grab = false, slice = false, xray = false, interactive = false, decal_texture = false;
+    bool decal_move_valid = true, decal_has_moved = false;
+    Vector2 decal_grab_start{};
     float yaw = 2.44f, pitch = .5f, zoom = 1, cut_fraction = .5f; int cut_axis = 1;
     std::string status, buffer;
     const auto align = [&](BuildingMesh& value) { const auto tiles = value.footprint(); return value.set_footprint(tiles[0],tiles[1],status,true); };
     if (!align(mesh)) return {};
     auto textures = building_textures(building_texture_directory(),status);
-    std::map<std::string,Texture2D> images; RenderTexture2D preview{}; MenuBar menu(MenuMode::Creator);
-    const Shader shader = LoadShaderFromMemory(nullptr,R"GLSL(#version 330
-in vec2 fragTexCoord;
-in vec4 fragColor;
-uniform sampler2D texture0;
-uniform vec4 colDiffuse;
-out vec4 finalColor;
-void main() {
-    vec4 pixel = texture(texture0,fragTexCoord)*fragColor*colDiffuse;
-    if (pixel.a<0.3) discard;
-    finalColor = pixel;
-})GLSL");
+    RenderTexture2D preview{}; MenuBar menu(MenuMode::Creator);
+    BuildingRenderer renderer; SceneLighting preview_lighting; GraphicsSettings preview_graphics;
+    preview_graphics.apply_preset(GraphicsPreset::Low); preview_graphics.view_distance = 6000;
+    const auto preview_daylight = DayNight().lighting();
+    bool preview_dirty = true, preview_valid = false, texture_selection = false;
+    std::vector<BuildingTriangle> triangles;
     std::optional<BuildingMesh> result;
-    const auto image = [&](const std::string& name) {
-        if (name.empty()) return Texture2D{};
-        if (!images.count(name)) images[name] = load_building_texture(name);
-        return images[name];
+    const auto rebuild_preview = [&]() {
+        if (!preview_dirty) return preview_valid;
+        triangles = mesh.triangles(); std::string error;
+        preview_valid = renderer.build(triangles,error,false,textures); preview_dirty = false;
+        if (!preview_valid) status = error;
+        else if (!renderer.warning().empty()) status = renderer.warning();
+        return preview_valid;
     };
     const auto commit = [&](BuildingMesh next) {
         if (!next.validate(status)) return false;
         undo.push_back(mesh); if (undo.size()>32) undo.erase(undo.begin()); redo.clear();
-        mesh = std::move(next); field = -1; status = "Updated"; return true;
+        mesh = std::move(next); preview_dirty = true; field = -1; status = "Updated"; return true;
+    };
+    const auto cancel_move = [&]() {
+        mesh = *grab; grab.reset(); if (decal_grab) decal = grab_decal;
+        decal_grab = false; preview_dirty = true; status = "Move cancelled";
     };
     std::string original=snapshot(mesh);
     const auto save_design=[&]() {
+        if (!rebuild_preview()) return false;
         if (!mesh.save(directory,status)) return false;
         if (saved_designs) {
             const auto found=std::find_if(saved_designs->begin(),saved_designs->end(),[&](const auto& d){return d.name==mesh.name;});
@@ -463,26 +490,26 @@ void main() {
     };
     const auto leave=[&]() {return leave_draft(mesh,original,save_design,status);};
     while (true) {
-        if (WindowShouldClose()) { if (leave()) break; interactive=false; continue; }
+        if (WindowShouldClose()) { if (grab) cancel_move(); if (leave()) break; interactive=false; continue; }
         const float height = float(GetScreenHeight());
         const Rectangle window{8,44,float(GetScreenWidth()-16),height-108}, view{414,84,float(GetScreenWidth()-438),height-244};
         MenuState menu_state; menu_state.undo = !undo.empty() && !grab; menu_state.redo = !redo.empty() && !grab;
         const auto command = interactive && !grab ? menu.update(menu_state) : MenuCommand::None;
         if (command!=MenuCommand::None) field = -1;
-        const bool can_edit = interactive && !menu.blocking() && !menu.interacted();
+        const bool can_edit = interactive && IsWindowFocused() && !menu.blocking() && !menu.interacted();
         const bool click = can_edit && IsMouseButtonPressed(MOUSE_BUTTON_LEFT), in_view = can_edit && hit(view);
         const bool ctrl = IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL), shift = IsKeyDown(KEY_LEFT_SHIFT)||IsKeyDown(KEY_RIGHT_SHIFT);
         if (can_edit && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) slider_drag = -1;
-        if (command==MenuCommand::CloseCreator || (can_edit && close_clicked(window))) { if (leave()) break; interactive=false; continue; }
-        if (can_edit && IsKeyPressed(KEY_ESCAPE) && !grab) { if (slice) slice = false; else if (field>=0) field = -1; else {if (leave()) break; interactive=false; continue;} }
+        if (command==MenuCommand::CloseCreator || (can_edit && !grab && close_clicked(window))) { if (leave()) break; interactive=false; continue; }
+        if (can_edit && IsKeyPressed(KEY_ESCAPE) && !grab) { if (slice) slice = false; else if (place_decal || move_decal) place_decal = move_decal = false; else if (field>=0) field = -1; else if (tab==2 && decal>=0) { decal = -1; selected[2].clear(); status = "Selection cleared"; } else {if (leave()) break; interactive=false; continue;} }
         if (command==MenuCommand::NewBuilding) {
-            if (leave()) { mesh={}; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={{{2},{},{4}}}; tab=0; slice=false; }
+            if (leave()) { mesh={}; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={{{2},{},{4}}}; tab=0; slice=false; preview_dirty=true; }
             interactive=false; continue;
         }
         if ((can_edit || command==MenuCommand::Undo || command==MenuCommand::Redo) && !grab && field<0) {
-            if ((command==MenuCommand::Undo || (ctrl && IsKeyPressed(KEY_Z))) && !undo.empty()) { redo.push_back(mesh); mesh = std::move(undo.back()); undo.pop_back(); selected = {}; slice = false; status = "Undone"; }
-            if ((command==MenuCommand::Redo || (ctrl && IsKeyPressed(KEY_Y))) && !redo.empty()) { undo.push_back(mesh); mesh = std::move(redo.back()); redo.pop_back(); selected = {}; slice = false; status = "Redone"; }
-            if (tab==0 && !ctrl) {
+            if ((command==MenuCommand::Undo || (ctrl && IsKeyPressed(KEY_Z))) && !undo.empty()) { redo.push_back(mesh); mesh = std::move(undo.back()); undo.pop_back(); selected = {}; slice = false; preview_dirty=true; status = "Undone"; }
+            if ((command==MenuCommand::Redo || (ctrl && IsKeyPressed(KEY_Y))) && !redo.empty()) { undo.push_back(mesh); mesh = std::move(redo.back()); redo.pop_back(); selected = {}; slice = false; preview_dirty=true; status = "Redone"; }
+            if ((tab==0 || tab==3) && !ctrl) {
                 if (IsKeyPressed(KEY_ONE)) mode = 0;
                 if (IsKeyPressed(KEY_TWO)) mode = 1;
                 if (IsKeyPressed(KEY_THREE)) mode = 2;
@@ -495,7 +522,7 @@ void main() {
             const int count = m==0 ? int(mesh.vertices.size()) : m==1 ? int(edges.size()) : int(mesh.faces.size());
             auto& list = selected[m]; list.erase(std::remove_if(list.begin(),list.end(),[&](int i){return i<0 || i>=count;}),list.end());
         }
-        decal = mesh.decals.empty() ? -1 : std::clamp(decal,0,int(mesh.decals.size())-1);
+        decal = mesh.decals.empty() ? -1 : std::clamp(decal,-1,int(mesh.decals.size())-1);
         const auto targets = [&]() {
             if (mode==0) return selected[0];
             std::set<int> vertices;
@@ -521,33 +548,55 @@ void main() {
         const float radius = frame_size.Length(); const Vector3 target{0,frame_size.GetY()/2,0};
         Camera3D camera{{std::sin(yaw)*std::cos(pitch)*radius*2,target.y+std::sin(pitch)*radius*2,std::cos(yaw)*std::cos(pitch)*radius*2},
             target,{0,1,0},radius*1.45f*zoom,CAMERA_ORTHOGRAPHIC};
+        const auto start_decal_move = [&](bool keyboard,bool keep_offset) {
+            Vec3 center;
+            if (!mesh.decal_center(decal,center)) { move_decal = false; status = "This decal needs a valid wall centre to move."; return; }
+            grab = mesh; grab_decal = decal; decal_grab = true; keyboard_grab = keyboard; decal_move_valid = true;
+            decal_grab_start = GetMousePosition(); decal_has_moved = !keep_offset;
+            grab_start = keep_offset ? Vector2Subtract(GetMousePosition(),project_mesh(center,camera,view)) : Vector2{};
+            place_decal = move_decal = false; field = -1; status = "Moving decal / Esc: cancel";
+        };
+        if (!grab && can_edit && tab==2 && decal>=0 && field<0 && (move_decal || (!ctrl && IsKeyPressed(KEY_G)))) start_decal_move(true,!move_decal);
         auto vertices = targets(); auto points = mesh.points(); Vec3 pivot = Vec3::sZero(); for (int v : vertices) pivot += points[v]/float(vertices.size());
         if (grab) {
-            if (keyboard_grab) {
+            if (keyboard_grab && !decal_grab) {
                 if (IsKeyPressed(KEY_X)) handle = 0;
                 if (IsKeyPressed(KEY_Y)) handle = 1;
                 if (IsKeyPressed(KEY_Z)) handle = 2;
             }
-            BuildingMesh next = *grab;
-            if (next.move_vertices(moving,mesh_drag_delta(Vector2Subtract(GetMousePosition(),grab_start),camera,view,handle),status)) mesh = std::move(next);
-            if (IsKeyPressed(KEY_ESCAPE) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) { mesh = *grab; grab.reset(); status = "Move cancelled"; }
-            else if ((keyboard_grab && (click || IsKeyPressed(KEY_ENTER))) || (!keyboard_grab && IsMouseButtonReleased(MOUSE_BUTTON_LEFT))) {
-                BuildingMesh moved = mesh; mesh = *grab; grab.reset(); commit(std::move(moved));
+            if (decal_grab) {
+                const auto picked = pick_building(triangles,Vector2Subtract(GetMousePosition(),grab_start),camera,view);
+                auto next = mesh; std::string error;
+                decal_has_moved |= Vector2Distance(GetMousePosition(),decal_grab_start)>2;
+                decal_move_valid = in_view && picked.face>=0 && (!decal_has_moved || next.move_decal(decal,picked.face,picked.point,error));
+                if (decal_move_valid && decal_has_moved) {
+                    const auto& before = mesh.decals[decal]; const auto& after = next.decals[decal];
+                    if (before.face!=after.face || before.u!=after.u || before.v!=after.v || before.width!=after.width || before.height!=after.height) { mesh = std::move(next); preview_dirty = true; }
+                }
+            } else {
+                BuildingMesh next = *grab;
+                if (next.move_vertices(moving,mesh_drag_delta(Vector2Subtract(GetMousePosition(),grab_start),camera,view,handle),status) && next.vertices!=mesh.vertices) { mesh = std::move(next); preview_dirty=true; }
             }
-        } else if (can_edit && tab==0 && !slice && field<0 && !ctrl && !vertices.empty() && IsKeyPressed(KEY_G)) {
+            const bool finish = keyboard_grab ? (click && in_view) || IsKeyPressed(KEY_ENTER) : IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
+            if (!IsWindowFocused() || IsKeyPressed(KEY_ESCAPE) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) || (decal_grab && finish && !decal_move_valid)) {
+                cancel_move();
+            } else if (finish) {
+                BuildingMesh moved = mesh; mesh = *grab; grab.reset(); decal_grab = false;
+                if (snapshot(moved)!=snapshot(mesh)) commit(std::move(moved));
+                else status = "Selection unchanged";
+            }
+        } else if (can_edit && (tab==0 || tab==3) && !slice && field<0 && !ctrl && !vertices.empty() && IsKeyPressed(KEY_G)) {
             grab = mesh; moving = vertices; grab_start = GetMousePosition(); handle = 6; keyboard_grab = true;
-        } else if (in_view && click && !slice && (tab==0 || tab==2)) {
-            const int gizmo = tab==0 && !shift && !vertices.empty() ? mesh_gizmo(pivot,camera,view,GetMousePosition(),false) : -1;
+        } else if (in_view && click && !slice) {
+            const int gizmo = (tab==0 || tab==3) && !shift && !vertices.empty() ? mesh_gizmo(pivot,camera,view,GetMousePosition(),false) : -1;
             if (gizmo>=0) { grab = mesh; moving = vertices; grab_start = GetMousePosition(); handle = gizmo; keyboard_grab = false; }
             else {
                 const Vector2 mouse{GetMouseX()-view.x,GetMouseY()-view.y};
-                const Ray ray = GetScreenToWorldRayEx(mouse,camera,int(view.width),int(view.height)); float closest = 1e9f; int face = -1, picked = -1;
-                for (const auto& t : mesh.triangles()) if (!t.decal) {
-                    const auto hit = GetRayCollisionTriangle(ray,vector(t.points[0]),vector(t.points[1]),vector(t.points[2]));
-                    if (hit.hit && hit.distance<closest) { closest = hit.distance; face = t.face; }
-                }
+                const Ray ray = GetScreenToWorldRayEx(mouse,camera,int(view.width),int(view.height));
+                const auto collision = pick_building(mesh.triangles(),GetMousePosition(),camera,view);
+                const float closest = collision.distance; const int face = collision.face; int picked = -1;
                 const auto visible = [&](Vec3 p) { return xray || Vector3Distance(ray.position,vector(p))<=closest+radius*.02f; };
-                if (tab==2 || mode==2) picked = face;
+                if (tab!=0 || mode==2) picked = face;
                 else {
                     float best = 12;
                     const int count = mode==0 ? int(points.size()) : int(edges.size());
@@ -563,8 +612,21 @@ void main() {
                         if (distance<best && visible(point)) { best = distance; picked = i; }
                     }
                 }
-                if (tab==2 && picked>=0 && decal>=0) { auto next = mesh; next.decals[decal].face = picked; commit(std::move(next)); }
+                if (tab==3 && picked>=0) {
+                    part = mesh.faces[picked].part; selected = {}; selected[0] = mesh.part_vertices(part); selected[2] = {picked}; mode = 0;
+                    shape_position = points[mesh.faces[picked].vertices[0]];
+                }
+                else if (tab==2) {
+                    if (picked>=0 && place_decal) {
+                        auto next = mesh; const int added = next.place_decal(picked,collision.point,decal_brush,decal_width,decal_height,status);
+                        if (added>=0 && commit(std::move(next))) { decal = added; selected[2] = {picked}; }
+                    } else if (collision.decal>=0) {
+                        decal = collision.decal; decal_brush = mesh.decals[decal].texture; selected[2] = {mesh.decals[decal].face};
+                        start_decal_move(false,true);
+                    } else { decal = -1; selected[2].clear(); status = "No decal selected"; }
+                }
                 else {
+                    if (tab==1 || tab==4) mode = 2;
                     auto& list = selected[mode];
                     if (!shift) list.clear();
                     if (picked>=0) { const auto it = std::find(list.begin(),list.end(),picked); if (it==list.end()) list.push_back(picked); else list.erase(it); }
@@ -573,29 +635,19 @@ void main() {
             }
         }
         points = mesh.points(); vertices = targets(); pivot = Vec3::sZero(); for (int v : vertices) pivot += points[v]/float(vertices.size());
-        const auto triangles = mesh.triangles(); const auto tiles = mesh.footprint();
+        rebuild_preview();
+        const auto tiles = mesh.footprint();
         const float cut_extent = mesh_coordinate(mesh.size,cut_axis), cut_position = cut_axis==1 ? cut_fraction*cut_extent : (cut_fraction-.5f)*cut_extent;
-        BeginTextureMode(preview); ClearBackground({18,28,45,255}); BeginMode3D(camera); BeginShaderMode(shader);
-        const auto ground = image("soil.png"); const float hx = mesh.size.GetX()/2, hz = mesh.size.GetZ()/2;
-        rlSetTexture(ground.id); rlBegin(RL_QUADS); rlColor4ub(125,145,160,255); rlNormal3f(0,1,0);
-        rlTexCoord2f(0,0); rlVertex3f(-hx,-.04f,-hz); rlTexCoord2f(0,float(tiles[1])); rlVertex3f(-hx,-.04f,hz);
-        rlTexCoord2f(float(tiles[0]),float(tiles[1])); rlVertex3f(hx,-.04f,hz); rlTexCoord2f(float(tiles[0]),0); rlVertex3f(hx,-.04f,-hz); rlEnd(); rlSetTexture(0);
-        for (const auto& t : triangles) {
-            const auto texture = image(t.texture); if (t.decal && !texture.id) continue;
-            const Vec3 normal = (t.points[1]-t.points[0]).Cross(t.points[2]-t.points[0]).NormalizedOr(Vec3::sAxisY());
-            const float shade = .6f+.4f*std::max(0.f,normal.Dot(Vec3(.4f,.8f,.3f).Normalized()));
-            const Color color = ColorBrightness(texture.id ? WHITE : Color{197,204,211,255},shade-1);
-            rlSetTexture(texture.id); rlBegin(RL_TRIANGLES); rlColor4ub(color.r,color.g,color.b,255); rlNormal3f(normal.GetX(),normal.GetY(),normal.GetZ());
-            for (int i = 0; i<3; ++i) { rlTexCoord2f(t.uv[i][0],t.uv[i][1]); rlVertex3f(t.points[i].GetX(),t.points[i].GetY(),t.points[i].GetZ()); }
-            rlEnd(); rlSetTexture(0);
-        }
-        EndShaderMode();
+        BeginTextureMode(preview); ClearBackground({18,28,45,255}); BeginMode3D(camera);
+        const float hx = mesh.size.GetX()/2, hz = mesh.size.GetZ()/2;
+        DrawPlane({0,-.04f,0},{mesh.size.GetX(),mesh.size.GetZ()},{66,82,92,255});
+        if (preview_valid) renderer.draw(camera,preview_daylight,preview_lighting,preview_graphics);
         rlDisableDepthTest(); rlDisableDepthMask();
         for (int x = 0; x<=tiles[0]; ++x) DrawLine3D({-hx+x*BuildingMesh::tile_size,.015f,-hz},{-hx+x*BuildingMesh::tile_size,.015f,hz},accent);
         for (int z = 0; z<=tiles[1]; ++z) DrawLine3D({-hx,.015f,-hz+z*BuildingMesh::tile_size},{hx,.015f,-hz+z*BuildingMesh::tile_size},accent);
         rlEnableDepthMask(); rlEnableDepthTest();
-        if (tab==0 || tab==2) {
-            if (mode==2 || tab==2) for (const auto& t : triangles) if (!t.decal && (tab==2 ? decal>=0 && t.face==mesh.decals[decal].face : std::find(selected[2].begin(),selected[2].end(),t.face)!=selected[2].end())) {
+        {
+            if (mode==2 && tab!=2) for (const auto& t : triangles) if (!t.decal && std::find(selected[2].begin(),selected[2].end(),t.face)!=selected[2].end()) {
                 const auto offset = (t.points[1]-t.points[0]).Cross(t.points[2]-t.points[0]).NormalizedOr(Vec3::sAxisY())*.025f;
                 DrawTriangle3D(vector(t.points[0]+offset),vector(t.points[1]+offset),vector(t.points[2]+offset),{255,161,0,90});
             }
@@ -603,6 +655,23 @@ void main() {
             for (int i = 0; i<int(edges.size()); ++i) DrawLine3D(vector(points[edges[i][0]]),vector(points[edges[i][1]]),mode==1 && std::find(selected[1].begin(),selected[1].end(),i)!=selected[1].end() ? ORANGE : accent);
             if (tab==0 && mode==0) for (int i = 0; i<int(points.size()); ++i) DrawSphere(vector(points[i]),camera.fovy*.007f,std::find(vertices.begin(),vertices.end(),i)!=vertices.end() ? ORANGE : ink);
             if (xray) { rlEnableDepthMask(); rlEnableDepthTest(); }
+        }
+        if (tab==2 && decal>=0) {
+            std::map<std::array<std::array<int,3>,2>,std::array<Vec3,2>> outline; Vec3 normal = Vec3::sAxisY();
+            const auto endpoint = [](Vec3 p) { return std::array<int,3>{int(std::lround(p.GetX()*10000)),int(std::lround(p.GetY()*10000)),int(std::lround(p.GetZ()*10000))}; };
+            for (const auto& t : triangles) if (t.decal_index==decal) {
+                normal = (t.points[1]-t.points[0]).Cross(t.points[2]-t.points[0]).NormalizedOr(normal);
+                for (int i = 0; i<3; ++i) {
+                    const std::array<Vec3,2> edge{t.points[i],t.points[(i+1)%3]};
+                    std::array<std::array<int,3>,2> key{endpoint(edge[0]),endpoint(edge[1])}; if (key[1]<key[0]) std::swap(key[0],key[1]);
+                    const auto added = outline.emplace(key,edge); if (!added.second) outline.erase(added.first);
+                }
+            }
+            const Color color = decal_grab && !decal_move_valid ? RED : YELLOW;
+            rlDrawRenderBatchActive(); rlSetLineWidth(3);
+            for (const auto& item : outline) DrawLine3D(vector(item.second[0]+normal*.01f),vector(item.second[1]+normal*.01f),color);
+            rlDrawRenderBatchActive(); rlSetLineWidth(1);
+            Vec3 center; if (mesh.decal_center(decal,center)) DrawSphere(vector(center+normal*.025f),camera.fovy/view.height*2.5f,color);
         }
         if (slice) {
             rlDisableDepthTest(); rlDisableDepthMask();
@@ -625,9 +694,19 @@ void main() {
         EndMode3D(); EndTextureMode();
         BeginDrawing(); ui::draw_desktop(); ui::draw_window(window,"Building Creator"); ui::draw_window_close(window);
         DrawTextureRec(preview.texture,{0,0,float(preview.texture.width),-float(preview.texture.height)},{view.x,view.y},WHITE); DrawRectangleLinesEx(view,1,border);
-        if (tab==0 && !slice && !vertices.empty()) { BeginScissorMode(int(view.x),int(view.y),int(view.width),int(view.height)); mesh_gizmo(pivot,camera,view,GetMousePosition(),true,grab ? handle : -1); EndScissorMode(); }
+        if ((tab==0 || tab==3) && !slice && !vertices.empty()) { BeginScissorMode(int(view.x),int(view.y),int(view.width),int(view.height)); mesh_gizmo(pivot,camera,view,GetMousePosition(),true,grab ? handle : -1); EndScissorMode(); }
         text(std::to_string(tiles[0])+" x "+std::to_string(tiles[1])+" tiles",view.x+10,view.y+10,16,accent);
-        text(slice ? "Slice preview / drag the position slider" : "Drag handles / Shift: select more / G: move",view.x+10,view.y+view.height-28,15,accent);
+        const auto& stats = renderer.stats();
+        text(TextFormat("%zu meshes / %zu triangles / %.2f MiB GPU",stats.meshes,stats.emitted_triangles,
+            double(stats.gpu_geometry_bytes+stats.gpu_texture_bytes)/(1024*1024)),view.x+10,view.y+32,14,accent);
+        if (!preview_valid) text("Preview unavailable: undo or reduce the texture/geometry budget.",view.x+10,view.y+58,14,ORANGE);
+        if (tab==2 && decal>=0) {
+            DrawRectangle(int(view.x+8),int(view.y+56),int(view.width-16),25,background);
+            text(fit("Selected decal "+std::to_string(decal+1)+" / "+std::to_string(mesh.decals.size())+" : "+mesh.decals[decal].texture,14,view.width-32),view.x+16,view.y+61,14,YELLOW);
+        }
+        const char* hint = slice ? "Slice preview / drag the position slider" : tab==2 ? decal_grab ? !decal_move_valid ? "Off wall / move back onto a wall / Esc: cancel" : keyboard_grab ? "Move preview / Click: confirm / Esc: cancel" : "Dragging decal / Release: confirm / Esc: cancel" : place_decal ? "Click walls to place / Esc: finish" : "Click / drag a decal / G: move / Esc: cancel" : tab==1 || tab==4 ? "Click faces / Shift: select more" : "Drag handles / Shift: select more / G: move";
+        text(hint,view.x+10,view.y+view.height-28,15,accent);
+        SetMouseCursor(in_view && tab==2 && (place_decal || decal_grab) ? MOUSE_CURSOR_CROSSHAIR : MOUSE_CURSOR_DEFAULT);
         text("Right drag: orbit / Wheel: zoom",view.x,view.y+view.height+10,16);
         const auto control = [&](Rectangle r,const std::string& label,bool chosen=false,bool enabled=true) { return button(r,label,chosen,enabled,can_edit && !grab,16); };
         text("Name",20,88,17); const Rectangle name_box{84,80,310,44};
@@ -652,8 +731,43 @@ void main() {
         };
         stepper("Tiles X",width,158,1); stepper("Tiles Z",depth,194,2);
         if (resized) { auto next = mesh; if (next.set_footprint(width,depth,status,true)) commit(std::move(next)); }
-        const char* tabs[] = {"Mesh","Texture","Decals"}; const Rectangle tab_boxes[] = {{20,244,82,30},{108,244,108,30},{222,244,90,30}};
-        for (int i = 0; i<3; ++i) if (control(tab_boxes[i],tabs[i],tab==i)) { tab = i; scroll = 0; field = -1; slice = false; if (i==1) decal_texture = false; }
+        const char* tabs[] = {"Mesh","Parts","Texture","UV","Decals"}; const int tab_ids[] = {0,3,1,4,2};
+        const float tab_widths[] = {62,70,90,48,84}; float tab_x = 20;
+        for (int i = 0; i<5; ++i) {
+            if (button({tab_x,244,tab_widths[i],30},tabs[i],tab==tab_ids[i],true,can_edit && !grab,13)) {
+                tab = tab_ids[i]; scroll = 0; tool_scroll = 0; field = -1; slice = false; if (tab==1) decal_texture = false;
+                place_decal = move_decal = false;
+                if (tab==3) { mode = 0; selected[0] = mesh.part_vertices(part); }
+                if (tab==1 || tab==4) mode = 2;
+            }
+            tab_x += tab_widths[i]+4;
+        }
+        const Rectangle tools_area{18,284,378,height-440};
+        const auto box = [&](float x,float y,float w,float h) { return Rectangle{x,y-tool_scroll,w,h}; };
+        const auto choose = [&](float x,float y,float w,const std::string& label,bool chosen=false,bool enabled=true) { return control(box(x,y,w,28),label,chosen,enabled) && hit(tools_area); };
+        const auto number = [&](const char* label,float& value,float y,int id,float lo,float hi) {
+            const float old = value;
+            text(label,20,y+5-tool_scroll,15); const auto r = box(150,y,236,28);
+            if (!grab && click && hit(r) && hit(tools_area)) { field = id; buffer = TextFormat("%.3f",value); }
+            if (field==id) {
+                input(buffer,r);
+                if (IsKeyPressed(KEY_ENTER) || (click && !hit(r))) {
+                    try { std::size_t used; const float n = std::stof(buffer,&used); if (used!=buffer.size() || !std::isfinite(n) || n<lo || n>hi) throw std::out_of_range("number"); value = n; }
+                    catch (const std::exception&) { status = TextFormat("Enter a number from %.2f to %.2f.",lo,hi); }
+                    field = -1;
+                }
+            } else { DrawRectangleLinesEx(r,1,border); text(TextFormat("%.3f",value),r.x+10,r.y+5,16); }
+            return value!=old;
+        };
+        const auto scroll_tools = [&](float content_height) {
+            tool_scroll = std::clamp(tool_scroll-(can_edit && !grab && hit(tools_area) ? GetMouseWheelMove()*32 : 0),0.f,std::max(0.f,content_height-tools_area.height));
+            BeginScissorMode(int(tools_area.x),int(tools_area.y),int(tools_area.width),int(tools_area.height));
+            if (content_height>tools_area.height) {
+                const float thumb = tools_area.height*tools_area.height/content_height;
+                DrawRectangleRec({tools_area.x+tools_area.width-4,tools_area.y,4,tools_area.height},ColorAlpha(border,.3f));
+                DrawRectangleRec({tools_area.x+tools_area.width-4,tools_area.y+tool_scroll/content_height*tools_area.height,4,thumb},accent);
+            }
+        };
         BuildingMesh next = mesh; bool changed = false;
         const bool keys = can_edit && !grab && field<0 && !ctrl;
         if (tab==0) {
@@ -708,31 +822,148 @@ void main() {
                     if (changed) selected = {};
                 }
             }
+        } else if (tab==3) {
+            scroll_tools(part_page==0 ? 392.f : 530.f);
+            if (choose(20,288,180,"Add shape",part_page==0)) part_page = 0;
+            if (choose(210,288,180,"Transform part",part_page==1)) part_page = 1;
+            if (part_page==0) {
+                const char* shapes[] = {"Box","Wedge","Gable","Hip"};
+                for (int i = 0; i<4; ++i) if (choose(20+i*94.f,326,88,shapes[i],shape==i)) shape = i;
+                float dx=shape_dimensions.GetX(),dy=shape_dimensions.GetY(),dz=shape_dimensions.GetZ();
+                number("Width m",dx,366,10,.1f,1433.6f); number("Height m",dy,402,11,.1f,120); number("Depth m",dz,438,12,.1f,1433.6f);
+                shape_dimensions = Vec3(dx,dy,dz);
+                float px=shape_position.GetX(),py=shape_position.GetY(),pz=shape_position.GetZ();
+                number("Base X m",px,478,13,-716.8f,716.8f); number("Base Y m",py,514,14,0,120); number("Base Z m",pz,550,15,-716.8f,716.8f);
+                shape_position = Vec3(px,py,pz);
+                if (choose(20,590,180,"Add free shape")) {
+                    const int added = next.add_shape(static_cast<BuildingShape>(shape),shape_dimensions,shape_position,status);
+                    if (added>=0) { part = added; mode = 0; selected = {}; selected[0] = next.part_vertices(part); changed = true; }
+                }
+                if (choose(210,590,180,"Attach to face",false,selected[2].size()==1)) {
+                    const int face = selected[2].front(); changed = next.attach_shape(face,static_cast<BuildingShape>(shape),shape_dimensions.GetY(),status);
+                    if (changed) { part = next.faces[face].part; selected[0] = next.part_vertices(part); mode = 0; }
+                }
+                text("Attach uses the face outline and Height.",20,632-tool_scroll,14);
+                text("Increase footprint before adding outside it.",20,655-tool_scroll,14);
+            } else {
+                std::set<int> parts; for (const auto& face : mesh.faces) parts.insert(face.part);
+                if (choose(20,326,370,"Part "+std::to_string(part)+" / click a shape")) {
+                    auto it = parts.upper_bound(part); if (it==parts.end()) it = parts.begin();
+                    if (it!=parts.end()) { part = *it; mode = 0; selected = {}; selected[0] = mesh.part_vertices(part); }
+                }
+                float tx=part_translation.GetX(),ty=part_translation.GetY(),tz=part_translation.GetZ();
+                number("Move X m",tx,366,20,-1433.6f,1433.6f); number("Move Y m",ty,402,21,-120,120); number("Move Z m",tz,438,22,-1433.6f,1433.6f);
+                part_translation = Vec3(tx,ty,tz); float rx=part_rotation.GetX(),ry=part_rotation.GetY(),rz=part_rotation.GetZ();
+                number("Rotate X deg",rx,478,23,-360,360); number("Rotate Y deg",ry,514,24,-360,360); number("Rotate Z deg",rz,550,25,-360,360);
+                part_rotation = Vec3(rx,ry,rz); float sx=part_scale.GetX(),sy=part_scale.GetY(),sz=part_scale.GetZ();
+                number("Scale X",sx,590,26,.01f,100); number("Scale Y",sy,626,27,.01f,100); number("Scale Z",sz,662,28,.01f,100);
+                part_scale = Vec3(sx,sy,sz);
+                if (choose(20,704,180,"Apply transform")) changed = next.transform_part(part,part_translation,part_rotation,part_scale,status);
+                if (choose(210,704,180,"Duplicate")) {
+                    const int added = next.duplicate_part(part,part_translation,status);
+                    if (added>=0) { part = added; selected = {}; selected[0] = next.part_vertices(part); mode = 0; changed = true; }
+                }
+                if (choose(20,742,180,"Delete part")) { changed = next.remove_part(part,status); if (changed) selected = {}; }
+                if (choose(210,742,180,"Bake / clean")) { next = next.baked(); changed = true; selected = {}; }
+                text("G / handles move the selected part.",20,786-tool_scroll,14);
+            }
+            EndScissorMode();
+            if (tool_scroll>0 || tools_area.height<536) text("Scroll for more part controls",20,height-147,13,accent);
+        } else if (tab==4) {
+            scroll_tools(432);
+            if (choose(20,288,180,"Selected faces",!uv_all)) uv_all = false;
+            if (choose(210,288,180,"All faces",uv_all)) uv_all = true;
+            auto faces = selected[2]; if (uv_all) { faces.clear(); for (int i=0;i<int(next.faces.size());++i) faces.push_back(i); }
+            if (!faces.empty()) {
+                const auto& source = mesh.faces[faces.back()]; auto projection = source.projection;
+                auto offset = source.offset, scale = source.scale; float density = source.meters_per_repeat, rotation = source.rotation;
+                bool update = false;
+                const char* projections[] = {"Original","Planar","Box"};
+                for (int i=0;i<3;++i) if (choose(20+i*126.f,326,118,projections[i],int(projection)==i)) { projection = BuildingProjection(i); update = true; }
+                update |= number("Metres/tile",density,366,30,.01f,1000000);
+                update |= number("Offset U",offset[0],402,31,-1000000,1000000);
+                update |= number("Offset V",offset[1],438,32,-1000000,1000000);
+                update |= number("Scale U",scale[0],478,33,.0001f,10000);
+                update |= number("Scale V",scale[1],514,34,.0001f,10000);
+                update |= number("Rotate deg",rotation,550,35,-360,360);
+                if (choose(20,590,180,"Re-project")) update = true;
+                if (choose(210,590,180,"Reset UV tweaks")) { offset = {0,0}; scale = {1,1}; rotation = 0; update = true; }
+                if (update) changed = next.set_uv(faces,projection,density,offset,scale,rotation,status);
+                text(std::to_string(faces.size())+" faces / Enter applies each value",20,632-tool_scroll,14);
+                text("Projection follows geometry; tweaks are kept.",20,655-tool_scroll,14);
+                text("Re-project captures a new planar frame.",20,678-tool_scroll,14);
+            } else text("Click faces in the preview, or choose All faces.",20,366-tool_scroll,14);
+            EndScissorMode();
+            text("Scroll for UV controls",20,height-147,13,accent);
         } else if (tab==1) {
-            if (control({20,288,180,30},"No texture",mesh.texture.empty(),!decal_texture)) { next.texture.clear(); changed = true; }
-            if (control({210,288,180,30},"Refresh folder")) { for (const auto& entry : images) if (entry.second.id) UnloadTexture(entry.second); images.clear(); textures = building_textures(building_texture_directory(),status); scroll = 0; }
-            const Rectangle list{20,330,370,height-484}; const int rows = std::max(1,int(list.height/36));
+            if (control({20,288,180,30},"Whole building",!texture_selection,!decal_texture)) texture_selection = false;
+            if (control({210,288,180,30},"Selected faces",texture_selection,!decal_texture && !selected[2].empty())) texture_selection = true;
+            if (control({20,324,180,30},"Use default",false,!decal_texture)) {
+                if (texture_selection) changed = next.set_face_material(selected[2],-1,status);
+                else { next.texture.clear(); changed = true; }
+            }
+            if (control({210,324,180,30},"Refresh folder")) { textures = building_textures(building_texture_directory(),status); scroll = 0; preview_dirty = true; }
+            if (control({20,360,370,30},"Auto tile / 2 metres per repeat",false,!decal_texture)) {
+                auto faces = selected[2]; if (!texture_selection) { faces.clear(); for (int i=0;i<int(next.faces.size());++i) faces.push_back(i); }
+                changed = next.set_uv(faces,BuildingProjection::Box,2,{0,0},{1,1},0,status);
+            }
+            const Rectangle list{20,402,370,height-556}; const int rows = std::max(1,int(list.height/36));
             if (can_edit && hit(list)) scroll -= int(GetMouseWheelMove());
             scroll = std::clamp(scroll,0,std::max(0,int(textures.size())-rows));
-            if (textures.empty()) text("Add images to assets/textures",20,340,16);
+            if (textures.empty()) text("Add images to assets/textures",20,412,16);
             for (int row = 0; row<rows && scroll+row<int(textures.size()); ++row) {
-                const auto& name = textures[scroll+row]; const Rectangle r{20,330+row*36.f,370,32}; const auto thumb = image(name);
-                if (control(r,"      "+fit(name,16,296),decal_texture && decal>=0 ? mesh.decals[decal].texture==name : mesh.texture==name)) {
-                    if (thumb.id) { if (decal_texture && decal>=0) next.decals[decal].texture = name; else next.texture = name; changed = true; }
-                    else status = "Could not load "+name;
+                const auto& name = textures[scroll+row]; const Rectangle r{20,402+row*36.f,370,32};
+                const bool chosen = decal_texture ? (decal>=0 ? mesh.decals[decal].texture : decal_brush)==name : texture_selection && !selected[2].empty()
+                    ? mesh.faces[selected[2].back()].material>=0 && mesh.materials[mesh.faces[selected[2].back()].material]==name : mesh.texture==name;
+                if (control(r,"      "+fit(name,16,296),chosen)) {
+                    if (decal_texture) { decal_brush = name; if (decal>=0) { next.decals[decal].texture = name; changed = true; } tab = 2; tool_scroll = 0; }
+                    else if (texture_selection) { const int material = next.add_material(name,status); if (material>=0) changed = next.set_face_material(selected[2],material,status); }
+                    else { next.texture = name; changed = true; }
                 }
-                if (thumb.id) DrawTexturePro(thumb,{0,0,float(thumb.width),float(thumb.height)},{r.x+4,r.y+2,28,28},{0,0},0,WHITE);
+                renderer.thumbnail(name,{r.x+4,r.y+2,28,28});
             }
         } else if (tab==2) {
-            if (control({20,288,180,28},"+ Add decal",false,!textures.empty() && mesh.decals.size()<64)) { next.decals.push_back({selected[2].empty() ? 0 : selected[2].back(),textures.front()}); decal = int(next.decals.size())-1; changed = true; }
-            if (control({210,288,180,28},"Remove decal",false,decal>=0)) { next.decals.erase(next.decals.begin()+decal); decal = next.decals.empty() ? -1 : std::min(decal,int(next.decals.size())-1); changed = true; }
+            scroll_tools(decal>=0 ? 530.f : 252.f);
+            if (decal_brush.empty() && !textures.empty()) {
+                const auto window = std::find_if(textures.begin(),textures.end(),[](const auto& name){return name.find("window")==0;});
+                decal_brush = window==textures.end() ? textures.front() : *window;
+            }
+            if (choose(20,288,370,"Texture: "+fit(decal_brush.empty() ? "Choose image" : decal_brush,16,260))) {
+                tab = 1; decal_texture = true; scroll = int(std::find(textures.begin(),textures.end(),decal_brush)-textures.begin());
+            }
+            if (choose(20,326,180,place_decal ? "Finish placing" : "Place on wall",place_decal,!decal_brush.empty() && mesh.decals.size()<64)) { place_decal = !place_decal; move_decal = false; }
+            if (choose(210,326,180,"Move (G)",decal_grab || move_decal,decal>=0)) { move_decal = true; place_decal = false; }
+            number("New width m",decal_width,366,40,.05f,120);
+            number("New height m",decal_height,402,41,.05f,120);
             if (decal>=0) {
-                if (control({20,324,370,28},"Decal "+std::to_string(decal+1)+" / "+std::to_string(next.decals.size()))) decal = (decal+1)%int(next.decals.size());
-                auto& d = next.decals[decal]; text("Face "+std::to_string(d.face)+": click preview to change",20,360,14);
-                if (control({20,382,370,28},"Texture: "+fit(d.texture,16,260))) { tab = 1; decal_texture = true; scroll = 0; }
-                const auto uv = [&](const char* label,float& value,float lo,float hi,float y,int id) { text(label,20,y-2,14); changed |= mesh_slider({150,y,236,10},value,lo,hi,id,slider_drag,can_edit); };
-                uv("Left",d.u,0,1-d.width,421,1); uv("Top",d.v,0,1-d.height,436,2); uv("Width",d.width,.01f,1-d.u,451,3); uv("Height",d.height,.01f,1-d.v,466,4);
-            } else text("Add a texture overlay, then click its face.",20,338,14);
+                if (choose(20,440,370,"Decal "+std::to_string(decal+1)+" / "+std::to_string(next.decals.size())+" (click to cycle)")) { decal = (decal+1)%int(next.decals.size()); decal_brush = next.decals[decal].texture; field = -1; }
+                auto& d = next.decals[decal];
+                float width_m = d.width*d.meters[0], height_m = d.height*d.meters[1];
+                const float center_u = d.u+d.width/2, center_v = d.v+d.height/2;
+                const bool width_changed = number(d.projected ? "Width m" : "Width (UV)",width_m,478,42,d.projected ? .05f : .01f,d.projected ? 120.f : 1.f), height_changed = number(d.projected ? "Height m" : "Height (UV)",height_m,514,43,d.projected ? .05f : .01f,d.projected ? 120.f : 1.f);
+                if (width_changed || height_changed) { d.width = width_m/d.meters[0]; d.height = height_m/d.meters[1]; d.u = center_u-d.width/2; d.v = center_v-d.height/2; changed = true; }
+                changed |= number("Rotate deg",d.rotation,550,44,-360,360);
+                if (choose(20,590,180,"Duplicate",false,next.decals.size()<64)) {
+                    const int added = next.duplicate_decal(decal,{0,0},status);
+                    if (added>=0) {
+                        grab = mesh; grab_decal = decal; mesh = next; decal = added; decal_grab = keyboard_grab = true; grab_start = {}; decal_move_valid = false; changed = false;
+                        decal_has_moved = true; decal_grab_start = GetMousePosition();
+                        preview_dirty = true; place_decal = move_decal = false; status = "Place duplicate / Click: confirm / Esc: cancel";
+                    }
+                }
+                if (choose(210,590,180,"Remove")) { next.decals.erase(next.decals.begin()+decal); decal = next.decals.empty() ? -1 : std::min(decal,int(next.decals.size())-1); changed = true; }
+                number("Repeat count",repeat_count,632,45,1,64);
+                number("Spacing m",repeat_spacing,668,46,.01f,120);
+                if (choose(20,706,180,"Horizontal",!repeat_vertical)) repeat_vertical = false;
+                if (choose(210,706,180,"Vertical",repeat_vertical)) repeat_vertical = true;
+                if (choose(20,744,370,"Repeat along wall",false,decal>=0)) changed = next.repeat_decal(decal,int(std::round(repeat_count)),repeat_spacing,repeat_vertical,status);
+                text("Count includes source / centres stay on wall.",20,786-tool_scroll,14);
+            } else {
+                text("Pick a texture, Place, then click a wall.",20,444-tool_scroll,14);
+                text("Decals snap to the wall and clip at its edges.",20,467-tool_scroll,14);
+            }
+            EndScissorMode();
+            text("Scroll for size, rotation and repeats",20,height-147,13,accent);
         }
         if (changed) commit(std::move(next));
         if (control({20,height-122,180,36},"Save building",true) || command==MenuCommand::SaveBuilding || (can_edit && !grab && ctrl && IsKeyPressed(KEY_S))) {
@@ -747,13 +978,13 @@ void main() {
         if (use && save_design()) { result = mesh; break; }
         if (command==MenuCommand::SavedBuildings) {
             const auto loaded=saved_picker([&]{return saved_buildings(directory,status);},"Saved buildings","Open building",mesh.name,status,directory);
-            if (loaded && leave()) { mesh=*loaded; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={}; tab=0; slice=false; }
+            if (loaded && leave()) { mesh=*loaded; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={}; tab=0; slice=false; preview_dirty=true; }
             interactive=false; field=slider_drag=-1;
         }
     }
+    SetMouseCursor(MOUSE_CURSOR_DEFAULT);
     if (preview.id) UnloadRenderTexture(preview);
-    for (const auto& entry : images) if (entry.second.id) UnloadTexture(entry.second);
-    UnloadShader(shader); return result;
+    return result;
 }
 
 std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::path& directory,const std::string& screenshot,std::vector<CarDesign>* saved_designs) {
@@ -1078,12 +1309,13 @@ void settings_menu(ControllerMapping& controls,GraphicsSettings& graphics,const 
     MenuBar menu(MenuMode::Cities); GraphicsPanel panel;
     if (initial_settings==MenuCommand::Graphics) panel.open(graphics);
     if (initial_settings==MenuCommand::Controllers) menu.show(initial_settings);
-    std::string status; bool interactive=false; int frames=0;
+    std::string status; bool interactive=false; int frames=0, selected=0;
     while (true) {
         if (WindowShouldClose()) {
             if (menu.save_pending(controls,root/"controller-mappings.ini")) break;
             status="Cannot save controller mappings; retry Save & close.";
         }
+        const bool dialog_was_open = panel.visible() || menu.blocking();
         if (interactive && menu.dialog_open()) menu.update(controls,root/"controller-mappings.ini",true,read_controllers());
         if (panel.visible() && interactive && !menu.blocking()) {
             const auto action=panel.update();
@@ -1093,21 +1325,30 @@ void settings_menu(ControllerMapping& controls,GraphicsSettings& graphics,const 
                 SetTargetFPS(graphics.fps_limit);
             } else if (action==GraphicsPanelAction::Cancel) panel.close();
         }
-        const bool active=interactive && !panel.visible() && !menu.blocking();
+        const bool active=interactive && !dialog_was_open && !panel.visible() && !menu.blocking();
+        if (active) {
+            const int direction = int(IsKeyPressed(KEY_DOWN))-int(IsKeyPressed(KEY_UP));
+            if (direction) selected=(selected+direction+3)%3;
+            if (IsKeyPressed(KEY_TAB)) selected=(selected+(IsKeyDown(KEY_LEFT_SHIFT)||IsKeyDown(KEY_RIGHT_SHIFT) ? 2 : 1))%3;
+        }
         BeginDrawing(); ui::draw_desktop();
         const Rectangle r{(GetScreenWidth()-600)/2.f,(GetScreenHeight()-320)/2.f,600,320};
         ui::draw_window(r,"Settings"); ui::draw_window_close(r);
-        const bool open_graphics=button({r.x+24,r.y+76,552,46},"Graphics",false,true,active);
-        const bool open_controls=button({r.x+24,r.y+146,552,46},"Controller mapping",false,true,active);
-        const bool close=close_clicked(r,active) || button({r.x+24,r.y+230,552,40},"Back",false,true,active) || (active && IsKeyPressed(KEY_ESCAPE));
+        const bool enter=active && IsKeyPressed(KEY_ENTER);
+        const bool open_graphics=button({r.x+24,r.y+76,552,46},"Graphics",selected==0,true,active) || (enter && selected==0);
+        const bool open_controls=button({r.x+24,r.y+146,552,46},"Controller mapping",selected==1,true,active) || (enter && selected==1);
+        text("Presets, shadows, draw distance and performance",r.x+30,r.y+125,14);
+        text("Keyboard, gamepad bindings and stick deadzone",r.x+30,r.y+195,14);
+        const bool close=close_clicked(r,active) || button({r.x+24,r.y+230,552,40},"Back",selected==2,true,active) || (active && (IsKeyPressed(KEY_ESCAPE) || (enter && selected==2)));
         text(status,r.x+24,r.y+280,16,accent);
         if (panel.visible()) panel.draw(float(GetFPS()),status);
         if (menu.dialog_open()) menu.draw(controls,root/"controller-mappings.ini");
         EndDrawing(); interactive=true;
         if (!screenshot.empty() && ++frames>=3) {auto image=LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); break;}
+        if (initial_settings!=MenuCommand::None && dialog_was_open && !panel.visible() && !menu.blocking()) break;
         if (close) break;
-        if (open_graphics) {panel.open(graphics); interactive=false;}
-        if (open_controls) {menu.show(MenuCommand::Controllers); interactive=false;}
+        if (open_graphics) {selected=0; panel.open(graphics); interactive=false;}
+        if (open_controls) {selected=1; menu.show(MenuCommand::Controllers); interactive=false;}
     }
     menu.save_pending(controls,root/"controller-mappings.ini");
 }
@@ -1210,6 +1451,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
     Vec3 brush_point = Vec3::sZero(), last_brush = Vec3::sZero();
     std::unique_ptr<Environment> preview_environment;
     std::unique_ptr<EnvironmentRenderer> preview_renderer;
+    std::string preview_error;
     std::unique_ptr<City> elevation_preview;
     CityCell elevation_anchor{}, elevation_hover{};
     int elevation_revision = -1, elevation_preview_delta = 0;
@@ -1239,6 +1481,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         selected_building = selected_vehicle = -1;
     };
     const auto finish = [&](EditorResult result) {
+        if (result==EditorResult::Play && !preview_error.empty()) { status = preview_error; return false; }
         if (result==EditorResult::Play && !character_renderer.available(city,status)) return false;
         if (dirty && !save(city,directory,status,dirty)) return false;
         return true;
@@ -1271,7 +1514,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         if (dirty && !painting && save_time>1) { save(city,directory,status,dirty); save_time = -4; }
         MenuState menu_state;
         std::string character_error;
-        menu_state.undo = !undo.empty(); menu_state.redo = !redo.empty(); menu_state.play = character_renderer.available(city,character_error);
+        menu_state.undo = !undo.empty(); menu_state.redo = !redo.empty(); menu_state.play = preview_error.empty() && character_renderer.available(city,character_error);
         menu_state.selection = selected_building>=0 || selected_vehicle>=0;
         menu_state.building_selection = selected_building>=0;
         menu_state.car_selection = selected_vehicle>=0 && city.vehicles[selected_vehicle].kind==CityVehicleKind::Car;
@@ -1436,12 +1679,16 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         }
         // ponytail: reuse the gameplay renderer at most 4 times/sec while painting; incremental meshes can serve larger forests.
         if (preview_revision != revision && (!painting || preview_time >= .25f || !preview_renderer)) {
-            preview_renderer.reset(); preview_environment = std::make_unique<Environment>(city);
-            preview_renderer = std::make_unique<EnvironmentRenderer>(*preview_environment);
+            preview_renderer.reset(); preview_environment.reset(); preview_error.clear();
+            try {
+                preview_environment = std::make_unique<Environment>(city);
+                preview_renderer = std::make_unique<EnvironmentRenderer>(*preview_environment);
+                if (!preview_renderer->building_warning().empty()) status = preview_renderer->building_warning();
+            } catch (const std::exception& error) { preview_error = error.what(); status = preview_error; }
             preview_revision = revision; preview_time = 0;
         }
         BeginDrawing(); ClearBackground(background); rlSetClipPlanes(.2,30000); BeginMode3D(camera);
-        preview_renderer->draw(camera,float(GetTime()),preview_day.lighting(),lighting,graphics);
+        if (preview_renderer) preview_renderer->draw(camera,float(GetTime()),preview_day.lighting(),lighting,graphics);
         car_renderer.set_lighting(lighting,camera,preview_day.lighting(),graphics);
         draw_city(city,grid,car_renderer,camera);
         if (city.spawn && city.player_character) {
@@ -1580,6 +1827,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
             painting=dragging=false; first_frame=true; continue;
         }
         if (builder_request>=0) {
+            preview_renderer.reset(); preview_revision = -1;
             if (edit_building) building_builder(city.buildings[selected_building].shape(),buildings_directory);
             else design_menu(DesignKind::Building,directory.parent_path());
             status="Building editor closed / refresh saved designs to update the map";

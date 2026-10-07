@@ -20,13 +20,13 @@ namespace ambaretto {
 bool GraphicsSettings::operator==(const GraphicsSettings& b) const {
     return shadows == b.shadows && soft_shadows == b.soft_shadows && shadow_distance == b.shadow_distance &&
         local_lights == b.local_lights && view_distance == b.view_distance && brightness == b.brightness &&
-        vsync == b.vsync && fps_limit == b.fps_limit;
+        vsync == b.vsync && fps_limit == b.fps_limit && msaa == b.msaa;
 }
 void GraphicsSettings::apply_preset(GraphicsPreset value) {
     if (value == GraphicsPreset::Custom) return;
     *this = GraphicsSettings{};
     if (value == GraphicsPreset::Low) {
-        shadows = 0; local_lights = false; view_distance = 1000; vsync = false;
+        shadows = 0; local_lights = false; view_distance = 1000; vsync = false; msaa = false;
     } else if (value == GraphicsPreset::High) {
         shadows = 3; shadow_distance = 180; view_distance = 4000;
     }
@@ -59,10 +59,10 @@ bool GraphicsSettings::load(const std::filesystem::path& path, std::string& erro
     error.clear();
     std::ifstream file(path);
     if (!file) { error = "Cannot open graphics settings"; return false; }
-    constexpr std::array<const char*, 9> keys{{"version", "shadows", "soft_shadows", "shadow_distance",
-        "local_lights", "view_distance", "brightness", "vsync", "fps_limit"}};
+    constexpr std::array<const char*, 10> keys{{"version", "shadows", "soft_shadows", "shadow_distance",
+        "local_lights", "view_distance", "brightness", "vsync", "fps_limit", "msaa"}};
     GraphicsSettings candidate;
-    std::array<bool, 9> seen{};
+    std::array<bool, 10> seen{};
     std::string line;
     int line_number = 0;
     while (std::getline(file, line)) {
@@ -87,11 +87,12 @@ bool GraphicsSettings::load(const std::filesystem::path& path, std::string& erro
             switch (id) {
                 case 0: ok = bool(row >> integer) && integer == 1; break;
                 case 1: ok = bool(row >> candidate.shadows); break;
-                case 2: case 4: case 7:
+                case 2: case 4: case 7: case 9:
                     ok = bool(row >> integer) && (integer == 0 || integer == 1);
                     if (id == 2) candidate.soft_shadows = integer == 1;
                     if (id == 4) candidate.local_lights = integer == 1;
                     if (id == 7) candidate.vsync = integer == 1;
+                    if (id == 9) candidate.msaa = integer == 1;
                     break;
                 case 3: ok = bool(row >> candidate.shadow_distance); break;
                 case 5: ok = bool(row >> candidate.view_distance); break;
@@ -118,10 +119,11 @@ bool GraphicsSettings::save(const std::filesystem::path& path, std::string& erro
     file << std::setprecision(std::numeric_limits<float>::max_digits10)
         << "; Ambaretto graphics. Shadow quality: 0=Off, 1=512, 2=1024, 3=2048.\n"
         << "; Distances are metres; brightness is 0.6-1.5; frame limit 0 is unlimited.\n"
+        << "; MSAA: 0=Off, 1=4x antialiasing; takes effect after restarting.\n"
         << "version=1\nshadows=" << shadows << "\nsoft_shadows=" << int(soft_shadows)
         << "\nshadow_distance=" << shadow_distance << "\nlocal_lights=" << int(local_lights)
         << "\nview_distance=" << view_distance << "\nbrightness=" << brightness
-        << "\nvsync=" << int(vsync) << "\nfps_limit=" << fps_limit << '\n';
+        << "\nvsync=" << int(vsync) << "\nfps_limit=" << fps_limit << "\nmsaa=" << int(msaa) << '\n';
     file.close();
     if (!file) { error = "Cannot finish saving graphics settings; previous file kept"; return false; }
 #ifdef _WIN32

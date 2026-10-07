@@ -15,6 +15,7 @@ struct GraphicsSettings {
     float brightness = 1;
     bool vsync = true;
     int fps_limit = 60;
+    bool msaa = true;
 
     bool operator==(const GraphicsSettings& other) const;
     bool operator!=(const GraphicsSettings& other) const { return !(*this == other); }

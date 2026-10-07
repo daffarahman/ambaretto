@@ -297,6 +297,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         text(status_.c_str(), r.x + 20, r.y + r.height - 106, 15, YELLOW);
         button(0, capturing_ ? "Listening..." : "Add binding"); button(1, "Remove binding"); button(2, "Defaults");
         button(3, TextFormat("Deadzone: %d%%", int(std::round(mapping.deadzone * 100)))); button(4, "Save & close");
+        text("Changes save automatically / Esc: close / Insert: add / Delete: remove",r.x+20,r.y+r.height-30,13,RAYWHITE);
     } else if (popup_ == MenuCommand::Controls) {
         text("Keyboard and gamepad defaults. Edit bindings in the main menu's Settings.", r.x + 20, r.y + 58, 16, RAYWHITE);
         constexpr const char* lines[] = {

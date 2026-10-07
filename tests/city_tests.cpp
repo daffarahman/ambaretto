@@ -175,11 +175,15 @@ void building_mesh_editing(const std::filesystem::path& directory) {
     require(world.cast_ray(top+Vec3(0,5,0),-Vec3::sAxisY(),10,hit) && (hit.point-top).Length()<.01f,
         "extruded/subdivided geometry and gameplay collision disagree");
     require(city.add_building({{62,62},1,12,cube},error,0) && city.save(directory,error),error.c_str());
-    std::ifstream file(city_path); std::ostringstream contents; contents << file.rdbuf(); file.close(); auto legacy = contents.str();
-    const auto payload = serialized(cube); const auto offset = legacy.find(payload);
-    require(offset!=std::string::npos,"missing embedded cube payload");
-    legacy.replace(offset,payload.size(),legacy_payload()); legacy.replace(0,16,"AMBARETTO_CITY 7");
-    std::ofstream(city_path) << legacy;
+    // Write the old layout explicitly: current cities include additional fields after v7.
+    std::ofstream legacy(city_path);
+    legacy << "AMBARETTO_CITY 7\n" << city.id << '\n' << std::quoted(city.name) << '\n';
+    for (auto tile : city.tiles) legacy << char('0'+int(tile));
+    legacy << "\n1\n62 62 1 12 1\n" << legacy_payload() << "0\n0 0 0\n" << city.start_minutes << "\n0\n";
+    for (auto axis : city.road_axes) legacy << char('0'+axis);
+    legacy << '\n'; for (auto ground : city.ground) legacy << char('0'+int(ground));
+    legacy << '\n'; for (auto height : city.elevation) legacy << char('0'+height);
+    legacy << '\n'; legacy.close();
     require(City::load(city_path,loaded,error) && serialized(*loaded.buildings[0].mesh)==serialized(cube),"version 7 city mesh did not migrate");
     BuildingMesh sliced; sliced.name = "Sliced roof";
     require(sliced.set_footprint(2,3,error) && sliced.footprint()==std::array<int,2>{2,3},"rectangular tile footprint did not update");

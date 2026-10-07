@@ -16,14 +16,14 @@ int main() {
     try {
         std::filesystem::create_directories(folder);
         GraphicsSettings settings;
-        require(settings.preset() == GraphicsPreset::Balanced && settings.shadow_resolution() == 1024, "default preset changed");
+        require(settings.preset() == GraphicsPreset::Balanced && settings.shadow_resolution() == 1024 && settings.msaa, "default preset changed");
         settings.apply_preset(GraphicsPreset::Low);
         require(settings.preset() == GraphicsPreset::Low && settings.shadows == 0 && !settings.local_lights &&
-            settings.view_distance == 1000 && !settings.vsync, "Low preset does not reduce GPU work");
+            settings.view_distance == 1000 && !settings.vsync && !settings.msaa, "Low preset does not reduce GPU work");
         settings.apply_preset(GraphicsPreset::High);
         require(settings.preset() == GraphicsPreset::High && settings.shadow_resolution() == 2048 &&
-            settings.shadow_distance == 180 && settings.view_distance == 4000, "High preset is incomplete");
-        settings.brightness = 1.23f; settings.fps_limit = 144; settings.view_distance = 100;
+            settings.shadow_distance == 180 && settings.view_distance == 4000 && settings.msaa, "High preset is incomplete");
+        settings.brightness = 1.23f; settings.fps_limit = 144; settings.view_distance = 100; settings.msaa = false;
         require(settings.preset() == GraphicsPreset::Custom, "individual edits did not become Custom");
         std::string error;
         require(settings.save(path, error), error.c_str());
@@ -36,12 +36,14 @@ int main() {
             "version=1\nlocal_lights=true\n", "version=1\nbrightness=nan\n", "version=1\nbrightness=0.59\n",
             "version=1\nview_distance=6001\n", "version=1\nview_distance=99\n", "version=1\nshadow_distance=29\n", "version=1\nfps_limit=59\n",
             "version=1\nunknown=1\n", "version=1\nshadows=1\nshadows=2\n", "shadows=1\nversion=1\n",
-            "version=1 extra\n", "version=1\nvsync=1 garbage\n", "; empty file\n"}) {
+            "version=1 extra\n", "version=1\nvsync=1 garbage\n", "version=1\nmsaa=2\n", "version=1\nmsaa=true\n",
+            "version=1\nmsaa=0\nmsaa=1\n", "; empty file\n"}) {
             std::ofstream(path) << invalid;
             require(!loaded.load(path, error) && !error.empty() && loaded == before, "invalid file changed working settings");
         }
         std::ofstream(path) << "\xEF\xBB\xBF; Partial file retains Balanced defaults\nversion = 1\n brightness = 1.2 # comment\n";
-        require(loaded.load(path, error) && loaded.brightness == 1.2f && loaded.shadows == 2, "partial settings or BOM/comments rejected");
+        require(loaded.load(path, error) && loaded.brightness == 1.2f && loaded.shadows == 2 && loaded.msaa,
+            "legacy partial settings or BOM/comments rejected");
         require(loaded.save(path, error), "cannot restore valid settings file");
         auto invalid = loaded; invalid.brightness = std::numeric_limits<float>::infinity();
         require(!invalid.save(path, error), "non-finite settings were saved");
@@ -79,10 +81,13 @@ int main() {
         input.mouse = {close.x+close.width/2,close.y+close.height/2}; input.pressed = true;
         require(panel.update(width,height,input)==GraphicsPanelAction::Cancel,"title-bar close button did not cancel graphics preview");
         input = {}; input.apply = true;
+        require(panel.update(width,height,input)==GraphicsPanelAction::Preview && panel.pending().shadows==3,"Enter on a setting saved instead of changing its value");
+        panel.open({}); input = {}; input.tab = -1; panel.update(width,height,input);
+        input = {}; input.apply = true;
         require(panel.update(width, height, input) == GraphicsPanelAction::Apply && panel.visible(), "Apply must remain open if saving fails");
         // Drag view distance beyond the right edge, release and cancel on focus loss.
-        const float row_height = std::min(42.f,(rect.height - 216) / 8), left_width = rect.width - 36;
-        const Vector2 slider{rect.x + 26 + (left_width - 16) / 2, rect.y + 108 + 4 * row_height + 26};
+        const float row_height = std::min(42.f,(rect.height - 252) / 9), left_width = rect.width - 36;
+        const Vector2 slider{rect.x + 18 + left_width - 144, rect.y + 108 + 4 * row_height + 13};
         input = {}; input.mouse = slider; input.pressed = input.down = true;
         require(panel.update(width, height, input) == GraphicsPanelAction::Preview, "mouse slider did not preview");
         const float middle = panel.pending().view_distance;
@@ -101,11 +106,25 @@ int main() {
         require(panel.pending().view_distance == 6000, "release retained stale slider drag");
         input = {}; input.horizontal = -1; input.fine = true; panel.update(width, height, input);
         require(panel.pending().view_distance == 5975, "fine adjustment did not use small distance step");
-        input = {}; input.mouse = {rect.x+26,slider.y}; input.pressed = input.down = true;
+        input = {}; input.mouse = {slider.x-60,slider.y}; input.pressed = input.down = true;
         panel.update(width,height,input);
         require(panel.pending().view_distance==100,"view-distance slider cannot select 100 m");
         input = {}; input.horizontal = -1; panel.update(width,height,input);
         require(panel.pending().view_distance==100,"view distance fell below the 100 m minimum");
+        input = {}; input.mouse = {rect.x + rect.width - 80, rect.y + 108 + 8 * row_height + 12}; input.pressed = true;
+        require(panel.update(width,height,input)==GraphicsPanelAction::Preview && !panel.pending().msaa,
+            "MSAA row did not toggle the restart setting");
+        input.pressed = false; input.scroll = 1;
+        require(panel.update(width,height,input)==GraphicsPanelAction::None && !panel.pending().msaa,"scrolling accidentally toggled MSAA");
+        GraphicsSettings low; low.apply_preset(GraphicsPreset::Low); panel.open(low);
+        input = {}; input.vertical = 1; panel.update(width,height,input); panel.update(width,height,input);
+        input = {}; input.apply = true;
+        require(panel.update(width,height,input)==GraphicsPanelAction::Preview && panel.pending().local_lights && panel.pending().shadows==0,
+            "keyboard did not skip disabled shadow settings");
+        panel.open({}); input = {}; input.tab = -1; panel.update(width,height,input);
+        input = {}; input.horizontal = -1; panel.update(width,height,input);
+        input = {}; input.apply = true;
+        require(panel.update(width,height,input)==GraphicsPanelAction::Cancel,"footer keyboard focus did not activate Cancel");
         panel.close();
         require(!panel.visible() && panel.update(width, height, input) == GraphicsPanelAction::None, "closed panel consumes input");
         std::filesystem::remove_all(folder);

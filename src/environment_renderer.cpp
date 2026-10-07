@@ -9,8 +9,10 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <map>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 namespace ambaretto {
@@ -388,11 +390,6 @@ void main() {
 })GLSL";
 }
 
-std::filesystem::path building_texture_directory() {
-    const std::filesystem::path source = "assets/textures";
-    std::error_code ec;
-    return std::filesystem::is_directory(source,ec) ? source : std::filesystem::path(GetApplicationDirectory())/source;
-}
 Texture2D load_building_texture(const std::string& filename) {
     if (filename.empty()) return {};
     Texture2D texture = load_terrain_texture(filename.c_str());
@@ -893,6 +890,15 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
 }
 
 void EnvironmentRenderer::load_city(const Environment& env) {
+    std::vector<BuildingTriangle> custom;
+    for (const auto& building : env.city()->buildings) if (building.mesh) {
+        auto triangles = building.triangles(env.city()->tile_height(building.cell));
+        if (triangles.size()>BuildingRenderer::geometry_budget/132-custom.size())
+            throw std::runtime_error("Building source geometry exceeds the 8 MiB GPU budget.");
+        custom.insert(custom.end(),std::make_move_iterator(triangles.begin()),std::make_move_iterator(triangles.end()));
+    }
+    std::string building_error;
+    if (!custom_buildings_.build(custom,building_error)) throw std::runtime_error(building_error);
     MeshBuilder ground, grass, sand, roads, buildings, markings, water;
     const City& city = *env.city();
     std::map<std::string,MeshBuilder> painted;
@@ -1033,25 +1039,6 @@ void EnvironmentRenderer::load_city(const Environment& env) {
         tree_camera_ = GetShaderLocation(tree_shader_,"cameraPosition");
     }
     sign_emission_ = GetShaderLocation(tree_shader_,"emissiveStrength");
-    std::map<std::pair<bool,std::string>,MeshBuilder> custom;
-    for (const auto& b : city.buildings) if (b.mesh) {
-        for (const auto& t : b.triangles(city.tile_height(b.cell))) {
-            if (!t.texture.empty() && !building_textures_.count(t.texture)) building_textures_[t.texture] = load_building_texture(t.texture);
-            const bool textured = !t.texture.empty() && building_textures_[t.texture].id;
-            if (t.decal && !textured) continue;
-            auto& mesh = custom[{t.decal,t.texture}]; const auto first = mesh.texcoords.size();
-            mesh.flat_triangle(t.points[0],t.points[1],t.points[2],textured ? WHITE : Color{197,204,211,255});
-            if (mesh.texcoords.size()==first+6) for (int i = 0; i<3; ++i) {
-                mesh.texcoords[first+i*2] = t.uv[i][0]; mesh.texcoords[first+i*2+1] = t.uv[i][1];
-            }
-        }
-    }
-    for (const auto& batch : custom) for (auto model : batch.second.upload_chunks()) {
-        model.materials[0].shader = tree_shader_;
-        const auto texture = building_textures_.find(batch.first.second);
-        if (texture!=building_textures_.end() && texture->second.id) SetMaterialTexture(&model.materials[0],MATERIAL_MAP_DIFFUSE,texture->second);
-        city_chunks_.push_back(chunk(model));
-    }
     load_map(env);
 }
 
@@ -1214,7 +1201,6 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     if (sand_texture_.id != 0) UnloadTexture(sand_texture_);
     if (asphalt_texture_.id != 0) UnloadTexture(asphalt_texture_);
     if (sign_texture_.id) UnloadTexture(sign_texture_);
-    for (const auto& texture : building_textures_) if (texture.second.id) UnloadTexture(texture.second);
     for (const auto& texture : ground_textures_) if (texture.second.id) UnloadTexture(texture.second);
     UnloadModel(map_);
     UnloadShader(minimap_shader_);
@@ -1264,6 +1250,7 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Dayligh
     DrawModel(roads_, {0, 0, 0}, 1, WHITE);
     if (depth_bias) offset(-1, -2);
     for (const auto& part : city_chunks_) if (nearby(part, camera.position, settings.view_distance)) DrawModel(part.model, {0, 0, 0}, 1, WHITE);
+    custom_buildings_.draw(camera,light,lighting,settings);
     rlDrawRenderBatchActive();
     if (depth_bias) disable(polygon_offset_fill);
     SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
@@ -1304,6 +1291,7 @@ void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float
     for (auto& part : city_chunks_) if (nearby(part, focus, distance)) draw(part.model);
     for (auto& part : tree_chunks_) if (nearby(part, focus, distance)) draw(part.model);
     if (signs_.meshes) draw(signs_);
+    custom_buildings_.draw_shadow(focus,distance);
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
 }

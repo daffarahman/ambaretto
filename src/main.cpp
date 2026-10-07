@@ -24,6 +24,7 @@
 #include <cmath>
 #include <memory>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -379,6 +380,7 @@ void draw_resume_prompt(bool captured) {
 } // namespace
 
 int main(int argc, char** argv) {
+    int result = 0;
     ambaretto::DayNight day_night;
     std::string time_override;
     std::string screenshot;
@@ -418,7 +420,18 @@ int main(int argc, char** argv) {
             time_override = argv[i];
         }
     }
-    unsigned int window_flags = FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE;
+    ambaretto::GraphicsSettings graphics;
+    const auto graphics_path = std::filesystem::path(GetApplicationDirectory()) / "graphics-settings.ini";
+    std::string graphics_status;
+    if (std::filesystem::exists(graphics_path)) graphics.load(graphics_path, graphics_status);
+    if (!quality.empty()) {
+        if (quality == "low") graphics.apply_preset(ambaretto::GraphicsPreset::Low);
+        else if (quality == "balanced") graphics.apply_preset(ambaretto::GraphicsPreset::Balanced);
+        else if (quality == "high") graphics.apply_preset(ambaretto::GraphicsPreset::High);
+        else { TraceLog(LOG_ERROR, "Quality must be low, balanced, or high"); return 1; }
+    }
+    unsigned int window_flags = FLAG_WINDOW_RESIZABLE;
+    if (graphics.msaa) window_flags |= FLAG_MSAA_4X_HINT;
     if (!screenshot.empty()) window_flags |= FLAG_WINDOW_HIDDEN;
     SetConfigFlags(window_flags);
     InitWindow(1280, 720, "Ambaretto - Main menu");
@@ -443,16 +456,6 @@ int main(int argc, char** argv) {
         std::string mapping_error;
         if (std::filesystem::exists(mapping_path)) controls.load(mapping_path, mapping_error);
         else if (screenshot.empty()) controls.save(mapping_path, mapping_error);
-        ambaretto::GraphicsSettings graphics;
-        const auto graphics_path = std::filesystem::path(GetApplicationDirectory()) / "graphics-settings.ini";
-        std::string graphics_status;
-        if (std::filesystem::exists(graphics_path)) graphics.load(graphics_path, graphics_status);
-        if (!quality.empty()) {
-            if (quality == "low") graphics.apply_preset(ambaretto::GraphicsPreset::Low);
-            else if (quality == "balanced") graphics.apply_preset(ambaretto::GraphicsPreset::Balanced);
-            else if (quality == "high") graphics.apply_preset(ambaretto::GraphicsPreset::High);
-            else { TraceLog(LOG_ERROR, "Quality must be low, balanced, or high"); return 1; }
-        }
         if (graphics.vsync) SetWindowState(FLAG_VSYNC_HINT); else ClearWindowState(FLAG_VSYNC_HINT);
         SetTargetFPS(graphics.fps_limit);
         if (preview_settings) ambaretto::settings_menu(controls,graphics,screenshot);
@@ -499,6 +502,7 @@ int main(int argc, char** argv) {
         std::string car_error, car_update_error;
         auto cars = ambaretto::saved_cars(cities_directory.parent_path()/"cars",car_error);
         selected_city.update_car_designs(cars,car_update_error);
+        try {
         const ambaretto::Environment environment(selected_city);
         ambaretto::EnvironmentRenderer scenery(environment);
         ambaretto::TuningPanel tuning_panel;
@@ -1142,10 +1146,45 @@ int main(int argc, char** argv) {
         if (!menu.save_pending(controls, mapping_path)) TraceLog(LOG_ERROR, "Could not save controller mappings; previous file retained");
         if (!screenshot.empty()) break;
         map_open = tuning_open = false; start_menu = start_controllers = start_help = start_graphics = false;
+        } catch (const std::exception& error) {
+            TraceLog(LOG_ERROR,"Cannot open city: %s",error.what()); EnableCursor(); captured = false;
+            std::vector<std::string> lines;
+            std::string remaining = error.what();
+            while (!remaining.empty()) {
+                auto count = remaining.size();
+                while (count>1 && ambaretto::ui::measure_text(remaining.substr(0,count).c_str(),18)>912) --count;
+                if (count<remaining.size()) {
+                    const auto space = remaining.rfind(' ',count);
+                    if (space!=std::string::npos && space>0) count = space;
+                }
+                lines.push_back(remaining.substr(0,count)); remaining.erase(0,count);
+                if (!remaining.empty() && remaining.front()==' ') remaining.erase(0,1);
+            }
+            int frames = 0;
+            while (!WindowShouldClose()) {
+                const Rectangle panel{(GetScreenWidth()-960)/2.f,(GetScreenHeight()-300)/2.f,960,300};
+                const Rectangle button{panel.x+24,panel.y+224,280,42};
+                const bool dismiss = frames>0 && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE)
+                    || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(),button)));
+                BeginDrawing(); ambaretto::ui::draw_desktop(); ambaretto::ui::draw_window(panel,"Cannot open city");
+                ambaretto::ui::draw_text("The city could not start. Rendering failed.",int(panel.x+24),int(panel.y+52),18,RAYWHITE);
+                for (std::size_t i = 0; i<lines.size() && i<4; ++i)
+                    ambaretto::ui::draw_text(lines[i].c_str(),int(panel.x+24),int(panel.y+88+i*24),18,YELLOW);
+                DrawRectangleRec(button,CheckCollisionPointRec(GetMousePosition(),button) ? ambaretto::ui::dos_light_blue : ambaretto::ui::dos_white);
+                ambaretto::ui::draw_text("Return to main menu",int(button.x+20),int(button.y+12),18,ambaretto::ui::dos_blue);
+                EndDrawing(); ++frames;
+                if (!screenshot.empty() && frames>=3) {
+                    const Image capture = LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break;
+                }
+                if (dismiss) break;
+            }
+            if (!screenshot.empty()) { result = 1; break; }
+            map_open = tuning_open = false; start_menu = start_controllers = start_help = start_graphics = false;
+        }
         }
     }
     EnableCursor();
     if (IsAudioDeviceReady()) CloseAudioDevice();
     CloseWindow();
-    return 0;
+    return result;
 }
