@@ -82,7 +82,7 @@ public:
     static const std::vector<Bridge>& bridges();
     static const char* district(float x, float z);
     Vec3 spawn() const {
-        if (city_ && city_->spawn) { auto p = City::center(*city_->spawn); p.SetY(height(p.GetX(),p.GetZ())+.56f); return p; }
+        if (city_ && city_->spawn) { auto p = *city_->spawn; p.SetY(height(p.GetX(),p.GetZ())+.56f); return p; }
         return Vec3(0, height(0, 105) + .56f, 105);
     }
     bool submerged(const Vec3& point) const;

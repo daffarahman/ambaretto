@@ -120,7 +120,7 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment,const std::
                         : std::max(plane_specs(PlaneType(int(v.kind)-1)).span,plane_specs(PlaneType(int(v.kind)-1)).length)/2+6;
                     if (flat(v.position-location.point).LengthSq()<radius*radius) occupied = true;
                 }
-                if (city.spawn && flat(City::center(*city.spawn)-location.point).LengthSq()<10*10) occupied = true;
+                if (city.spawn && flat(*city.spawn-location.point).LengthSq()<10*10) occupied = true;
                 if (occupied) continue;
                 TrafficCar vehicle; vehicle.car = create();
                 vehicle.car->set_simulated(false); vehicle.route = r; vehicle.route_name = "CITY STREET";

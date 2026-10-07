@@ -74,7 +74,8 @@ void building_meshes(const std::filesystem::path& directory) {
     CityBuilding placed{{61,61},1,12,mesh}; require(placed.footprint()==CityCell{2,1},"rectangular footprint is still square");
     require(city.add_building(placed,error) && city.add_building({{65,65},1,12},error),"mixed custom and plain placement failed");
     require(city.building_at({62,61})==0 && city.building_at({61,62})==-1,"mesh footprint disagrees with selection");
-    require(!city.add_building({{62,61},1,12},error) && !city.add_road({{62,61}},error) && !city.set_spawn({62,61},error),"mesh footprint overlaps structures, roads or spawn");
+    require(!city.add_building({{62,61},1,12},error) && !city.add_road({{62,61}},error),"mesh footprint overlaps structures or roads");
+    require(city.set_spawn({62,61},error),"building tile blocked the player spawn");
     require(!city.add_building({{127,127},1,12,mesh},error),"mesh was placed outside the map");
     require(city.set_spawn({67,67},error) && city.save(directory,error),error.c_str());
     City loaded; require(City::load(directory/(city.id+".city"),loaded,error),error.c_str());
@@ -295,9 +296,9 @@ void building_rotation(const std::filesystem::path& directory) {
     blocked = city; require(blocked.add_road({{62,61}},error),error.c_str());
     require(!blocked.add_building(rotated,error,0),"rotation overlapped a road");
     blocked = city; require(blocked.set_spawn({62,61},error),error.c_str());
-    require(!blocked.add_building(rotated,error,0),"rotation overlapped player spawn");
+    require(blocked.add_building(rotated,error,0),"player spawn blocked building rotation");
     blocked = city; require(blocked.add_vehicle({CityVehicleKind::Car,{62,61},0},error),error.c_str());
-    require(!blocked.add_building(rotated,error,0),"rotation overlapped a parked vehicle");
+    require(blocked.add_building(rotated,error,0),"parked vehicle blocked building rotation");
     City edge = City::create("Map edge"); require(edge.add_land({126,125},{127,127},error),error.c_str());
     rotated.cell = {127,125}; rotated.rotation = 1; require(edge.add_building(rotated,error),error.c_str());
     rotated.rotation = 0; require(!edge.add_building(rotated,error,0) && edge.buildings[0].rotation==1,"rotation escaped the map edge");
@@ -345,9 +346,9 @@ void data_and_saves(const std::filesystem::path& directory) {
     require(city.add_building({{60,60},2,12},error),"square building failed");
     require(!city.add_building({{60,60},1,12},error),"overlapping building accepted");
     require(!city.add_building({{62,61},3,12},error),"building across a road accepted");
-    require(!city.set_spawn({60,60},error),"spawn inside building accepted");
+    require(city.set_spawn({60,60},error),"building blocked the player spawn");
     require(city.set_spawn({67,60},error),"spawn failed");
-    require(!city.add_vehicle({CityVehicleKind::Car,{67,60},0},error),"vehicle over spawn accepted");
+    City overlapping=city; require(overlapping.add_vehicle({CityVehicleKind::Car,{67,60},0},error),"player spawn blocked vehicle placement");
     require(city.add_vehicle({CityVehicleKind::Car,{66,64},1},error),"parked car failed");
     require(!city.add_vehicle({CityVehicleKind::Boeing747,{65,64},0},error),"unsupported wings over water accepted");
     require(city.save(directory,error),error.c_str());
@@ -374,6 +375,76 @@ void data_and_saves(const std::filesystem::path& directory) {
     require(std::filesystem::remove(directory/(second.id+".city")),"city delete failed");
     City neck = City::create("Neck"); require(neck.add_land({1,1},{3,1},error),"thin island failed");
     require(neck.erase(CityCell{2,1},error) && !neck.connected(),"bulldoze cannot separate islands");
+}
+void pedestrian_density_saves(const std::filesystem::path& directory) {
+    auto city = fixture(); std::string error; City loaded;
+    city.buildings[0].mesh = BuildingMesh{}; city.buildings[0].mesh->size = Vec3(22.4f,16,22.4f);
+    const auto path = directory/(city.id+".city");
+    const auto bytes = [&]() { std::ifstream file(path); return std::string(std::istreambuf_iterator<char>(file),{}); };
+    require(city.save(directory,error) && City::load(path,loaded,error) && loaded.pedestrian_density==100,"Legacy city density did not default to 100 percent");
+    require(bytes().rfind("AMBARETTO_CITY 14\n",0)==0,"Default density changed the existing city format");
+    for (int density : {0,1,25,50,99}) {
+        city.pedestrian_density = density;
+        require(city.save(directory,error) && City::load(path,loaded,error) && loaded.pedestrian_density==density
+            && loaded.buildings[0].mesh && loaded.buildings[0].mesh->vertices==city.buildings[0].mesh->vertices,
+            "City density or embedded building did not round-trip");
+        require(bytes().rfind("AMBARETTO_CITY 15\n",0)==0,"Custom density did not use city version 15");
+    }
+    const auto stable = bytes();
+    for (int invalid : {-1,101}) {
+        city.pedestrian_density = invalid;
+        require(!city.save(directory,error) && bytes()==stable,"Invalid density overwrote the saved city");
+    }
+    const auto prefix = stable.substr(0,stable.rfind('\n',stable.size()-2)+1);
+    for (const char* invalid : {"-1\n","101\n","25.5\n","25 extra\n","","invalid\n"}) {
+        std::ofstream(path) << prefix << invalid;
+        require(!City::load(path,loaded,error) && loaded.pedestrian_density==99 && loaded.id==city.id,"Invalid density changed the loaded city");
+    }
+    city.pedestrian_density = 100;
+    require(city.save(directory,error) && City::load(path,loaded,error) && loaded.pedestrian_density==100,"Restoring full density failed");
+}
+void free_placement(const std::filesystem::path& directory) {
+    City city=City::create("Free placement"); std::string error;
+    require(city.add_land({60,60},{68,68},error),error.c_str());
+    BuildingMesh mesh; mesh.size=Vec3(4,12,6); const CityBuilding building{{62,62},1,12,mesh};
+    require(city.add_building(building,error),error.c_str());
+    const Vec3 point=City::center({62,62})+Vec3(-4.2f,0,-3.1f);
+    require(city.set_spawn(point,error) && city.spawn==point,"Player spawn snapped to the block center");
+    require(city.add_vehicle({CityVehicleKind::Car,point,0},error) && city.add_vehicle({CityVehicleKind::Trainer,point,1},error),
+        "Buildings, the player, or another vehicle blocked placement");
+    require(city.set_spawn(point,error) && city.add_building(building,error,0),"Overlaps failed when placed in the reverse order");
+    City erased=city; erased.vehicles.clear();
+    require(erased.erase(point,error) && !erased.spawn && erased.buildings.size()==1,"Deleting the player point removed its building");
+    require(city.brush_trees(City::center({66,66}),12,3,false,error)>0,"Tree overlap fixture failed");
+    const auto trees=city.trees.size(); const auto tree=city.trees.front();
+    City forest=city;
+    require(forest.set_spawn(tree.base,error) && forest.add_vehicle({CityVehicleKind::Car,tree.base,0},error)
+        && forest.trees.size()==trees && forest.validate(error),"Player or vehicle placement removed overlapping trees");
+    const auto previous=city.spawn;
+    for (Vec3 invalid : {Vec3(std::numeric_limits<float>::infinity(),City::level,0),Vec3(City::extent,City::level,0),
+                        point+Vec3(0,5,0),City::center({0,0})})
+        require(!city.set_spawn(invalid,error) && city.spawn==previous,"Invalid spawn changed the city");
+    city.pedestrian_density=25;
+    const auto path=directory/(city.id+".city"); City loaded;
+    const auto bytes=[&] {std::ifstream file(path); return std::string(std::istreambuf_iterator<char>(file),{});};
+    require(city.save(directory,error) && City::load(path,loaded,error) && loaded.spawn==point && loaded.pedestrian_density==25
+        && loaded.vehicles.size()==2 && loaded.vehicles[0].position==point && loaded.buildings[0].mesh,"Free placement did not round-trip");
+    const auto stable=bytes(); require(stable.rfind("AMBARETTO_CITY 16\n",0)==0,"Free player position did not use city version 16");
+    Environment map(loaded);
+    require((map.spawn()-(point+Vec3(0,.56f,0))).Length()<.001f,"Gameplay ignored the exact player position");
+    std::ostringstream row; row<<std::setprecision(std::numeric_limits<float>::max_digits10)<<"\n1 "<<point.GetX()<<' '<<point.GetZ()<<'\n';
+    const auto at=stable.find(row.str()); require(at!=std::string::npos,"Spawn record missing from fixture");
+    for (const char* invalid : {"\n1 inf 0\n","\n1 nan 0\n","\n1 9999 0\n","\n1 -710 -710\n","\n2 0 0\n","\n1 0 0 extra\n"}) {
+        auto corrupt=stable; corrupt.replace(at,row.str().size(),invalid); std::ofstream(path)<<corrupt;
+        require(!City::load(path,loaded,error) && loaded.spawn==point,"Malformed spawn changed the loaded city");
+    }
+    City invalid=city; invalid.spawn=point+Vec3(0,10,0); std::ofstream(path)<<stable;
+    require(!invalid.save(directory,error) && bytes()==stable,"Invalid spawn overwrote the previous save");
+    require(city.change_elevation({60,60},{68,68},1,error) && city.spawn->GetX()==point.GetX() && city.spawn->GetZ()==point.GetZ()
+        && std::abs(city.spawn->GetY()-point.GetY()-City::elevation_step)<.001f,"Terrain edits lost or buried the player position");
+    require(city.save(directory,error) && City::load(path,loaded,error) && loaded.spawn==city.spawn,"Raised free spawn did not round-trip");
+    require(city.set_spawn(CityCell{67,67},error) && city.save(directory,error) && bytes().rfind("AMBARETTO_CITY 15\n",0)==0,
+        "Centered spawns changed the existing save format");
 }
 void trees_and_time(const std::filesystem::path& directory) {
     City city = City::create("Forest"); std::string error;
@@ -426,7 +497,8 @@ void trees_and_time(const std::filesystem::path& directory) {
         const auto p = City::cell(v.position.GetX(),v.position.GetZ());
         legacy << int(v.kind) << ' ' << p.x << ' ' << p.z << ' ' << v.rotation << '\n';
     }
-    legacy << "1 " << city.spawn->x << ' ' << city.spawn->z << '\n';
+    const auto spawn_cell=City::cell(city.spawn->GetX(),city.spawn->GetZ());
+    legacy << "1 " << spawn_cell.x << ' ' << spawn_cell.z << '\n';
     std::ofstream(path) << legacy.str();
     require(City::load(path,loaded,error) && loaded.start_minutes==720 && loaded.trees.empty() && loaded.spawn==city.spawn,"old city save compatibility failed");
     require(loaded.save(directory,error) && City::load(path,loaded,error),"old city could not upgrade its save");
@@ -1105,12 +1177,13 @@ City islands_and_bridges(const std::filesystem::path& directory) {
     const Vec3 a = c+Vec3(-2.5f,0,0), b = c+Vec3(2.5f,0,0);
     require(city.add_vehicle({CityVehicleKind::Car,a,0},error) && city.add_vehicle({CityVehicleKind::Car,b,0},error),"two vehicles cannot share a block");
     require(city.vehicle_at(a)==0 && city.vehicle_at(b)==1 && city.vehicle_at(c)==-1,"selection still uses vehicle blocks");
-    require(!city.add_vehicle({CityVehicleKind::Car,a+Vec3(1,0,0),0},error),"overlapping vehicles were accepted");
+    City overlapping=city;
+    require(overlapping.add_vehicle({CityVehicleKind::Car,a+Vec3(1,0,0),0},error),"vehicle overlap blocked placement");
     require(!city.add_vehicle({CityVehicleKind::Car,Vec3(std::numeric_limits<float>::infinity(),City::level,0),0},error),"non-finite vehicle position accepted");
     require(city.set_spawn({53,60},error),"archipelago spawn failed");
     City edited = city;
     require(edited.erase(a,error) && edited.vehicles.size()==1 && edited.vehicles[0].position==b,"bulldozer removed the wrong vehicle in a shared block");
-    require(!city.add_building({{56,61},1,12},error),"building covered freely placed vehicles");
+    require(overlapping.add_building({{56,61},1,12},error),"parked vehicles blocked building placement");
     require(city.save(directory,error),error.c_str()); City loaded;
     require(City::load(directory/(city.id+".city"),loaded,error),error.c_str());
     require(loaded.tiles==city.tiles && loaded.road_axes==city.road_axes && loaded.vehicles[0].position==a && loaded.vehicles[1].position==b,"new save lost bridges, axes, or exact positions");
@@ -1249,9 +1322,14 @@ void car_designs(const std::filesystem::path& directory) {
     auto unrelated=resized; unrelated.name="Another car";
     require(copy.update_car_designs({unrelated},error)==0 && copy.vehicles[0].car->name==design.name,"Refreshing an unrelated design replaced a placed car");
     resized.width=4; resized.length=8; copy.vehicles[1].position=copy.vehicles[0].position+Vec3(0,0,5);
-    require(copy.update_car_designs({resized},error)==0 && !error.empty() && copy.vehicles[0].car->width==3,"Overlapping library edits partially updated the map");
+    require(copy.update_car_designs({resized},error)==2 && error.empty() && copy.vehicles[0].car->width==4,"Vehicle overlap blocked library edits");
     auto offset_only=*copy.vehicles[0].car; offset_only.offset[0]=4;
-    require(copy.update_car_design(offset_only,error)==-1 && copy.vehicles[0].car->offset==design.offset && copy.vehicles[1].car->offset==design.offset,"Overlapping body offset partially updated placed cars");
+    require(copy.update_car_design(offset_only,error)==2 && copy.vehicles[0].car->offset==offset_only.offset
+        && copy.vehicles[1].car->offset==offset_only.offset,"Vehicle overlap blocked body offsets");
+    City unsupported=copy; unsupported.vehicles[1].position=City::center({50,50});
+    unsupported.vehicles[1].car=design; require(unsupported.validate(error),"Unsupported-design fixture failed");
+    require(unsupported.update_car_design(offset_only,error)==-1 && unsupported.vehicles[0].car->offset==offset_only.offset
+        && unsupported.vehicles[1].car->offset==design.offset,"Unsupported footprint partially updated placed cars");
     PhysicsWorld world(false); Car car(world,design); car.reset({0,car.ride_height(),0});
     GroundHit hit;
     for (float yaw:{0.f,1.57079633f}) {
@@ -1387,7 +1465,7 @@ int main(int argc,char** argv) {
         }
         const auto directory = std::filesystem::temp_directory_path()/("ambaretto-city-test-"+City::create("test").id);
         data_and_saves(directory); building_meshes(directory); building_mesh_editing(directory); building_design_updates(directory); building_rotation(directory); generated_terrain(directory); trees_and_time(directory); ground_paint(directory); custom_ground_textures(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay(); car_designs(directory);
-        through_road_routes(); saved_copies(directory);
+        through_road_routes(); saved_copies(directory); pedestrian_density_saves(directory); free_placement(directory);
         // Remove only files in this run's unique test directory; no recursive deletion.
         for (const auto& entry : std::filesystem::directory_iterator(directory)) std::filesystem::remove(entry.path());
         std::filesystem::remove(directory);

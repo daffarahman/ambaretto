@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
         dispatch(4,11,MenuCommand::CarEditor);
         dispatch(4,13,MenuCommand::CharacterCreator); dispatch(4,14,MenuCommand::ChoosePlayerCharacter);
         dispatch(0,5,MenuCommand::RefreshDesigns);
+        dispatch(6,0,MenuCommand::CitySettings);
         MenuBar character_creator(MenuMode::CharacterCreator); character_creator.open(); input={}; input.vertical=1; character_creator.update({},input); input={}; input.enter=true;
         require(character_creator.update({},input)==MenuCommand::SaveCharacter,"Character creator Save menu is missing");
         state.car_selection=true; dispatch(4,12,MenuCommand::EditCar); state.car_selection=false;

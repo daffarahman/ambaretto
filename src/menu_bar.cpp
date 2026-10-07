@@ -26,12 +26,13 @@ constexpr Item objects[] = {{"Player spawn",MenuCommand::SpawnTool,"5"}, {"Choos
     {"Car editor...",MenuCommand::CarEditor}, {"Edit selected car...",MenuCommand::EditCar},
     {"Character creator...",MenuCommand::CharacterCreator}, {"Choose player character...",MenuCommand::ChoosePlayerCharacter}};
 constexpr Item views[] = {{"Top view", MenuCommand::TopView, "V"}, {"Show grid", MenuCommand::Grid, "G"}, {"Rotate left", MenuCommand::RotateLeft, "Q"}, {"Rotate right", MenuCommand::RotateRight, "E"}, {"Zoom in", MenuCommand::ZoomIn}, {"Zoom out", MenuCommand::ZoomOut}};
+constexpr Item city_settings[] = {{"City settings...",MenuCommand::CitySettings}};
 constexpr Item city_files[] = {{"Create new city...", MenuCommand::NewCity, "Ins"}, {"Open / edit selected", MenuCommand::EditCity, "Enter"}, {"Duplicate selected", MenuCommand::DuplicateCity, "Ctrl+D"}, {"Back", MenuCommand::Quit, "Esc"}};
 struct Menu { const char* title; const Item* items; int count; };
 constexpr Menu home_menus[] = {{"File", home_files, int(std::size(home_files))}, {"Settings", home_settings, int(std::size(home_settings))}, {"Help", helps, int(std::size(helps))}};
 constexpr Menu game_menus[] = {{"File", files, int(std::size(files))}, {"Edit", edits, 2}, {"Settings", settings, 3}, {"Help", helps, 2}};
 constexpr Menu editor_menus[] = {{"File", editor_files, int(std::size(editor_files))}, {"Edit", editor_edits, int(std::size(editor_edits))}, {"Tiles", tiles, int(std::size(tiles))},
-    {"Buildings", buildings, int(std::size(buildings))}, {"Objects", objects, int(std::size(objects))}, {"View", views, 6}, {"Help", helps, 2}};
+    {"Buildings", buildings, int(std::size(buildings))}, {"Objects", objects, int(std::size(objects))}, {"View", views, 6}, {"Settings", city_settings, int(std::size(city_settings))}, {"Help", helps, 2}};
 constexpr Menu city_menus[] = {{"File", city_files, int(std::size(city_files))}};
 constexpr Item creator_files[] = {{"New building",MenuCommand::NewBuilding}, {"Save building",MenuCommand::SaveBuilding,"Ctrl+S"}, {"Open Saved Building",MenuCommand::SavedBuildings},
     {"Save and close",MenuCommand::UseBuilding}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};

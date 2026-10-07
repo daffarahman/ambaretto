@@ -16,7 +16,7 @@ int main() {
     try {
         std::filesystem::create_directories(folder);
         GraphicsSettings settings;
-        require(settings.preset() == GraphicsPreset::Balanced && settings.shadow_resolution() == 1024 && settings.msaa, "default preset changed");
+        require(settings.preset() == GraphicsPreset::Balanced && settings.shadow_resolution() == 1024 && settings.msaa && settings.view_distance == 100, "default preset changed");
         settings.apply_preset(GraphicsPreset::Low);
         require(settings.preset() == GraphicsPreset::Low && settings.shadows == 0 && !settings.local_lights &&
             settings.view_distance == 1000 && !settings.vsync && !settings.msaa, "Low preset does not reduce GPU work");
@@ -42,7 +42,7 @@ int main() {
             require(!loaded.load(path, error) && !error.empty() && loaded == before, "invalid file changed working settings");
         }
         std::ofstream(path) << "\xEF\xBB\xBF; Partial file retains Balanced defaults\nversion = 1\n brightness = 1.2 # comment\n";
-        require(loaded.load(path, error) && loaded.brightness == 1.2f && loaded.shadows == 2 && loaded.msaa,
+        require(loaded.load(path, error) && loaded.brightness == 1.2f && loaded.shadows == 2 && loaded.msaa && loaded.view_distance == 100,
             "legacy partial settings or BOM/comments rejected");
         require(loaded.save(path, error), "cannot restore valid settings file");
         auto invalid = loaded; invalid.brightness = std::numeric_limits<float>::infinity();

@@ -89,7 +89,8 @@ struct City {
     std::vector<CityVehicle> vehicles;
     std::vector<Tree> trees;
     int start_minutes = 12 * 60;
-    std::optional<CityCell> spawn;
+    int pedestrian_density = 100;
+    std::optional<Vec3> spawn;
     std::optional<CharacterDesign> player_character;
     bool playable() const { std::string error; return spawn && player_character && player_character->type==CharacterType::Player && player_character->validate(error); }
     bool update_player_character(const std::vector<CharacterDesign>& designs);
@@ -129,6 +130,7 @@ struct City {
     int update_car_designs(const std::vector<CarDesign>& designs, std::string& error);
     bool add_vehicle(CityVehicle vehicle, std::string& error, int replace = -1);
     bool set_spawn(CityCell p, std::string& error);
+    bool set_spawn(Vec3 p, std::string& error);
     bool paint_ground(CityCell a, CityCell b, CityGround texture, std::string& error);
     bool paint_ground(CityCell a, CityCell b, const std::string& texture, std::string& error);
     std::string ground_texture(CityCell p) const;

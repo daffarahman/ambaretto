@@ -38,6 +38,8 @@ bool Pedestrians::walkable(Vec3 p) const {
 
 Pedestrians::Pedestrians(PhysicsWorld& world, const Environment& environment, const std::vector<CharacterDesign>* designs) : world_(world), environment_(environment) {
     if (designs && !character_for_type(*designs,CharacterType::NPC)) return;
+    const unsigned population = (64 * (environment.city() ? std::clamp(environment.city()->pedestrian_density,0,100) : 100) + 99) / 100;
+    if (!population) return;
     if (environment.city()) for (const auto& road : environment.city()->traffic_routes(1.2f)) {
         std::vector<Vec3> samples;
         for (std::size_t i=0;i<road.size();++i) {
@@ -112,7 +114,7 @@ Pedestrians::Pedestrians(PhysicsWorld& world, const Environment& environment, co
         if (valid && !route.empty()) routes_.push_back(std::move(route));
     }
     // A fixed pool bounds both walking and articulated ragdoll physics costs.
-    for (unsigned i = 0; i < 64; ++i) {
+    for (unsigned i = 0; i < population; ++i) {
         Pedestrian person;
         person.character = std::make_unique<Character>(world);
         if (designs) person.character->set_design(*character_for_type(*designs,CharacterType::NPC,i));

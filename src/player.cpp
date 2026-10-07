@@ -43,7 +43,7 @@ void Player::reset() {
     };
     for (int i = 0; i < 30 && occupied(spawn); ++i) {
         if (const auto* city = environment_.city()) {
-            const auto origin = *city->spawn;
+            const auto origin = City::cell(city->spawn->GetX(),city->spawn->GetZ());
             const CityCell candidate{origin.x+i%5-2,origin.z+i/5-3};
             if (city->tile(candidate)==CityTile::Water || city->building_at(candidate)>=0) continue;
             Vec3 point = City::center(candidate); point.SetY(environment_.height(point.GetX(),point.GetZ())+car_->ride_height());

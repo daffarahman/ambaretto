@@ -20,6 +20,22 @@ std::size_t walking_count(const Pedestrians& pedestrians, const Environment& map
     }
     return count;
 }
+void city_density() {
+    City city=City::create("Pedestrian density"); std::string error;
+    require(city.add_land({50,50},{78,78},error) && city.add_road(City::road_stroke({52,64},{76,64}),error)
+        && city.add_road(City::road_stroke({64,52},{64,76}),error) && city.set_spawn({63,63},error),"Density fixture failed");
+    std::size_t previous = 0;
+    for (int density : {0,1,25,50,100}) {
+        city.pedestrian_density = density;
+        Environment map(city); PhysicsWorld world(map); Car starter(world); starter.set_simulated(false);
+        Pedestrians pedestrians(world,map); const auto limit = std::size_t((64*density+99)/100);
+        require(pedestrians.people().size()==limit,"Density did not reduce the allocated pedestrian pool");
+        pedestrians.prepare(starter,nullptr,map.spawn(),.6f);
+        const auto active = walking_count(pedestrians,map);
+        require(active<=limit && active>=previous && (density==0 ? active==0 : active>0),"Density did not bound the walking population");
+        std::cout<<density<<"%: "<<active<<" walking pedestrians, pool "<<limit<<'\n'; previous = active;
+    }
+}
 void city_turns(bool crowded=false,int rotation=0) {
     City city=City::create("Walking through turns"); std::string error;
     const auto rotate=[&](CityCell cell) {for (int i=0;i<rotation;++i) cell={128-cell.z,cell.x}; return cell;};
@@ -78,6 +94,7 @@ void city_bridge() {
 
 int main(int argc,char** argv) {
     try {
+        city_density();
         if (argc==2 && std::string(argv[1])=="city") {
             for (int rotation=0;rotation<4;++rotation) {city_turns(false,rotation); city_turns(true,rotation);}
             city_bridge(); return 0;

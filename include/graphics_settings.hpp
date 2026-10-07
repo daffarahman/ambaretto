@@ -11,7 +11,7 @@ struct GraphicsSettings {
     bool soft_shadows = true;
     float shadow_distance = 90;
     bool local_lights = true;
-    float view_distance = 2000;
+    float view_distance = 100;
     float brightness = 1;
     bool vsync = true;
     int fps_limit = 60;

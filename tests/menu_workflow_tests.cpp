@@ -21,13 +21,22 @@ void require(bool ok,const char* message) {if (!ok) throw std::runtime_error(mes
 void event(unsigned type,int a=0,int b=0) {PlayAutomationEvent({0,type,{a,b,0,0}});}
 void idle(int count=2) {while (count-->0) steps.push_back([]{});}
 void click(int x,int y) {steps.push_back([=]{event(7,x,y); event(6,MOUSE_BUTTON_LEFT);}); steps.push_back([]{event(5,MOUSE_BUTTON_LEFT);}); idle();}
+void city_click(ambaretto::Vec3 focus,ambaretto::Vec3 point) {
+    steps.push_back([=]{
+        Camera3D camera{{focus.GetX(),800,focus.GetZ()+.01f},{focus.GetX(),0,focus.GetZ()},{0,0,-1},400,CAMERA_ORTHOGRAPHIC};
+        const auto p=GetWorldToScreen({point.GetX(),point.GetY(),point.GetZ()},camera);
+        event(7,int(p.x),int(p.y)); event(6,MOUSE_BUTTON_LEFT);
+    });
+    steps.push_back([]{event(5,MOUSE_BUTTON_LEFT);}); idle();
+}
 void key(int code) {steps.push_back([=]{event(2,code);}); steps.push_back([=]{event(1,code);}); idle();}
 void wheel(int amount) {steps.push_back([=]{event(7,100,380); event(8,0,amount);}); idle();}
-void number_text(const std::string& value) {
+void replace_text(const std::string& value) {
     steps.push_back([]{event(2,KEY_LEFT_CONTROL); event(2,KEY_A);});
     steps.push_back([]{event(1,KEY_A); event(1,KEY_LEFT_CONTROL);});
-    steps.push_back([=]{typed_text=value;}); idle(); key(KEY_ENTER);
+    steps.push_back([=]{typed_text=value;}); idle();
 }
+void number_text(const std::string& value) {replace_text(value); key(KEY_ENTER);}
 Vector2 building_screen(ambaretto::Vec3 size,Vector3 point) {
         const float radius=size.Length(),yaw=2.44f,pitch=.5f; const Vector3 target{0,size.GetY()/2,0};
         Camera3D camera{{std::sin(yaw)*std::cos(pitch)*radius*2,target.y+std::sin(pitch)*radius*2,std::cos(yaw)*std::cos(pitch)*radius*2},target,{0,1,0},radius*1.45f,CAMERA_ORTHOGRAPHIC};
@@ -49,12 +58,28 @@ void building_drag(ambaretto::Vec3 size,Vector3 from,Vector3 to,bool outside=fal
 }
 void shortcut(int code) {steps.push_back([=]{event(2,KEY_LEFT_CONTROL); event(2,code);}); steps.push_back([=]{event(1,code); event(1,KEY_LEFT_CONTROL);}); idle();}
 void capture(const char* name) {auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/name).string().c_str()); UnloadImage(image);}
+std::string terrain_pixels() {
+    const auto image=LoadImageFromScreen(); std::string pixels;
+    for (int z=0;z<ambaretto::City::width;++z) for (int x=0;x<ambaretto::City::width;++x) {
+        const auto c=GetImageColor(image,int(672+(x+.5f)*296/ambaretto::City::width),int(120+(z+.5f)*296/ambaretto::City::width));
+        pixels+=c.r==84 && c.g==129 && c.b==74 ? '1' : c.r==28 && c.g==66 && c.b==108 ? '0' : '?';
+    }
+    UnloadImage(image); return pixels;
+}
+void require_terrain_preview(const ambaretto::City& city) {
+    const auto pixels=terrain_pixels(); int matched=0;
+    for (std::size_t i=0;i<pixels.size();++i) if (pixels[i]!='?') {
+        require(pixels[i]=='0'+int(city.tiles[i]),"Terrain image differs from the generated map"); ++matched;
+    }
+    require(matched>15000,"Terrain preview is missing or obscured");
+}
 void duplicate_key() {steps.push_back([]{event(2,KEY_LEFT_CONTROL); event(2,KEY_D);}); steps.push_back([]{event(1,KEY_D); event(1,KEY_LEFT_CONTROL);}); idle();}
 void reset() {steps.clear(); frame=0; title.clear(); should_close=false;}
 void window() {reset(); InitWindow(1024,600,"Menu workflow check"); SetExitKey(KEY_NULL); SetTargetFPS(120);}
 bool blue_background() {const auto image=LoadImageFromScreen(); const Color p=GetImageColor(image,20,140); UnloadImage(image); return p.r==0 && p.g==0 && p.b==170;}
 bool saved_popup() {const auto image=LoadImageFromScreen(); const Color p=GetImageColor(image,152,300); UnloadImage(image); return p.r==255 && p.g==255 && p.b==255;}
 void open_saved() {key(KEY_F10); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER);}
+void open_city_settings() {key(KEY_F10); for (int i=0;i<6;++i) key(KEY_RIGHT); key(KEY_ENTER);}
 void preview(const char* name) {steps.push_back([=]{require(saved_popup(),"Saved selector did not open as a popup"); auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/name).string().c_str()); UnloadImage(image);});}
 std::string contents(const std::filesystem::path& path) {std::ifstream file(path); return {std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};}
 }
@@ -246,6 +271,52 @@ int main() {
         City city=City::create("Menu pause test");
         require(city.add_land({60,60},{68,68},error) && city.set_spawn({64,64},error),"Game fixture failed");
         city.player_character=player; require(city.save(root/"cities",error),"Game fixture save failed");
+        stage="city pedestrian density settings"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
+            idle(); open_city_settings();
+            click(280,228); number_text("25");
+            steps.push_back([&]{require(city.pedestrian_density==25,"City settings did not apply typed density");});
+            shortcut(KEY_Z); steps.push_back([&]{require(city.pedestrian_density==100,"Density did not undo");});
+            shortcut(KEY_Y); steps.push_back([&]{require(city.pedestrian_density==25,"Density did not redo");});
+            open_city_settings(); click(226,274); click(350,438);
+            steps.push_back([&]{require(city.pedestrian_density==0,"Density slider cannot disable walking NPCs");});
+            open_city_settings(); click(798,274); click(350,438);
+            steps.push_back([&]{require(city.pedestrian_density==100,"Density slider cannot select full population");});
+            open_city_settings(); click(280,228); number_text("101");
+            steps.push_back([&]{require(city.pedestrian_density==100,"Invalid density changed the city"); capture("city-density-invalid.png");});
+            key(KEY_ESCAPE);
+            open_city_settings(); click(280,228); number_text("25");
+            open_city_settings(); steps.push_back([]{capture("city-density-settings.png");}); key(KEY_ESCAPE);
+            key(KEY_ESCAPE); click(760,485);
+            require(!city_menu(city,root/"cities",controls,graphics,true),"Density settings started Play");
+            City loaded;
+            require(City::load(root/"cities"/(city.id+".city"),loaded,error) && loaded.pedestrian_density==25 && loaded.player_character,
+                "City density or embedded player did not persist after leaving the editor");
+        } CloseWindow();
+        stage="free player and vehicle placement"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
+            City placed=City::create("Placement workflow"); placed.player_character=player;
+            const auto directory=root/"placement-cities";
+            BuildingMesh small; small.name="Placement building"; small.size=Vec3(4,12,4);
+            require(placed.add_land({60,60},{68,68},error) && placed.set_spawn(CityCell{67,67},error)
+                && placed.add_building({{64,64},1,12,small},error) && placed.save(directory,error),"Placement fixture failed");
+            const Vec3 focus=*placed.spawn,point=City::center({64,64})+Vec3(-4,0,-3);
+            idle(); key(KEY_V); key(KEY_FIVE); city_click(focus,point);
+            steps.push_back([&]{require(placed.spawn && City::cell(placed.spawn->GetX(),placed.spawn->GetZ())==CityCell{64,64}
+                && std::abs(placed.spawn->GetX()-City::center({64,64}).GetX())>3,"Player placement snapped or rejected the building tile");});
+            key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER);
+            city_click(focus,point);
+            steps.push_back([&]{require(placed.vehicles.size()==1,"Player or building blocked vehicle placement");});
+            key(KEY_FIVE); city_click(focus,point); key(KEY_ONE); city_click(focus,point);
+            steps.push_back([]{capture("free-placement.png");}); key(KEY_DELETE);
+            steps.push_back([&]{require(placed.vehicles.empty() && placed.buildings.size()==1 && placed.spawn,"Building tile prevented selecting the vehicle");});
+            shortcut(KEY_Z); steps.push_back([&]{require(placed.vehicles.size()==1,"Overlapping vehicle deletion did not undo");});
+            key(KEY_ESCAPE); click(760,485);
+            require(!city_menu(placed,directory,controls,graphics,true),"Placement editor started Play");
+            City loaded;
+            require(City::load(directory/(placed.id+".city"),loaded,error) && loaded.spawn==placed.spawn && loaded.vehicles.size()==1
+                && (loaded.vehicles[0].position-*loaded.spawn).Length()<.01f,"Overlapping player and vehicle did not persist");
+        } CloseWindow();
         stage="map building popup"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
             idle(); click(100,130); preview("map-building-popup.png"); key(KEY_ENTER);
@@ -275,12 +346,38 @@ int main() {
             steps.push_back([]{require(title=="Ambaretto - Cities","Removed shortcuts opened city management");});
             key(KEY_ENTER);
             steps.push_back([]{require(title=="Ambaretto - City editor","City chooser Enter did not open the editor");});
-            key(KEY_ESCAPE); click(760,220); click(600,225); click(300,485);
+            key(KEY_ESCAPE); click(760,220); click(600,185); click(300,514);
             steps.push_back([]{require(title=="Ambaretto - City editor","Create city did not open the new map editor");});
             key(KEY_ESCAPE); click(760,485);
             require(!city_menu(selected,play_directory,controls,graphics),"City chooser started a game");
-            require(selected.name=="New city" && !selected.spawn && !selected.player_character,"New empty city was not created");
+            require(selected.name=="New city" && !selected.spawn && !selected.player_character && selected.land_count()==0,"New empty city was not created");
             require(contents(playable_path)==original_playable && contents(unavailable_path)==original_unavailable,"City chooser changed the existing maps");
+        } CloseWindow();
+        stage="terrain preview / regenerate / create"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=unavailable;
+            const auto directory=root/"preview-cities"; City expected=City::create("Expected preview");
+            require(expected.generate_terrain(48,32,1234,error),"Preview fixture failed");
+            std::string first,regenerated;
+            idle(); click(760,220); click(410,276); replace_text("32"); click(300,336); replace_text("1234");
+            steps.push_back([&]{require_terrain_preview(expected); first=terrain_pixels(); capture("terrain-preview.png");});
+            click(550,336);
+            steps.push_back([&]{regenerated=terrain_pixels(); require(first!=regenerated,"Regenerate did not update the preview"); capture("terrain-regenerated.png");});
+            shortcut(KEY_R);
+            steps.push_back([&]{require(regenerated!=terrain_pixels(),"Keyboard regenerate did not update the preview");});
+            click(300,336); replace_text("4294967296"); key(KEY_ENTER);
+            steps.push_back([&]{require(selected.id==unavailable.id && !std::filesystem::exists(directory),"Invalid seed saved a city"); capture("terrain-preview-invalid.png");});
+            click(300,336); replace_text("1234"); click(120,276); replace_text("0"); key(KEY_ENTER);
+            steps.push_back([&]{require(selected.id==unavailable.id && !std::filesystem::exists(directory),"Invalid dimensions saved a city");});
+            key(KEY_ESCAPE);
+            steps.push_back([&]{require(selected.id==unavailable.id && !std::filesystem::exists(directory),"Preview or Cancel changed the existing city");});
+            click(760,220); click(410,276); replace_text("32"); click(300,336); replace_text("1234");
+            steps.push_back([&]{require_terrain_preview(expected);}); click(300,514);
+            steps.push_back([&]{require(title=="Ambaretto - City editor" && selected.tiles==expected.tiles,"Create did not use the displayed terrain");});
+            key(KEY_ESCAPE); click(760,485);
+            require(!city_menu(selected,directory,controls,graphics),"Terrain preview started Play");
+            City loaded;
+            require(City::load(directory/(selected.id+".city"),loaded,error) && loaded.tiles==expected.tiles && loaded.elevation==expected.elevation,
+                "Saved terrain differs from the preview");
         } CloseWindow();
         // Each creation menu duplicates to disk, selects the copy, and leaves the source alone.
         for (auto kind:{DesignKind::Building,DesignKind::Car,DesignKind::Character}) {
