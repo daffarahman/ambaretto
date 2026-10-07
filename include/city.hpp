@@ -139,8 +139,9 @@ struct City {
     bool erase(CityCell p, std::string& error);
     bool erase(Vec3 p, std::string& error);
     bool validate(std::string& error) const;
-    // Euler walks use every connected street in both directions, including dead ends.
-    std::vector<std::vector<Vec3>> traffic_routes() const;
+    // Directed circuits cover each street both ways, turning back only at dead ends.
+    // A smaller curb inset follows the same connections along the walking verge.
+    std::vector<std::vector<Vec3>> traffic_routes(float curb_inset = 2.38f) const;
     bool save(const std::filesystem::path& directory, std::string& error) const;
     static bool load(const std::filesystem::path& path, City& city, std::string& error);
     static City create(std::string name);

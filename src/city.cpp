@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <numeric>
 #include <set>
 #include <queue>
 #include <random>
@@ -859,19 +860,34 @@ bool City::validate(std::string& error) const {
     }
     return true;
 }
-std::vector<std::vector<Vec3>> City::traffic_routes() const {
+std::vector<std::vector<Vec3>> City::traffic_routes(float curb_inset) const {
     const auto nodes = road_network();
-    std::vector<std::vector<int>> edges;
-    for (const auto& n : nodes) edges.push_back(n.edges);
+    std::vector<std::vector<int>> exits(nodes.size());
+    std::vector<std::vector<bool>> used(nodes.size());
+    for (std::size_t n=0;n<nodes.size();++n) {
+        const auto& node=nodes[n]; const auto count=node.edges.size();
+        std::vector<int> order(count); std::iota(order.begin(),order.end(),0); used[n].resize(count);
+        float best=-std::numeric_limits<float>::max();
+        // At most four arms: choose a permutation that continues straight where possible.
+        do {
+            float score=0; bool valid=true;
+            for (std::size_t i=0;i<count;++i) {
+                if (count>1 && order[i]==int(i)) {valid=false; break;}
+                Vec3 in=node.center()-nodes[node.edges[i]].center(),out=nodes[node.edges[order[i]]].center()-node.center();
+                in.SetY(0); out.SetY(0); score+=in.Normalized().Dot(out.Normalized());
+            }
+            if (valid && score>best) {best=score; exits[n]=order;}
+        } while (std::next_permutation(order.begin(),order.end()));
+    }
     std::vector<std::vector<Vec3>> routes;
-    for (int start = 0; start < int(nodes.size()); ++start) if (!edges[start].empty()) {
-        std::vector<int> stack{start}, tour;
-        while (!stack.empty()) {
-            int node = stack.back();
-            if (edges[node].empty()) { tour.push_back(node); stack.pop_back(); }
-            else { const int next = edges[node].back(); edges[node].pop_back(); stack.push_back(next); }
+    for (int start=0;start<int(nodes.size());++start) for (int arm=0;arm<int(nodes[start].edges.size());++arm) if (!used[start][arm]) {
+        std::vector<int> tour; int node=start,entry=arm;
+        while (!used[node][entry]) {
+            used[node][entry]=true; tour.push_back(node);
+            const int next=nodes[node].edges[exits[node][entry]];
+            entry=int(std::find(nodes[next].edges.begin(),nodes[next].edges.end(),node)-nodes[next].edges.begin());
+            node=next;
         }
-        std::reverse(tour.begin(),tour.end()); tour.pop_back();
         std::vector<Vec3> route;
         for (std::size_t i = 0; i < tour.size(); ++i) {
             const auto& node = nodes[tour[i]];
@@ -894,11 +910,11 @@ std::vector<std::vector<Vec3>> City::traffic_routes() const {
             const Vec3 r = in.Cross(Vec3::sAxisY()), s = out.Cross(Vec3::sAxisY());
             const Vec3 half = nodes[tour[i]].half_size();
             const auto along = [&](Vec3 d) { return std::abs(d.GetX())*half.GetX()+std::abs(d.GetZ())*half.GetZ(); };
-            const float lane_in = entry.second.width/2-2.38f, lane_out = exit.second.width/2-2.38f;
+            const float lane_in = entry.second.width/2-curb_inset, lane_out = exit.second.width/2-curb_inset;
             const Vec3 a = entry.second.center+r*lane_in, b = exit.second.center+s*lane_out;
-            auto curve = node.path(0,2.38f);
+            auto curve = node.path(0,curb_inset);
             if (in.Dot(out)>-.9f && !curve.empty()) {
-                if (std::min((curve.front()-a).LengthSq(),(curve.back()-a).LengthSq())>.001f) curve = node.path(1,-2.38f);
+                if (std::min((curve.front()-a).LengthSq(),(curve.back()-a).LengthSq())>.001f) curve = node.path(1,-curb_inset);
                 if ((curve.back()-a).LengthSq()<(curve.front()-a).LengthSq()) std::reverse(curve.begin(),curve.end());
                 route.insert(route.end(),curve.begin(),curve.end());
             } else if (in.Dot(out) > .9f) { route.push_back(a); route.push_back(b); }

@@ -38,18 +38,31 @@ bool Pedestrians::walkable(Vec3 p) const {
 
 Pedestrians::Pedestrians(PhysicsWorld& world, const Environment& environment, const std::vector<CharacterDesign>* designs) : world_(world), environment_(environment) {
     if (designs && !character_for_type(*designs,CharacterType::NPC)) return;
-    if (environment.city()) for (const auto& road : environment.road_segments()) {
-        const Vec3 side = flat(road.b-road.a).Normalized().Cross(Vec3::sAxisY())*(road.width/2);
-        for (float sign : {-1.f,1.f}) {
-            std::vector<Vec3> route;
-            const Vec3 a = road.a+side*sign, b = road.b+side*sign;
-            const int count = std::max(2,int((b-a).Length()/3)); bool valid = true;
-            for (int i = 0; i <= count; ++i) {
-                Vec3 p = a+(b-a)*(float(i)/count)+Vec3(0,.08f,0);
-                if (!walkable(p)) { valid = false; break; }
-                route.push_back(p);
+    if (environment.city()) for (const auto& road : environment.city()->traffic_routes(1.2f)) {
+        std::vector<Vec3> samples;
+        for (std::size_t i=0;i<road.size();++i) {
+            const Vec3 a=road[i],delta=road[(i+1)%road.size()]-a;
+            const int count=std::max(1,int(std::ceil(flat(delta).Length()/.5f)));
+            for (int j=0;j<count;++j) {
+                Vec3 p=a+delta*(float(j)/count); p.SetY(environment.terrain_height(p.GetX(),p.GetZ())+.08f); samples.push_back(p);
             }
-            if (valid) { for (int i = count-1; i > 0; --i) route.push_back(route[std::size_t(i)]); routes_.push_back(std::move(route)); }
+        }
+        const auto blocked=std::find_if(samples.begin(),samples.end(),[&](Vec3 p){return !walkable(p);});
+        if (blocked==samples.end()) {routes_.push_back(std::move(samples)); continue;}
+        // Bridges and obstructions end a walkable span, rather than deleting its whole street.
+        std::vector<Vec3> span;
+        const auto finish=[&] {
+            float length=0; for (std::size_t i=1;i<span.size();++i) length+=flat(span[i]-span[i-1]).Length();
+            if (length>=3) {
+                const int count=int(span.size()); for (int i=count-2;i>0;--i) span.push_back(span[std::size_t(i)]);
+                routes_.push_back(std::move(span));
+            }
+            span.clear();
+        };
+        const auto start=std::size_t(blocked-samples.begin());
+        for (std::size_t j=1;j<=samples.size();++j) {
+            const Vec3 p=samples[(start+j)%samples.size()];
+            if (walkable(p)) span.push_back(p); else finish();
         }
     }
     for (const auto& loop : environment.street_routes()) {
@@ -180,20 +193,35 @@ void Pedestrians::step(const Car&, const Traffic*, Vec3 player_position, float d
             person.target = next_point(person, std::size_t(nearest - route.begin()), route.size());
             person.was_ragdoll = false;
         }
-        if (flat(route[person.target] - character.position()).LengthSq() < .6f * .6f)
+        for (std::size_t i=0;i<route.size();++i) {
+            const auto previous=(person.target+(person.reverse ? 1 : route.size()-1))%route.size();
+            const Vec3 position=character.position(),delta=flat(route[person.target]-route[previous]);
+            const bool passed=flat(position-route[person.target]).Dot(delta)>0 && segment_distance(position,route[previous],route[person.target])<1.5f*1.5f;
+            if (!passed && flat(route[person.target]-position).LengthSq()>=.6f*.6f) break;
             person.target = next_point(person, person.target, route.size());
-        const Vec3 direction = flat(route[person.target] - character.position()).NormalizedOr(Vec3::sZero());
+        }
+        Vec3 direction = flat(route[person.target] - character.position()).NormalizedOr(Vec3::sZero());
         const Vec3 before = character.position();
         bool blocked = false;
         for (const auto& other : people_) if (&other != &person && other.enabled) {
             const Vec3 offset = flat(other.character->position() - before);
+            if (offset.LengthSq()<2.5f*2.5f && offset.Dot(direction)>.2f) {
+                const auto& other_route=routes_[other.route];
+                const Vec3 heading=flat(other_route[other.target]-other.character->position()).NormalizedOr(Vec3::sZero());
+                if (heading.Dot(direction)<-.5f) {
+                    Vec3 passing=route[person.target]+direction.Cross(Vec3::sAxisY())*.9f;
+                    passing.SetY(environment_.terrain_height(passing.GetX(),passing.GetZ())+.08f);
+                    if (walkable(passing) && character.can_stand_at(passing)) {direction=flat(passing-before).NormalizedOr(direction); break;}
+                }
+            }
             if (offset.LengthSq() < 1.2f * 1.2f && offset.Dot(direction) > .2f) { blocked = true; break; }
         }
         if (flat(player_position - before).LengthSq() < 1.2f * 1.2f) blocked = true;
         character.step({blocked ? Vec3::sZero() : direction * (person.fear_time > 0 ? .75f : person.walking_speed / 3.2f), person.fear_time > 0}, dt);
+        const float previous_stuck=person.stuck_time;
         person.stuck_time = flat(character.position() - before).LengthSq() < .05f * .05f * dt * dt
             ? person.stuck_time + dt : 0;
-        if (person.stuck_time > 3 && person.stuck_time < 3 + dt * 1.5f) {
+        if (previous_stuck<3 && person.stuck_time>=3) {
             person.reverse = !person.reverse;
             person.target = next_point(person, person.target, route.size());
         }

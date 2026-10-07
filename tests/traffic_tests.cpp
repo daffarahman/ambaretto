@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <set>
 
 namespace {
 using namespace ambaretto;
@@ -394,17 +395,59 @@ void highway_traffic() {
             "NPC did not progress or safely turn back at an open highway endpoint");
     }
 }
+void city_circulation(bool tight=false) {
+    std::string error; City city=City::create("City turn circulation");
+    require(city.add_land({50,50},{76,76},error) && city.set_spawn({64,64},error),"City circulation fixture failed");
+    if (tight) {
+        require(city.add_road(City::road_stroke({70,60},{70,65}),error)
+            && city.add_road(City::road_stroke({65,66},{69,66}),error)
+            && city.add_road(City::road_stroke({69,66},{70,65},true),error),"Tight circulation road failed");
+    } else for (const auto& ends:{std::pair<CityCell,CityCell>{{54,54},{72,54}},{{72,54},{72,72}},{{72,72},{54,72}},{{54,72},{54,54}},{{54,63},{72,63}}})
+        require(city.add_road(City::road_stroke(ends.first,ends.second),error),"City circulation road failed");
+    Environment map(city); PhysicsWorld world(map); Car starter(world); starter.set_simulated(false); starter.reset({600,100,600});
+    CarDesign design; design.body="body.glb"; design.wheel="wheel.glb";
+    if (tight) {auto low=design; low.height=.4f; starter.set_design(low);}
+    const std::vector<CarDesign> designs{design}; Traffic traffic(world,map,&designs);
+    require(!traffic.cars().empty(),"No city traffic to test");
+    auto& car=*traffic.cars().front().car;
+    for (std::size_t i=1;i<traffic.cars().size();++i) {
+        auto& other=*traffic.cars()[i].car; other.set_simulated(false); traffic.steal(other); other.set_simulated(false); other.reset({600,100,float(600+int(i)*10)});
+    }
+    car.set_simulated(true); float distance=0,stopped=0,longest_stop=0; bool backed=false,yielded=false; int blocked_at=-1;
+    Vec3 before=car.position(); std::set<std::pair<int,int>> cells;
+    for (int i=0;i<120*120;++i) {
+        if (starter.simulated()) starter.step({0,0,false,true});
+        traffic.step(&starter,starter,nullptr,nullptr,car.position()); world.step();
+        backed|=traffic.cars().front().turning_back;
+        if (tight && blocked_at<0 && traffic.cars().front().turning_back) {
+            starter.reset(car.position()-car.forward()*5,std::atan2(-car.forward().GetX(),-car.forward().GetZ())); starter.set_simulated(true); blocked_at=i;
+        }
+        if (starter.simulated()) {
+            if (i>blocked_at && traffic.cars().front().turning_back && traffic.cars().front().input.parking_brake) yielded=true;
+            if (i-blocked_at>=120*2) {starter.set_simulated(false); starter.reset({600,100,600});}
+        }
+        const Vec3 p=car.position(); const float moved=(p-before).Length(); distance+=moved; before=p;
+        const auto cell=City::cell(p.GetX(),p.GetZ()); cells.emplace(cell.x,cell.z);
+        stopped=car.velocity().Length()<.3f ? stopped+fixed_step : 0; longest_stop=std::max(longest_stop,stopped);
+        require(city.road(cell) && car.rotate(Vec3::sAxisY()).GetY()>.8f,"City car left the turn's pavement");
+    }
+    std::cout<<"City circulation tight="<<tight<<": "<<distance<<"m, "<<cells.size()<<" cells, stopped "<<longest_stop<<"s\n";
+    require(distance>250 && cells.size()>(tight ? 7 : 25) && longest_stop<4,"City car stalled at a turn or junction");
+    require(backed==tight,"City car reversed away from a dead end or failed to make its tight turnaround");
+    require(!tight || yielded,"Turning car did not wait for an obstacle behind it");
+}
 } // namespace
 int main(int argc, char** argv) {
     try {
         const std::string check = argc > 1 ? argv[1] : "all";
         require(check == "all" || check == "roads" || check == "theft" || check == "obstructions" || check == "safety"
-            || check == "highways", "unknown traffic check");
+            || check == "highways" || check == "city", "unknown traffic check");
         if (check == "all" || check == "roads") roads_and_driving();
         if (check == "all" || check == "theft") braking_and_theft();
         if (check == "all" || check == "obstructions") traffic_obstructions();
         if (check == "all" || check == "safety") traffic_horns_and_safety();
         if (check == "all" || check == "highways") highway_traffic();
+        if (check == "all" || check == "city") {city_circulation(); city_circulation(true);}
         std::cout << "All traffic and theft checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

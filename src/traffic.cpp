@@ -150,7 +150,7 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment,const std::
         const auto& route = routes_.back();
         for (int i = 0; ambient && i < count; ++i) {
             std::size_t start = (route.size() * (i * 2 + 1) / (count * 2) + r * 17) % route.size();
-            if (r == 0 && i == 0) start = locate(route, Vec3(lane_offset, environment.ground_height(lane_offset, 88) + .56f, 88)).segment;
+            if (r == 0 && i == 0) start = locate(route, Vec3(lane_offset, environment.ground_height(lane_offset, 88), 88)).segment;
             auto car = create();
             car->set_simulated(false);
             const Vec3 p = route[start];
@@ -219,15 +219,25 @@ void Traffic::finish(Vec3 player_position, float dt) {
 }
 Traffic::RouteLocation Traffic::locate(const std::vector<Vec3>& route, Vec3 position, std::size_t hint) const {
     RouteLocation nearest{0, route.front(), std::numeric_limits<float>::max()};
-    position -= Vec3(0, .56f, 0);
-    const std::size_t count = hint == std::size_t(-1) ? route.size() : std::min<std::size_t>(64,route.size());
-    for (std::size_t sample = 0; sample < count; ++sample) {
-        const std::size_t i = hint == std::size_t(-1) ? sample : (hint+route.size()+sample-std::min<std::size_t>(8,route.size()))%route.size();
+    const auto consider=[&](std::size_t i) {
         const Vec3 segment = route[(i + 1) % route.size()] - route[i];
         const float t = std::clamp((position - route[i]).Dot(segment) / std::max(segment.LengthSq(), .001f), 0.0f, 1.0f);
         const Vec3 point = route[i] + segment * t;
         const float distance = (point - position).LengthSq();
         if (distance < nearest.distance) nearest = {i, point, distance};
+    };
+    if (hint==std::size_t(-1)) for (std::size_t i=0;i<route.size();++i) consider(i);
+    else {
+        hint%=route.size(); consider(hint); const Vec3 point=nearest.point;
+        // Track progress by metres, so dense bends cannot jump to a later junction visit.
+        for (int direction:{1,-1}) {
+            std::size_t i=hint;
+            float distance=(point-route[direction>0 ? (hint+1)%route.size() : hint]).Length();
+            for (std::size_t count=1;count<route.size() && distance<=(direction>0 ? 8.f : 2.f);++count) {
+                i=(i+route.size()+direction)%route.size(); consider(i);
+                distance+=(route[(i+1)%route.size()]-route[i]).Length();
+            }
+        }
     }
     nearest.distance = std::sqrt(nearest.distance);
     return nearest;
@@ -270,9 +280,9 @@ void Traffic::stream(Vec3 player_position, const Car* starter, const Plane* plan
                 && (position - other.car->position()).LengthSq() < 6 * 6) { occupied = true; break; }
             if (police_) for (const auto& unit : police_->units()) if (unit.active && (position - unit.car->position()).LengthSq() < 6 * 6) occupied = true;
             if (occupied) continue;
-            car.set_simulated(true); vehicle.plan_time = 0; vehicle.stuck_time = 0;
+            car.set_simulated(true); vehicle.plan_time = 0; vehicle.stuck_time = 0; vehicle.turning_back = false;
         } else {
-            const auto location = locate(routes_[vehicle.route], car.position(),environment_.city() ? vehicle.segment : std::size_t(-1));
+            const auto location = locate(routes_[vehicle.route], car.position()-Vec3(0,car.ride_height(),0),environment_.city() ? vehicle.segment : std::size_t(-1));
             vehicle.point = location.point; vehicle.segment = location.segment;
             car.set_simulated(false);
             clear_driver(vehicle);
@@ -320,7 +330,7 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         vehicle.plan_time = plan_dt;
         const Vec3 position = car.position(), direction = flat(car.forward()).NormalizedOr(Vec3(0, 0, -1));
         const float speed = flat(car.velocity()).Length();
-        const auto location = locate(route, position,environment_.city() ? vehicle.segment : std::size_t(-1));
+        const auto location = locate(route, position-Vec3(0,car.ride_height(),0),environment_.city() ? vehicle.segment : std::size_t(-1));
         if (environment_.city()) vehicle.segment = location.segment;
         Vec3 target = ahead(route, location, environment_.city() ? 2.2f+speed*.35f : 3.5f+speed*.55f);
         if (vehicle.pass_blocker) {
@@ -351,17 +361,19 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
             // Give one car the junction until its rear has cleared it.
             for (auto it = junctions_.begin(); it != junctions_.end();) {
                 const auto& junction = intersections_[it->first]; const Vec3 delta = it->second->position()-junction.center;
-                if (!is_npc(it->second) || it->second->destroyed() || std::abs(delta.GetX())>junction.half.GetX()+3 || std::abs(delta.GetZ())>junction.half.GetZ()+3) it = junctions_.erase(it);
+                if (!is_npc(it->second) || !it->second->simulated() || it->second->destroyed() || std::abs(delta.GetX())>junction.half.GetX()+3 || std::abs(delta.GetZ())>junction.half.GetZ()+3) it = junctions_.erase(it);
                 else ++it;
             }
             for (float distance : {0.f,6.f,12.f}) {
                 int key = -1;
                 for (std::size_t j = 0; j < intersections_.size(); ++j) {
-                    const Vec3 delta = location.point+direction*distance-intersections_[j].center;
+                    const Vec3 delta = ahead(route,location,distance)-intersections_[j].center;
                     if (std::abs(delta.GetX())<=intersections_[j].half.GetX() && std::abs(delta.GetZ())<=intersections_[j].half.GetZ()) { key = int(j); break; }
                 }
                 if (key<0) continue;
                 const auto& junction = intersections_[key]; const Vec3 center = junction.center;
+                const Vec3 offset=position-center;
+                const bool inside=std::abs(offset.GetX())<=junction.half.GetX() && std::abs(offset.GetZ())<=junction.half.GetZ();
                 auto found = junctions_.find(key);
                 if (found == junctions_.end()) {
                     bool occupied = false;
@@ -369,9 +381,9 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
                         const Vec3 delta = other.car->position()-center;
                         if (std::abs(delta.GetX())<junction.half.GetX()+1 && std::abs(delta.GetZ())<junction.half.GetZ()+1) occupied = true;
                     }
-                    if (!occupied) found = junctions_.emplace(key,&car).first;
+                    if (inside || !occupied) found = junctions_.emplace(key,&car).first;
                 }
-                if (found == junctions_.end() || found->second != &car) {
+                if (!inside && (found == junctions_.end() || found->second != &car)) {
                     const float stop = flat(center-position).Dot(direction)-std::abs(direction.GetX())*junction.half.GetX()-std::abs(direction.GetZ())*junction.half.GetZ()-3;
                     desired_speed = std::min(desired_speed,std::max(0.f,stop*.7f));
                 }
@@ -504,18 +516,35 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         }
         vehicle.blocked = obstructed;
         const float angle = std::atan(car.tuning().wheelbase * curvature);
-        const bool brake = desired_speed < .1f || speed > desired_speed + .5f;
-        const float throttle = brake ? 0 : std::clamp((desired_speed + (desired_speed - speed) * .8f) / car.tuning().top_speed, 0.0f, 1.0f);
-        vehicle.input = {throttle, std::clamp(angle / steer_limit, -1.0f, 1.0f), false, brake};
+        bool brake = desired_speed < .1f || speed > desired_speed + .5f;
+        float throttle = brake ? 0 : std::clamp((desired_speed + (desired_speed - speed) * .8f) / car.tuning().top_speed, 0.0f, 1.0f);
+        float steer=std::clamp(angle/steer_limit,-1.0f,1.0f);
+        if (environment_.city()) {
+            const auto& city=*environment_.city(); const auto cell=City::cell(position.GetX(),position.GetZ());
+            const auto mask=city.road_mask(cell);
+            const Vec3 forward=position+direction*(2+speed*.8f);
+            const bool clear_forward=city.road(City::cell(forward.GetX(),forward.GetZ()));
+            const float alignment=flat(target-position).NormalizedOr(direction).Dot(direction);
+            // A car that cannot fit the dead-end circle makes a three-point turn.
+            if (!vehicle.turning_back && mask && !(mask&(mask-1)) && !clear_forward && alignment<.4f) vehicle.turning_back=true;
+            if (vehicle.turning_back && clear_forward && alignment>.8f) vehicle.turning_back=false;
+            if (vehicle.turning_back) {
+                brake=yielding;
+                for (float edge:{-1.f,0.f,1.f})
+                    if (world_.camera_fraction(position+Vec3(0,.4f,0)+right(direction)*edge,-direction*4,car.body_id())<.98f) brake=true;
+                throttle=brake ? 0 : -1.5f/11; steer=-steer;
+            }
+        }
+        vehicle.input = {throttle, steer, false, brake};
         car.step(vehicle.input, dt);
         const bool lost = location.distance > 8 || car.rotate(Vec3::sAxisY()).GetY() < .35f || environment_.submerged(position);
-        vehicle.stuck_time = lost || (speed < .3f && !yielding && !obstructed && !vehicle.pass_blocker) ? vehicle.stuck_time + plan_dt : 0;
+        vehicle.stuck_time = lost || (speed < .3f && !yielding && !obstructed && !vehicle.pass_blocker && !vehicle.turning_back) ? vehicle.stuck_time + plan_dt : 0;
         if (vehicle.stuck_time > 8 && flat(position - player_position).LengthSq() > 35 * 35) {
-            const Vec3 recovery = ahead(route, location, 18);
-            if (space_available(recovery, car, starter_car, plane, player_position)) {
-                car.reset(recovery + Vec3(0, car.ride_height(), 0),
-                    yaw(ahead(route, locate(route, recovery + Vec3(0, car.ride_height(), 0)), 2) - recovery));
-                vehicle.stuck_time = 0;
+            const auto recovery = advance(route, location, 18);
+            if (space_available(recovery.point, car, starter_car, plane, player_position)) {
+                car.reset(recovery.point + Vec3(0, car.ride_height(), 0),yaw(ahead(route,recovery,2)-recovery.point));
+                vehicle.segment=recovery.segment; vehicle.point=recovery.point;
+                vehicle.stuck_time = 0; vehicle.turning_back = false;
                 clear_driver(vehicle);
             }
         }

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <set>
 
 namespace {
 using namespace ambaretto;
@@ -19,10 +20,68 @@ std::size_t walking_count(const Pedestrians& pedestrians, const Environment& map
     }
     return count;
 }
+void city_turns(bool crowded=false,int rotation=0) {
+    City city=City::create("Walking through turns"); std::string error;
+    const auto rotate=[&](CityCell cell) {for (int i=0;i<rotation;++i) cell={128-cell.z,cell.x}; return cell;};
+    require(city.add_land({50,50},{78,78},error) && city.add_road(City::road_stroke(rotate({60,54}),rotate({60,65})),error)
+        && city.add_road(City::road_stroke(rotate({60,65}),rotate({72,65})),error) && city.set_spawn(rotate({63,61}),error),"Walking turn fixture failed");
+    Environment map(city); PhysicsWorld world(map); Car starter(world); starter.set_simulated(false);
+    Pedestrians pedestrians(world,map);
+    const Pedestrian* walker=nullptr; const Vec3 turn=City::center(rotate({60,65}));
+    for (const auto& person:pedestrians.people()) if (person.enabled
+        && (!walker || (person.character->position()-turn).LengthSq()<(walker->character->position()-turn).LengthSq())) walker=&person;
+    require(walker,"No pedestrian spawned at the road turn");
+    if (!crowded) for (const auto& person:pedestrians.people()) if (&person!=walker) {person.character->reset({600,100,600}); person.character->set_enabled(false);}
+    std::vector<Vec3> starts; std::vector<float> progress(pedestrians.people().size());
+    for (const auto& person:pedestrians.people()) starts.push_back(person.character->position());
+    const Vec3 start=walker->character->position(); std::set<std::pair<int,int>> cells;
+    float distance=0;
+    for (int i=0;i<120*30;++i) {
+        world.step(); pedestrians.step(starter,nullptr,{500,100,500});
+        const Vec3 p=walker->character->position(); const auto cell=City::cell(p.GetX(),p.GetZ());
+        if (crowded) for (std::size_t j=0;j<progress.size();++j) if (pedestrians.people()[j].enabled) {
+            const Vec3 current=pedestrians.people()[j].character->position();
+            progress[j]=std::max(progress[j],(current-starts[j]).Length());
+            require(map.terrain_height(current.GetX(),current.GetZ())>1,"Passing pedestrian left the turn's terrain");
+        }
+        cells.emplace(cell.x,cell.z); distance=std::max(distance,(p-start).Length());
+        require(map.terrain_height(p.GetX(),p.GetZ())>1 && std::abs(p.GetY()-map.terrain_height(p.GetX(),p.GetZ()))<.2f,"Pedestrian left the turn's terrain");
+    }
+    if (!crowded) require(cells.size()>=3 && distance>15,"Pedestrian stayed on a tiny turn segment instead of continuing along the street");
+    if (crowded) {
+        const auto enabled=std::count_if(pedestrians.people().begin(),pedestrians.people().end(),[](const auto& p){return p.enabled;});
+        const auto moving=std::count_if(progress.begin(),progress.end(),[](float distance){return distance>15;});
+        std::cout<<moving<<"/"<<enabled<<" pedestrians continued through crowded turns\n";
+        require(moving*4>=enabled*3,"Opposing pedestrians jammed the turn");
+    }
+}
+void city_bridge() {
+    City city=City::create("Walkable bridge approaches"); std::string error;
+    require(city.add_land({50,58},{58,70},error) && city.add_land({68,58},{76,70},error)
+        && city.add_road(City::road_stroke({51,64},{75,64}),error) && city.set_spawn({54,62},error),"Walking bridge fixture failed");
+    Environment map(city); PhysicsWorld world(map); Car starter(world); starter.set_simulated(false);
+    Pedestrians pedestrians(world,map); bool west=false,east=false;
+    for (const auto& person:pedestrians.people()) if (person.enabled) {
+        const auto cell=City::cell(person.character->position().GetX(),person.character->position().GetZ());
+        west|=cell.x<=58; east|=cell.x>=68;
+    }
+    require(west && east && walking_count(pedestrians,map)>=12,"Bridge removed pedestrians from its walkable approaches");
+    for (int i=0;i<120*15;++i) {
+        world.step(); pedestrians.step(starter,nullptr,{500,100,500});
+        for (const auto& person:pedestrians.people()) if (person.enabled) {
+            const Vec3 p=person.character->position();
+            require(map.terrain_height(p.GetX(),p.GetZ())>1 && std::abs(p.GetY()-map.terrain_height(p.GetX(),p.GetZ()))<.2f,"Pedestrian walked into bridge water");
+        }
+    }
+}
 } // namespace
 
-int main() {
+int main(int argc,char** argv) {
     try {
+        if (argc==2 && std::string(argv[1])=="city") {
+            for (int rotation=0;rotation<4;++rotation) {city_turns(false,rotation); city_turns(true,rotation);}
+            city_bridge(); return 0;
+        }
         const Environment map;
         PhysicsWorld world(map);
         Car car(world);
@@ -64,7 +123,9 @@ int main() {
             pedestrians.step(car, nullptr, hit);
         }
         require(target.ragdolling(), "moving car did not ragdoll the pedestrian");
-        std::cout << initial_count << " downtown pedestrians; walking, town streaming and car impact passed\n";
+        for (int rotation=0;rotation<4;++rotation) {city_turns(false,rotation); city_turns(true,rotation);}
+        city_bridge();
+        std::cout << initial_count << " downtown pedestrians; walking, city turns, town streaming and car impact passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n'; return 1;
     }

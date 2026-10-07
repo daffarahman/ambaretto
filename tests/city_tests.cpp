@@ -10,6 +10,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
+#include <set>
 #include <limits>
 #include <iomanip>
 
@@ -778,7 +779,7 @@ City single_road_turns() {
     require(touching.add_road(City::road_stroke({66,60},{66,64}),error)
         && touching.add_road(City::road_stroke({60,64},{65,64}),error),"touching strokes failed");
     require(touching.road_mask({66,64})==9 && touching.road_mask({65,64})==10,"perpendicular strokes touch without connecting");
-    require(touching.road_network().size()==11 && touching.traffic_routes().size()==1,"touching road traffic remains disconnected");
+    require(touching.road_network().size()==11 && !touching.traffic_routes().empty(),"touching road traffic remains disconnected");
     // The saved city's tight S turn meets a perpendicular stroke beside its endpoint.
     City tight = City::create("Tight offset turn");
     require(tight.add_land({60,60},{72,72},error),"tight turn land failed");
@@ -786,7 +787,7 @@ City single_road_turns() {
         && tight.add_road(City::road_stroke({65,66},{69,66}),error)
         && tight.add_road(City::road_stroke({69,66},{70,65},true),error),"tight turn strokes failed");
     require(tight.road_mask({69,66})==9 && tight.road_mask({69,65})==6 && tight.road_mask({70,65})==9,"tight turn lost its consecutive bends");
-    require(tight.traffic_routes().size()==1,"tight turn traffic remains disconnected");
+    require(!tight.traffic_routes().empty(),"tight turn traffic remains disconnected");
     require(tight.set_spawn({62,62},error),"turn spawn failed");
     return tight;
 }
@@ -981,7 +982,7 @@ City diagonal_road_drags(const std::filesystem::path& directory) {
         && crossing.add_road(City::road_stroke({54,64},{75,64}),error),"diagonal crossing failed");
     const auto crossings = crossing.road_network();
     require(std::any_of(crossings.begin(),crossings.end(),[](const auto& node){return node.edges.size()>=3;})
-        && crossing.traffic_routes().size()==1,"diagonal swallowed a perpendicular street junction");
+        && !crossing.traffic_routes().empty(),"diagonal swallowed a perpendicular street junction");
     require_routes_on_pavement(crossing);
 
     City bridge = City::create("Diagonal bridge");
@@ -1077,8 +1078,8 @@ City islands_and_bridges(const std::filesystem::path& directory) {
     auto network = city.road_network();
     require(network.size()==50,"adjacent roads merged into an avenue");
     require(std::all_of(network.begin(),network.end(),[](const auto& n){return n.first==n.last;}),"single roads merged parallel tiles");
-    auto routes = city.traffic_routes(); require(routes.size()==1,"adjacent road traffic is disconnected");
-    for (auto p : routes.front()) require(city.road(City::cell(p.GetX(),p.GetZ())),"single-road traffic leaves the deck");
+    auto routes = city.traffic_routes(); require(!routes.empty(),"adjacent road traffic is disconnected");
+    for (const auto& route:routes) for (auto p : route) require(city.road(City::cell(p.GetX(),p.GetZ())),"single-road traffic leaves the deck");
     require(city.add_road(City::road_stroke({54,60},{54,69}),error),"avenue crossing failed");
     network = city.road_network();
     require(std::count_if(network.begin(),network.end(),[](const auto& n){return n.edges.size()==4;})==2,"crossing merged adjacent road junctions");
@@ -1148,6 +1149,43 @@ void dead_ends() {
     police.crime(Crime::OfficerHomicide,pursued.position(),police.units()[0].officers[0].character.get());
     for (int i = 0; i<120*8; ++i) { pursued.character().revive(); pursued.step({},{}); }
     require(std::count_if(police.units().begin(),police.units().end(),[](const auto& u){return u.active;})>=2,"police could not reinforce on a small island");
+}
+void through_road_routes() {
+    std::string error;
+    City city=City::create("Continuous turns");
+    require(city.add_land({50,50},{76,76},error),"Through-road fixture land failed");
+    for (const auto& ends : {std::pair<CityCell,CityCell>{{54,54},{72,54}},{{72,54},{72,72}},{{72,72},{54,72}},{{54,72},{54,54}}})
+        require(city.add_road(City::road_stroke(ends.first,ends.second),error),"Through-road fixture failed");
+    const auto check=[&] {
+        const auto nodes=city.road_network(); std::array<int,City::width*City::width> owner; owner.fill(-1);
+        for (int n=0;n<int(nodes.size());++n) for (int z=nodes[n].first.z;z<=nodes[n].last.z;++z) for (int x=nodes[n].first.x;x<=nodes[n].last.x;++x) owner[City::index({x,z})]=n;
+        std::vector<bool> seen(nodes.size()); std::set<std::pair<int,int>> streets;
+        for (const auto& route:city.traffic_routes()) {
+            std::vector<int> visits;
+            for (std::size_t i=0;i<route.size();++i) {
+                const Vec3 a=route[i],delta=route[(i+1)%route.size()]-a;
+                const int steps=std::max(1,int(std::ceil(delta.Length()/.25f)));
+                for (int j=0;j<steps;++j) {
+                    const Vec3 p=a+delta*((j+.5f)/steps); const auto cell=City::cell(p.GetX(),p.GetZ());
+                    const int node=City::contains(cell) ? owner[City::index(cell)] : -1;
+                    require(node>=0,"Traffic route left connected road cells"); seen[node]=true;
+                    if (visits.empty() || visits.back()!=node) visits.push_back(node);
+                }
+            }
+            if (visits.size()>1 && visits.front()==visits.back()) visits.pop_back();
+            for (std::size_t i=0;i<visits.size();++i) {
+                const int before=visits[(i+visits.size()-1)%visits.size()],next=visits[(i+1)%visits.size()];
+                streets.emplace(visits[i],next);
+                require(before!=next || nodes[visits[i]].edges.size()==1,"Traffic made a U-turn where another road continues");
+            }
+        }
+        require(std::all_of(seen.begin(),seen.end(),[](bool visited){return visited;}),"Traffic routes omitted a connected street");
+        for (int i=0;i<int(nodes.size());++i) for (int next:nodes[i].edges) require(streets.count({i,next})==1,"Traffic omitted a street direction");
+    };
+    check();
+    require(city.add_road(City::road_stroke({54,63},{72,63}),error),"Crossing route fixture failed"); check();
+    require(city.add_road(City::road_stroke({63,50},{63,75}),error),"Junction route fixture failed"); check();
+    require_routes_on_pavement(city);
 }
 void car_designs(const std::filesystem::path& directory) {
     std::string error; CarDesign design; design.name="Custom patrol"; design.body="body.GLB"; design.wheel="wheel.glb";
@@ -1291,7 +1329,7 @@ void gameplay() {
     require(map.height(offshore.GetX(),offshore.GetZ())==-8,"new map height is not water");
     GroundHit hit;
     require(world.cast_ground(map.spawn()+Vec3(0,5,0),Vec3(0,-1,0),10,hit) && std::abs(hit.point.GetY()-City::level)<.01f,"rendered land and collision do not match");
-    auto routes = city.traffic_routes(); require(routes.size()==1,"connected streets did not share a route");
+    auto routes = city.traffic_routes(); require(!routes.empty(),"connected streets have no routes");
     for (const auto& route : routes) for (auto p : route) require(city.tile(City::cell(p.GetX(),p.GetZ()))==CityTile::Road,"traffic route leaves road grid");
     Car starter(world); Plane placeholder(world); placeholder.set_simulated(false);
     auto aircraft = parked_aircraft(world,map);
@@ -1345,7 +1383,7 @@ int main(int argc,char** argv) {
         }
         const auto directory = std::filesystem::temp_directory_path()/("ambaretto-city-test-"+City::create("test").id);
         data_and_saves(directory); building_meshes(directory); building_mesh_editing(directory); building_design_updates(directory); building_rotation(directory); generated_terrain(directory); trees_and_time(directory); ground_paint(directory); custom_ground_textures(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay(); car_designs(directory);
-        saved_copies(directory);
+        through_road_routes(); saved_copies(directory);
         // Remove only files in this run's unique test directory; no recursive deletion.
         for (const auto& entry : std::filesystem::directory_iterator(directory)) std::filesystem::remove(entry.path());
         std::filesystem::remove(directory);

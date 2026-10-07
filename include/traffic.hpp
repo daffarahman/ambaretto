@@ -22,6 +22,7 @@ struct TrafficCar {
     float plan_time = 0;
     float horn_time = 0, horn_cooldown = 0, blocked_time = 0, pass_retry = 0;
     bool blocked = false;
+    bool turning_back = false;
     const Car* pass_blocker = nullptr;
     const Road* pass_road = nullptr;
     Vec3 pass_end = Vec3::sZero(), pass_direction = Vec3::sZero();
