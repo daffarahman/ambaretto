@@ -7,12 +7,12 @@ namespace ambaretto {
 namespace {
 constexpr Color blue = ui::dos_blue, gray = ui::dos_white, ink = ui::dos_blue, selected = ui::dos_light_blue;
 struct Item { const char* label; MenuCommand command; const char* shortcut = ""; };
-constexpr Item files[] = {{"Resume", MenuCommand::Resume, "Esc"}, {"End Game / Desktop", MenuCommand::Cities}};
+constexpr Item files[] = {{"Resume", MenuCommand::Resume, "Esc"}, {"End Game / Main menu", MenuCommand::Cities}};
 constexpr Item edits[] = {{"Recover vehicle", MenuCommand::Recover}, {"Restore car tuning", MenuCommand::CarDefaults}};
 constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Aim mode", MenuCommand::AimMode}};
 constexpr Item main_settings[] = {{"Graphics...", MenuCommand::Graphics}, {"Controller mapping...", MenuCommand::Controllers}, {"Car editor...", MenuCommand::CarEditor}, {"Character creator...", MenuCommand::CharacterCreator}};
 constexpr Item helps[] = {{"Controls...", MenuCommand::Controls}, {"About...", MenuCommand::About}};
-constexpr Item editor_files[] = {{"Save city", MenuCommand::SaveCity, "Ctrl+S"}, {"Start time...", MenuCommand::StartTime}, {"Play city", MenuCommand::PlayCity}, {"Cities...", MenuCommand::Cities, "Esc"}, {"Close app", MenuCommand::Quit}, {"Refresh saved designs", MenuCommand::RefreshDesigns}};
+constexpr Item editor_files[] = {{"Save city", MenuCommand::SaveCity, "Ctrl+S"}, {"Start time...", MenuCommand::StartTime}, {"Play city", MenuCommand::PlayCity}, {"Cities...", MenuCommand::Cities, "Esc"}, {"Main menu", MenuCommand::Quit}, {"Refresh saved designs", MenuCommand::RefreshDesigns}};
 constexpr Item editor_edits[] = {{"Undo", MenuCommand::Undo, "Ctrl+Z"}, {"Redo", MenuCommand::Redo, "Ctrl+Y"}, {"Delete selection", MenuCommand::DeleteSelection, "Del"}, {"Select / edit", MenuCommand::SelectTool, "1"}, {"Bulldoze", MenuCommand::BulldozeTool, "7"}};
 constexpr Item tiles[] = {{"Island / expand",MenuCommand::LandTool,"2"}, {"Road: L-shaped",MenuCommand::RoadBend,"3"}, {"Road: diagonal",MenuCommand::RoadDiagonal},
     {"Ground texture...",MenuCommand::GroundTool,"9"},
@@ -25,7 +25,7 @@ constexpr Item objects[] = {{"Player spawn",MenuCommand::SpawnTool,"5"}, {"Choos
     {"Car editor...",MenuCommand::CarEditor}, {"Edit selected car...",MenuCommand::EditCar},
     {"Character creator...",MenuCommand::CharacterCreator}, {"Choose player character...",MenuCommand::ChoosePlayerCharacter}};
 constexpr Item views[] = {{"Top view", MenuCommand::TopView, "V"}, {"Show grid", MenuCommand::Grid, "G"}, {"Rotate left", MenuCommand::RotateLeft, "Q"}, {"Rotate right", MenuCommand::RotateRight, "E"}, {"Zoom in", MenuCommand::ZoomIn}, {"Zoom out", MenuCommand::ZoomOut}};
-constexpr Item city_files[] = {{"Create new city...", MenuCommand::NewCity, "Ins"}, {"Close app", MenuCommand::Quit}};
+constexpr Item city_files[] = {{"Create new city...", MenuCommand::NewCity, "Ins"}, {"Main menu", MenuCommand::Quit}};
 constexpr Item city_actions[] = {{"Open / edit city", MenuCommand::EditCity, "E"}, {"Play city", MenuCommand::PlayCity, "Enter"}, {"Rename...", MenuCommand::RenameCity, "F2"}, {"Delete city...", MenuCommand::DeleteCity, "Del"}, {"Choose player character...", MenuCommand::ChoosePlayerCharacter}};
 struct Menu { const char* title; const Item* items; int count; };
 constexpr Menu game_menus[] = {{"File", files, int(std::size(files))}, {"Edit", edits, 2}, {"Settings", settings, 3}, {"Help", helps, 2}};

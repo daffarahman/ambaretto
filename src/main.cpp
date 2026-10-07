@@ -1,5 +1,4 @@
 #include "ui_font.hpp"
-#include "desktop.hpp"
 #include "vehicle.hpp"
 #include "environment.hpp"
 #include "environment_renderer.hpp"
@@ -384,8 +383,7 @@ int main(int argc, char** argv) {
     std::string time_override;
     std::string screenshot;
     std::string city_path;
-    std::string session, design_path;
-    bool cities_app=false, settings_app=false, create_new=false;
+    bool cities_list=false, preview_settings=false, create_new=false;
     bool preview_editor = false, preview_building = false, preview_car = false, preview_character = false;
     bool performance_tuning = false;
     bool start_controllers = false, start_menu = false, start_help = false;
@@ -399,11 +397,9 @@ int main(int argc, char** argv) {
         if (arg == "--building-builder") preview_building = true;
         if (arg == "--car-editor") preview_car = true;
         if (arg == "--character-creator") preview_character = true;
-        if (arg == "--cities") cities_app=true;
-        if (arg == "--settings") settings_app=true;
+        if (arg == "--cities") cities_list=true;
+        if (arg == "--settings") preview_settings=true;
         if (arg == "--new") create_new=true;
-        if (arg == "--session" && i+1<argc) session=argv[++i];
-        if (arg == "--design" && i+1<argc) design_path=argv[++i];
         if (arg == "--overview") { map_open = true; start_region_map = true; }
         if (arg == "--map") map_open = true;
         if (arg == "--tuning") tuning_open = true;
@@ -422,10 +418,10 @@ int main(int argc, char** argv) {
             time_override = argv[i];
         }
     }
-    unsigned int window_flags = FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_ALWAYS_RUN;
+    unsigned int window_flags = FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE;
     if (!screenshot.empty()) window_flags |= FLAG_WINDOW_HIDDEN;
     SetConfigFlags(window_flags);
-    InitWindow(1280, 720, "Ambaretto - Desktop");
+    InitWindow(1280, 720, "Ambaretto - Main menu");
     if (!IsWindowReady()) return 1;
     SetWindowMinSize(1024, 600);
     SetExitKey(KEY_NULL);
@@ -439,10 +435,9 @@ int main(int argc, char** argv) {
     {
         const ambaretto::ui::FontResource ui_font;
         const auto cities_directory = std::filesystem::path(GetApplicationDirectory()) / "cities";
-        ambaretto::set_app_session(session);
         if (preview_building || preview_car || preview_character)
-            ambaretto::design_app(preview_building ? ambaretto::DesktopApp::Buildings : preview_car ? ambaretto::DesktopApp::Cars : ambaretto::DesktopApp::Characters,
-                cities_directory.parent_path(),screenshot,create_new,design_path);
+            ambaretto::design_menu(preview_building ? ambaretto::DesignKind::Building : preview_car ? ambaretto::DesignKind::Car : ambaretto::DesignKind::Character,
+                cities_directory.parent_path(),screenshot,create_new);
         ambaretto::ControllerMapping controls;
         const auto mapping_path = std::filesystem::path(GetApplicationDirectory()) / "controller-mappings.ini";
         std::string mapping_error;
@@ -460,7 +455,7 @@ int main(int argc, char** argv) {
         }
         if (graphics.vsync) SetWindowState(FLAG_VSYNC_HINT); else ClearWindowState(FLAG_VSYNC_HINT);
         SetTargetFPS(graphics.fps_limit);
-        if (settings_app) ambaretto::settings_app(controls,graphics);
+        if (preview_settings) ambaretto::settings_menu(controls,graphics,screenshot);
         ambaretto::City selected_city;
         bool direct_city = !city_path.empty();
         if (direct_city) {
@@ -468,31 +463,21 @@ int main(int argc, char** argv) {
             if (!ambaretto::City::load(city_path,selected_city,error)) { TraceLog(LOG_ERROR,"%s",error.c_str()); direct_city = false; }
             else if (!selected_city.playable()) preview_editor = true;
         }
-        while (!preview_building && !preview_car && !preview_character && !settings_app && !ambaretto::app_should_close()) {
-        if (cities_app || preview_editor || start_graphics || start_controllers) {
+        while (!preview_building && !preview_car && !preview_character && !preview_settings && !WindowShouldClose()) {
+        if (cities_list || preview_editor || start_graphics || start_controllers) {
             SetWindowTitle("Ambaretto - Cities");
             const auto settings = start_graphics ? ambaretto::MenuCommand::Graphics : start_controllers ? ambaretto::MenuCommand::Controllers : ambaretto::MenuCommand::None;
             if (!ambaretto::city_menu(selected_city,cities_directory,controls,graphics,preview_editor && direct_city,
                     screenshot,preview_editor,settings)) {
-                if (!ambaretto::close_apps()) {ambaretto::cancel_app_close(); continue;}
-                break;
-            }
-            if (!ambaretto::close_apps()) continue;
-            if (!session.empty()) {
-                std::string error;
-                if (selected_city.save(cities_directory,error) && ambaretto::request_play(selected_city,error)) break;
-                TraceLog(LOG_ERROR,"%s",error.c_str()); continue;
+                if (!screenshot.empty()) break;
+                cities_list=preview_editor=start_graphics=start_controllers=false; direct_city=false;
+                continue;
             }
             start_graphics = start_controllers = false;
         } else if (!direct_city) {
-            if (!ambaretto::desktop_menu(selected_city,cities_directory,screenshot)) break;
-            // Independent settings windows persist to disk; read their saved state before Play.
-            if (std::filesystem::exists(mapping_path)) controls.load(mapping_path,mapping_error);
-            if (std::filesystem::exists(graphics_path)) graphics.load(graphics_path,graphics_status);
-            if (graphics.vsync) SetWindowState(FLAG_VSYNC_HINT); else ClearWindowState(FLAG_VSYNC_HINT);
-            SetTargetFPS(graphics.fps_limit);
+            if (!ambaretto::main_menu(selected_city,cities_directory,controls,graphics,screenshot)) break;
         }
-        direct_city = false; preview_editor = false; cities_app=false;
+        direct_city = false; preview_editor = false; cities_list=false;
         SetWindowTitle(("Ambaretto - "+selected_city.name).c_str());
         day_night = ambaretto::DayNight();
         if (!time_override.empty()) day_night.set_time(time_override);
@@ -1158,7 +1143,6 @@ int main(int argc, char** argv) {
         if (!screenshot.empty()) break;
         map_open = tuning_open = false; start_menu = start_controllers = start_help = start_graphics = false;
         }
-        ambaretto::close_apps();
     }
     EnableCursor();
     if (IsAudioDeviceReady()) CloseAudioDevice();
