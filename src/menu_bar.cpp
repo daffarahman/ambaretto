@@ -65,7 +65,7 @@ bool checked(MenuCommand command, const MenuState& state) {
     return state.tool >= 0 && int(command) == int(MenuCommand::SelectTool) + state.tool;
 }
 Rectangle title_rect(MenuMode mode, int menu) {
-    float x = 44;
+    float x = 0;
     for (int i = 0; i < menu; ++i) x += ui::measure_text(menus(mode)[i].title, 19) + 32;
     return {x, 0, float(ui::measure_text(menus(mode)[menu].title, 19) + 32), menu_height};
 }
@@ -236,9 +236,6 @@ MenuCommand MenuBar::update(const MenuState& state, const MenuInput& input) {
 void MenuBar::draw(const MenuState& state) const {
     DrawRectangle(0, 0, GetScreenWidth(), menu_height, gray);
     DrawLine(0, menu_height - 1, GetScreenWidth(), menu_height - 1, blue);
-    DrawRectangleLines(10, 7, 22, 18, blue);
-    DrawRectangle(14, 11, 14, 6, blue);
-    DrawLine(18, 21, 24, 21, blue);
     for (int i = 0; i < menu_count(mode_); ++i) {
         const auto r = title_rect(mode_, i);
         if (dropdown_ == i) DrawRectangleRec(r, blue);
