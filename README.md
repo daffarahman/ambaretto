@@ -9,6 +9,7 @@ See the [full guide](docs/GUIDE.md) for editor instructions, controls, save form
 - A C++17 compiler, CMake **3.24 or newer**, Ninja, Git, and pkg-config.
 - raylib **6.0** and GLFW **3.4 or newer**, sharing the same GLFW library. The steps below install these.
 - A desktop session and an OpenGL **3.3** capable graphics driver.
+- On x86-64, the default game/physics build uses SSE2; AVX, FMA, F16C, and SSE4 are not required.
 - Internet access for the first setup: CMake downloads and builds Jolt **5.4.0** automatically. No separate Jolt installation is needed.
 
 Build commands use two parallel jobs to limit memory use. Use `--parallel 1` if your computer runs out of RAM.
@@ -154,6 +155,22 @@ cmake --build build/release --target Ambaretto --parallel 2
 ```
 
 After changing game code, repeat only the game build command. When configuring from a new terminal, set `PKG_CONFIG_PATH` again. Keep the dependency installation in place; moving the checkout requires reconfiguring its library paths.
+
+### Illegal instruction on Linux
+
+Older builds left some of Jolt's CPU extensions enabled even with AVX disabled. A CPU without those extensions can exit with `Illegal instruction (core dumped)`, as described in [Jolt's build guide](https://github.com/jrouwe/JoltPhysics/blob/v5.4.0/Build/README.md#illegal-instruction-error). The current CMake configuration disables all optional x86 extensions. Reconfigure and rebuild from the project directory; these explicit options also fix older checkouts:
+
+```bash
+export PKG_CONFIG_PATH="$PWD/build/deps/install/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+  -DUSE_SSE4_1=OFF -DUSE_SSE4_2=OFF \
+  -DUSE_AVX=OFF -DUSE_AVX2=OFF -DUSE_AVX512=OFF \
+  -DUSE_LZCNT=OFF -DUSE_TZCNT=OFF -DUSE_F16C=OFF -DUSE_FMADD=OFF
+cmake --build build/release --target Ambaretto --parallel 2
+./build/release/Ambaretto
+```
+
+Reconfiguration updates existing cached settings and rebuilds the affected objects; keep saved cities and designs in place. Avoid manually adding `-march=native` or CPU-specific flags when targeting older machines. If the crash persists, collect the CPU flags with `lscpu` and a stack trace with `gdb ./build/release/Ambaretto` (`run`, then `bt` and `x/i $pc`). On Fedora, install GDB with `sudo dnf install gdb`.
 
 ## First launch
 
