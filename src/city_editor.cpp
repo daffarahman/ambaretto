@@ -1578,219 +1578,112 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
 bool city_menu(City& selected,const std::filesystem::path& directory,ControllerMapping& controls,
                GraphicsSettings& graphics,bool edit_selected,const std::string& screenshot,bool preview_editor,MenuCommand initial_settings) {
     EnableCursor(); SetMouseCursor(MOUSE_CURSOR_DEFAULT);
-    bool open_editor = edit_selected || preview_editor;
-    if (preview_editor && selected.id.empty()) selected = City::create("New city");
-    std::vector<City> cities; std::string status;
-    CharacterRenderer character_renderer;
-    const auto characters_directory=directory.parent_path()/"characters";
-    int selection = -1, scroll = 0, modal = 0; std::string name;
-    int new_field = 0; bool generated_terrain = true;
-    std::string terrain_x = "48", terrain_z = "48", terrain_seed;
-    const auto new_city = [&]() {
-        modal = 1; name = "New city"; new_field = 0; generated_terrain = true; status.clear();
-        terrain_x = terrain_z = "48"; terrain_seed = std::to_string(GetRandomValue(1,2147483647));
-    };
+    if (initial_settings!=MenuCommand::None) {
+        settings_menu(controls,graphics,screenshot,initial_settings);
+        if (!screenshot.empty()) return false;
+    }
+    bool open_editor=edit_selected || preview_editor;
+    if (preview_editor && selected.id.empty()) selected=City::create("New city");
+    std::string status,name,terrain_x="48",terrain_z="48",terrain_seed;
+    std::vector<City> cities;
+    int selection=-1,scroll=0,frames=0,new_field=0;
+    bool accept_input=false,creating=false,generated_terrain=true;
     MenuBar menu(MenuMode::Cities);
-    GraphicsPanel graphics_panel;
-    GraphicsSettings graphics_original = graphics;
-    const auto mapping_path = std::filesystem::path(GetApplicationDirectory()) / "controller-mappings.ini";
-    const auto graphics_path = std::filesystem::path(GetApplicationDirectory()) / "graphics-settings.ini";
-    std::string settings_status;
-    const auto pacing = [&]() {
-        if (graphics.vsync) SetWindowState(FLAG_VSYNC_HINT); else ClearWindowState(FLAG_VSYNC_HINT);
-        SetTargetFPS(graphics.fps_limit);
+    const auto refresh=[&]() {
+        cities=saved_cities(directory,status); selection=cities.empty() ? -1 : 0;
+        for (int i=0;i<int(cities.size());++i) if (cities[i].id==selected.id) selection=i;
     };
-    if (initial_settings==MenuCommand::Graphics) graphics_panel.open(graphics);
-    if (initial_settings==MenuCommand::Controllers) menu.show(MenuCommand::Controllers);
-    const auto refresh = [&]() {
-        cities=saved_cities(directory,status);
-        selection = cities.empty() ? -1 : 0;
-        for (std::size_t i = 0; i<cities.size(); ++i) if (cities[i].id==selected.id) selection = int(i);
+    const auto new_city=[&]() {
+        creating=true; name="New city"; new_field=0; generated_terrain=true; status.clear();
+        terrain_x=terrain_z="48"; terrain_seed=std::to_string(GetRandomValue(1,2147483647));
     };
-    refresh(); int frames = 0; bool accept_input = false;
-    while (true) {
-        if (screenshot.empty() && WindowShouldClose()) {
-            if (menu.save_pending(controls,mapping_path)) return false;
-            status="Cannot save controller mappings; retry Save & close.";
-        }
+    refresh();
+    while (!WindowShouldClose()) {
         if (open_editor) {
-            open_editor = false;
-            auto result = editor(selected,directory,screenshot);
+            open_editor=false;
+            const auto result=editor(selected,directory,screenshot);
             if (result==EditorResult::Play) return true;
             if (result==EditorResult::Quit) return false;
-            refresh(); accept_input = false;
+            refresh(); accept_input=false;
         }
         if (!accept_input) SetWindowTitle("Ambaretto - Cities");
-        const float x = std::max(30.f,(GetScreenWidth()-940)/2.f), y = 52;
-        const float height = GetScreenHeight()-144.f;
-        const int rows = std::max(1,int((height-118)/66));
-        const bool has = selection>=0 && selection<int(cities.size());
-        const int previous_modal = modal;
-        std::string character_error;
-        MenuState menu_state; menu_state.selection = has; menu_state.choose_character=has;
-        menu_state.play = has && character_renderer.available(cities[selection],character_error);
-        const auto command = modal || !accept_input ? MenuCommand::None : menu.dialog_open()
-            ? menu.update(controls,mapping_path,true,read_controllers()) : menu.update(menu_state);
-        bool can_choose = accept_input && !modal && !graphics_panel.visible() && !menu.blocking() && !menu.interacted() && IsWindowFocused();
-        if (graphics_panel.visible() && command!=MenuCommand::None && command!=MenuCommand::Graphics) {
-            graphics = graphics_original; pacing(); graphics_panel.close();
+        const Rectangle r{(GetScreenWidth()-880)/2.f,70,880,float(GetScreenHeight()-140)};
+        const int rows=std::max(1,int((r.height-188)/38));
+        const bool has=selection>=0 && selection<int(cities.size()),was_creating=creating;
+        MenuState state; state.selection=has;
+        const auto command=creating || !accept_input ? MenuCommand::None : menu.update(state);
+        const bool active=accept_input && !creating && !menu.blocking() && !menu.interacted() && IsWindowFocused();
+        if (command==MenuCommand::Quit || (active && IsKeyPressed(KEY_ESCAPE))) return false;
+        if (command==MenuCommand::NewCity || (active && IsKeyPressed(KEY_INSERT))) new_city();
+        if (command==MenuCommand::EditCity || (active && has && (IsKeyPressed(KEY_E) || IsKeyPressed(KEY_ENTER)))) {
+            selected=cities[selection]; open_editor=true; continue;
         }
-        if (command==MenuCommand::Controllers) menu.show(command);
-        if (command==MenuCommand::Graphics && !graphics_panel.visible()) {
-            graphics_original = graphics; graphics_panel.open(graphics); settings_status.clear();
+        if (active && !cities.empty()) {
+            if (IsKeyPressed(KEY_DOWN)) selection=std::min(int(cities.size())-1,selection+1);
+            if (IsKeyPressed(KEY_UP)) selection=std::max(0,selection-1);
+            if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_DOWN)) scroll=std::clamp(scroll,selection-rows+1,selection);
+            if (hit({r.x+24,r.y+128,520,float(rows*38)})) scroll-=int(GetMouseWheelMove());
         }
-        if (graphics_panel.visible() && accept_input && !menu.blocking() && !menu.interacted()) {
-            const auto action = graphics_panel.update();
-            if (action==GraphicsPanelAction::Preview) {
-                graphics = graphics_panel.pending(); pacing(); settings_status.clear();
-            } else if (action==GraphicsPanelAction::Apply) {
-                if (graphics_panel.pending().save(graphics_path,settings_status)) {
-                    graphics = graphics_panel.pending(); pacing(); graphics_panel.close(); status = "Graphics settings saved";
-                }
-            } else if (action==GraphicsPanelAction::Cancel) {
-                graphics = graphics_original; pacing(); graphics_panel.close();
-            }
-        }
-        if (menu.blocking() || menu.interacted()) graphics_panel.cancel_drag();
-        if (menu.blocking() || menu.interacted() || graphics_panel.visible()) can_choose = false;
-        if (command==MenuCommand::Quit) return false;
-        if (command==MenuCommand::CarEditor) { design_menu(DesignKind::Car,directory.parent_path()); accept_input=false; continue; }
-        if (command==MenuCommand::CharacterCreator) { design_menu(DesignKind::Character,directory.parent_path()); character_renderer.refresh(); accept_input=false; continue; }
-        if (command==MenuCommand::ChoosePlayerCharacter && has) {
-            if (const auto chosen=choose_player_character(cities[selection].player_character,characters_directory)) {
-                City next=cities[selection]; next.player_character=chosen;
-                if (next.save(directory,status)) {cities[selection]=next; selected=next; status="Player character selected: "+chosen->name;}
-            }
-            character_renderer.refresh(); accept_input=false; continue;
-        }
-        if (command==MenuCommand::Controls || command==MenuCommand::About) { help_dialog(false,command==MenuCommand::About); continue; }
-        if (command==MenuCommand::NewCity) new_city();
-        if (command==MenuCommand::EditCity) { selected = cities[selection]; open_editor = true; continue; }
-        if (command==MenuCommand::PlayCity) { selected = cities[selection]; return true; }
-        if (command==MenuCommand::RenameCity) { modal = 2; name = cities[selection].name; }
-        if (command==MenuCommand::DeleteCity) modal = 3;
-        if (can_choose && !open_editor && !cities.empty()) {
-            if (IsKeyPressed(KEY_DOWN)) selection = std::min(int(cities.size())-1,selection+1);
-            if (IsKeyPressed(KEY_UP)) selection = std::max(0,selection-1);
-            if (IsKeyPressed(KEY_UP)||IsKeyPressed(KEY_DOWN)) scroll = std::clamp(selection-rows+1,0,std::max(0,int(cities.size())-rows));
-            if (IsKeyPressed(KEY_E)) { selected = cities[selection]; open_editor = true; continue; }
-            if (IsKeyPressed(KEY_ENTER)) {
-                if (menu_state.play) { selected = cities[selection]; return true; }
-                status=character_error;
-            }
-            if (IsKeyPressed(KEY_F2)) { modal = 2; name = cities[selection].name; }
-            if (IsKeyPressed(KEY_DELETE)) modal = 3;
-        }
-        if (modal) can_choose = false;
-        scroll = std::clamp(scroll,0,std::max(0,int(cities.size())-rows));
-        if (can_choose && hit({x,y+98,600,height-118})) scroll = std::clamp(scroll-int(GetMouseWheelMove()),0,std::max(0,int(cities.size())-rows));
-        BeginDrawing(); ui::draw_desktop();
-        ui::draw_window({x,y,940,height},"Cities / Create or open");
-        ui::draw_window_close({x,y,940,height});
-        if (close_clicked({x,y,940,height},can_choose)) { EndDrawing(); return false; }
-        text("Create a new map or select a city to open / edit.",x+20,y+48,18,accent);
-        DrawRectangleRec({x,y+108,600,height-118},panel);
-        if (cities.empty()) text("No cities",x+24,y+138,22);
-        for (int row = 0; row<rows && row+scroll<int(cities.size()); ++row) {
-            const int i = row+scroll; const auto& c = cities[i];
-            Rectangle r{x+8,y+116+row*66,584,60};
-            DrawRectangleRec(r,selection==i ? accent : panel);
-            DrawRectangleLinesEx(r,1,border);
-            text(fit(c.name,20,r.width-32),r.x+16,r.y+9,20,selection==i ? background : ink);
-            text(std::to_string(c.land_count())+" land / "+std::to_string(c.buildings.size())+" buildings / "+std::to_string(c.trees.size())+" trees / starts "+TextFormat("%02i:%02i",c.start_minutes/60,c.start_minutes%60),r.x+16,r.y+35,14,selection==i ? background : muted);
-            if (can_choose && hit(r) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) selection = i;
-        }
-        float bx = x+632, by = y+108;
-        const float spacing = std::clamp((GetScreenHeight()-160)/560.f,.8f,1.f);
-        // Modal drawing happens last; only its own controls can receive input.
-        if (modal==0) {
-            if (button({bx,by,280,44},"Create new city",true,true,can_choose)||(can_choose && IsKeyPressed(KEY_INSERT))) new_city();
-            if (button({bx,by+64*spacing,280,44},"Open / edit city",false,has,can_choose)) { selected = cities[selection]; open_editor = true; }
-            if (button({bx,by+124*spacing,280,44},"Play city",true,menu_state.play,can_choose)) { selected = cities[selection]; EndDrawing(); return true; }
-            if (button({bx,by+194*spacing,280,40},"Rename",false,has,can_choose)) { modal = 2; name = cities[selection].name; }
-            if (button({bx,by+248*spacing,280,40},"Delete city",false,has,can_choose)) modal = 3;
-            if (button({bx,by+318*spacing,280,40},"Back",false,true,can_choose)) { EndDrawing(); return false; }
-            if (button({bx,by+374*spacing,280,40},"Choose player character",false,has,can_choose,16)) {
-                EndDrawing();
-                if (const auto chosen=choose_player_character(cities[selection].player_character,characters_directory)) {
-                    City next=cities[selection]; next.player_character=chosen;
-                    if (next.save(directory,status)) {cities[selection]=next; selected=next; status="Player character selected: "+chosen->name;}
-                }
-                character_renderer.refresh(); accept_input=false; continue;
-            }
-        } else {
-            button({bx,by,280,44},"Create new city",true,false);
-            button({bx,by+64*spacing,280,44},"Open / edit city",false,false);
-            button({bx,by+124*spacing,280,44},"Play city",true,false);
-            button({bx,by+194*spacing,280,40},"Rename",false,false);
-            button({bx,by+248*spacing,280,40},"Delete city",false,false);
-        }
-        text(fit(status.empty() && has && !menu_state.play ? character_error : status,16,940),x,float(GetScreenHeight()-42),16,accent);
-        if (modal) {
-            const bool modal_input = modal == previous_modal;
+        scroll=std::clamp(scroll,0,std::max(0,int(cities.size())-rows));
+        BeginDrawing(); ui::draw_desktop(); ui::draw_window(r,"Cities / Create or open"); ui::draw_window_close(r);
+        text("Start with a new city or open a saved one.",r.x+24,r.y+63,20,accent);
+        text("Saved cities",r.x+24,r.y+102,17);
+        const bool can_choose=active && !creating;
+        for (int row=0;row<rows && scroll+row<int(cities.size());++row)
+            if (button({r.x+24,r.y+128+row*38.f,520,34},cities[scroll+row].name,selection==scroll+row,true,can_choose)) selection=scroll+row;
+        if (cities.empty()) text("No saved cities yet.",r.x+24,r.y+138,18);
+        if (button({r.x+576,r.y+128,280,46},"Create new city",true,true,can_choose)) new_city();
+        if (button({r.x+576,r.y+192,280,46},"Open / edit selected",false,has,can_choose)) {selected=cities[selection]; open_editor=true;}
+        const bool back=close_clicked(r,can_choose) || button({r.x+576,r.y+r.height-64,280,40},"Back",false,true,can_choose);
+        text(fit(status,15,832),r.x+24,r.y+r.height-47,15,accent);
+        if (creating) {
+            const bool modal_input=was_creating && IsWindowFocused();
             ui::draw_desktop();
-            const float modal_height = modal==1 ? 444.f : 236.f;
-            Rectangle r{(GetScreenWidth()-620)/2.f,(GetScreenHeight()-modal_height)/2.f,620,modal_height};
-            ui::draw_window(r,modal==1 ? "Create a city" : modal==2 ? "Rename city" : "Delete this city?");
-            ui::draw_window_close(r);
-            if (modal==1) {
-                if (modal_input && IsKeyPressed(KEY_TAB)) new_field = (new_field+(IsKeyDown(KEY_LEFT_SHIFT) ? 3 : 1))%(generated_terrain ? 4 : 1);
-                const auto entry = [&](std::string& value,Rectangle box,int id,bool enabled = true) {
-                    if (enabled && modal_input && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && hit(box)) new_field = id;
-                    if (enabled && new_field==id && modal_input) input(value,box);
-                    else { DrawRectangleLinesEx(box,1,enabled ? border : ui::dos_light_blue); text(fit(value,21,box.width-24),box.x+12,box.y+(box.height-21)/2,21,enabled ? ink : ui::dos_light_blue); }
-                };
-                text("Name",r.x+24,r.y+48,16); entry(name,{r.x+24,r.y+72,572,44},0);
-                if (button({r.x+24,r.y+132,278,30},"Perlin terrain",generated_terrain,true,modal_input,16)) generated_terrain = true;
-                if (button({r.x+318,r.y+132,278,30},"Empty water",!generated_terrain,true,modal_input,16)) { generated_terrain = false; new_field = 0; }
-                const auto dimension = [&](const char* label,std::string& value,float x,int id) {
-                    text(label,x,r.y+190,16); entry(value,{x,r.y+218,170,36},id,generated_terrain);
-                    for (int direction : {-1,1}) if (button({x+(direction<0 ? 180.f : 220.f),r.y+218,32,36},direction<0 ? "-" : "+",false,generated_terrain,modal_input,16)) {
-                        int count = 48; try { count = std::stoi(value); } catch (const std::exception&) {}
-                        value = std::to_string(std::clamp(std::clamp(count,1,City::width)+direction,1,City::width)); new_field = id;
-                    }
-                };
-                dimension("Starter tiles X",terrain_x,r.x+24,1); dimension("Starter tiles Z",terrain_z,r.x+318,2);
-                text("Seed",r.x+24,r.y+286,17); entry(terrain_seed,{r.x+120,r.y+278,322,36},3,generated_terrain);
-                if (button({r.x+452,r.y+278,144,36},"New seed",false,generated_terrain,modal_input,16)) terrain_seed = std::to_string(GetRandomValue(1,2147483647));
-                text(generated_terrain ? "1-128 tiles per axis / centered in the 128 x 128 map" : "Start with the original empty water map",r.x+24,r.y+334,15);
-            } else if (modal==2) input(name,{r.x+24,r.y+72,572,52});
-            else { text(fit(cities[selection].name,22,r.width-48),r.x+24,r.y+76,22,accent); text("This permanently removes its saved map.",r.x+24,r.y+111,17,muted); }
-            const float footer = modal==1 ? 386.f : 162.f;
-            text(fit(status,14,r.width-48),r.x+24,r.y+footer-26,14,accent);
-            const bool accept = button({r.x+24,r.y+footer,278,44},modal==3 ? "Delete" : modal==1 ? "Create city" : "Save",true,true,modal_input)||(modal_input && IsKeyPressed(KEY_ENTER));
-            if (close_clicked(r,modal_input) || button({r.x+318,r.y+footer,278,44},"Cancel",false,true,modal_input)||(modal_input && IsKeyPressed(KEY_ESCAPE))) modal = 0;
-            else if (accept) {
-                if (modal==3) {
-                    std::error_code ec; const bool removed = std::filesystem::remove(directory/(cities[selection].id+".city"),ec);
-                    if (removed && !ec) { status = "City deleted"; modal = 0; refresh(); } else status = "Could not delete the city";
-                } else {
-                    City next = modal==1 ? City::create(name) : cities[selection]; next.name = name;
-                    bool generated = true;
-                    if (modal==1 && generated_terrain) {
-                        try {
-                            for (const auto& value : {terrain_x,terrain_z,terrain_seed})
-                                if (value.empty() || value.find_first_not_of("0123456789")!=std::string::npos) throw std::out_of_range("terrain");
-                            const auto seed = std::stoull(terrain_seed);
-                            if (seed>std::numeric_limits<std::uint32_t>::max()) throw std::out_of_range("seed");
-                            generated = next.generate_terrain(std::stoi(terrain_x),std::stoi(terrain_z),std::uint32_t(seed),status);
-                        } catch (const std::exception&) { generated = false; status = "Use 1-128 tiles and a seed from 0 to 4294967295."; }
-                    }
-                    if (generated && next.save(directory,status)) {
-                        selected = next; open_editor = modal==1; modal = 0; refresh(); status = "City saved";
-                    }
+            const Rectangle r{(GetScreenWidth()-620)/2.f,(GetScreenHeight()-444)/2.f,620,444};
+            ui::draw_window(r,"Create a city"); ui::draw_window_close(r);
+            if (modal_input && IsKeyPressed(KEY_TAB)) new_field = (new_field+(IsKeyDown(KEY_LEFT_SHIFT) ? 3 : 1))%(generated_terrain ? 4 : 1);
+            const auto entry = [&](std::string& value,Rectangle box,int id,bool enabled = true) {
+                if (enabled && modal_input && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && hit(box)) new_field = id;
+                if (enabled && new_field==id && modal_input) input(value,box);
+                else { DrawRectangleLinesEx(box,1,enabled ? border : ui::dos_light_blue); text(fit(value,21,box.width-24),box.x+12,box.y+(box.height-21)/2,21,enabled ? ink : ui::dos_light_blue); }
+            };
+            text("Name",r.x+24,r.y+48,16); entry(name,{r.x+24,r.y+72,572,44},0);
+            if (button({r.x+24,r.y+132,278,30},"Perlin terrain",generated_terrain,true,modal_input,16)) generated_terrain = true;
+            if (button({r.x+318,r.y+132,278,30},"Empty water",!generated_terrain,true,modal_input,16)) { generated_terrain = false; new_field = 0; }
+            const auto dimension = [&](const char* label,std::string& value,float x,int id) {
+                text(label,x,r.y+190,16); entry(value,{x,r.y+218,170,36},id,generated_terrain);
+                for (int direction : {-1,1}) if (button({x+(direction<0 ? 180.f : 220.f),r.y+218,32,36},direction<0 ? "-" : "+",false,generated_terrain,modal_input,16)) {
+                    int count = 48; try { count = std::stoi(value); } catch (const std::exception&) {}
+                    value = std::to_string(std::clamp(std::clamp(count,1,City::width)+direction,1,City::width)); new_field = id;
                 }
+            };
+            dimension("Starter tiles X",terrain_x,r.x+24,1); dimension("Starter tiles Z",terrain_z,r.x+318,2);
+            text("Seed",r.x+24,r.y+286,17); entry(terrain_seed,{r.x+120,r.y+278,322,36},3,generated_terrain);
+            if (button({r.x+452,r.y+278,144,36},"New seed",false,generated_terrain,modal_input,16)) terrain_seed = std::to_string(GetRandomValue(1,2147483647));
+            text(generated_terrain ? "1-128 tiles per axis / centered in the 128 x 128 map" : "Start with the original empty water map",r.x+24,r.y+334,15);
+            text(fit(status,14,r.width-48),r.x+24,r.y+360,14,accent);
+            const bool accept=button({r.x+24,r.y+386,278,44},"Create city",true,true,modal_input) || (modal_input && IsKeyPressed(KEY_ENTER));
+            if (close_clicked(r,modal_input) || button({r.x+318,r.y+386,278,44},"Cancel",false,true,modal_input) || (modal_input && IsKeyPressed(KEY_ESCAPE))) {
+                creating=false; accept_input=false;
+            } else if (accept) {
+                City next=City::create(name); bool generated=true;
+                if (generated_terrain) {
+                    try {
+                        for (const auto& value : {terrain_x,terrain_z,terrain_seed})
+                            if (value.empty() || value.find_first_not_of("0123456789")!=std::string::npos) throw std::out_of_range("terrain");
+                        const auto seed=std::stoull(terrain_seed);
+                        if (seed>std::numeric_limits<std::uint32_t>::max()) throw std::out_of_range("seed");
+                        generated=next.generate_terrain(std::stoi(terrain_x),std::stoi(terrain_z),std::uint32_t(seed),status);
+                    } catch (const std::exception&) {generated=false; status="Use 1-128 tiles and a seed from 0 to 4294967295.";}
+                }
+                if (generated && next.save(directory,status)) {selected=next; creating=false; open_editor=true; refresh(); status="City saved";}
             }
         }
-        if (graphics_panel.visible()) graphics_panel.draw(float(GetFPS()),settings_status);
-        if (menu.dialog_open()) menu.draw(controls,mapping_path); else menu.draw(menu_state);
-        text("Ambaretto",GetScreenWidth()-ui::measure_text("Ambaretto",16)-20.f,8,16,background);
-        EndDrawing();
-        accept_input = true;
-        if (!screenshot.empty() && ++frames>=3) { auto image = LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); return false; }
+        menu.draw(state);
+        EndDrawing(); accept_input=true;
+        if (back) return false;
+        if (!screenshot.empty() && ++frames>=3) {auto image=LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); return false;}
     }
-    if (graphics_panel.visible()) { graphics = graphics_original; pacing(); }
-    if (!menu.save_pending(controls,mapping_path)) TraceLog(LOG_ERROR,"Could not save controller mappings; previous file retained");
     return false;
 }
 } // namespace ambaretto

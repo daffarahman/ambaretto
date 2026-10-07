@@ -107,15 +107,14 @@ int main(int argc, char** argv) {
         input = {}; input.mouse = {100, 48}; input.click = input.moved = true;
         require(editor.update(state, input) == MenuCommand::SaveCity, "Clicking a menu item did not dispatch");
 
-        MenuBar cities(MenuMode::Cities); cities.open(1); state.selection = false; input = {}; input.enter = true;
+        MenuBar cities(MenuMode::Cities); cities.open(); state.selection = false; input = {}; input.vertical=1; cities.update(state,input); input = {}; input.enter = true;
         require(cities.update(state, input) == MenuCommand::None && cities.blocking(), "City commands were enabled without a city");
         state.selection = true;
-        require(cities.update(state, input) == MenuCommand::EditCity, "City > Edit did not dispatch");
-        cities.open(2);
-        require(cities.update(state,input) == MenuCommand::Graphics, "Graphics was not available in the main menu");
-        cities.open(2); input = {}; input.vertical = 1; cities.update(state,input);
-        input = {}; input.enter = true;
-        require(cities.update(state,input) == MenuCommand::Controllers, "Controller mapping was not available in the main menu");
+        require(cities.update(state, input) == MenuCommand::EditCity, "Cities File > Edit did not dispatch");
+        dispatch_menu(MenuMode::Cities,0,0,MenuCommand::NewCity);
+        dispatch_menu(MenuMode::Cities,0,2,MenuCommand::Quit);
+        cities.open(); input={}; input.vertical=-1; cities.update({},input); input={}; input.enter=true;
+        require(cities.update({},input)==MenuCommand::Quit,"Cities still has extra File actions");
         MenuBar game; game.open(2);
         require(game.update({}, input) == MenuCommand::Map, "Existing gameplay menu changed");
         game.open(2); input = {}; input.vertical = -1; game.update({},input);

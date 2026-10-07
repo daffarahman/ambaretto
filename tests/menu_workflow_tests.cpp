@@ -135,7 +135,7 @@ int main() {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
             idle(); click(100,130); preview("map-building-popup.png"); key(KEY_ENTER);
             steps.push_back([&]{require(city.buildings.empty(),"Building selection leaked a placement into the map");});
-            key(KEY_ESCAPE); click(800,435);
+            key(KEY_ESCAPE); click(760,485);
             require(!city_menu(city,root/"cities",controls,graphics,true),"Building selector started a game");
         } CloseWindow();
         // Play has no edit commands and rejects missing player data, then starts by clicking a city.
@@ -153,6 +153,19 @@ int main() {
             click(220,207);
             require(main_menu(selected,play_directory,controls,graphics) && selected.id==playable.id,"Clicking a playable city did not start Play");
             require(contents(playable_path)==original_playable && contents(unavailable_path)==original_unavailable,"Play changed a saved city");
+        } CloseWindow();
+        stage="city create / edit chooser"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=unavailable;
+            idle(); key(KEY_F2); key(KEY_DELETE);
+            steps.push_back([]{require(title=="Ambaretto - Cities","Removed shortcuts opened city management");});
+            key(KEY_ENTER);
+            steps.push_back([]{require(title=="Ambaretto - City editor","City chooser Enter did not open the editor");});
+            key(KEY_ESCAPE); click(760,220); click(600,225); click(300,485);
+            steps.push_back([]{require(title=="Ambaretto - City editor","Create city did not open the new map editor");});
+            key(KEY_ESCAPE); click(760,485);
+            require(!city_menu(selected,play_directory,controls,graphics),"City chooser started a game");
+            require(selected.name=="New city" && !selected.spawn && !selected.player_character,"New empty city was not created");
+            require(contents(playable_path)==original_playable && contents(unavailable_path)==original_unavailable,"City chooser changed the existing maps");
         } CloseWindow();
         stage="empty Play list"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected;
