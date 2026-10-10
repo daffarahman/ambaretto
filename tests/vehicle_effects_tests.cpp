@@ -52,7 +52,7 @@ void imported_cars() {
         const auto render=[&](bool wheels=true) {
             renderer.set_lighting(lighting,camera,day.lighting(),settings); BeginTextureMode(texture); ClearBackground(BLACK); BeginMode3D(camera);
             require(renderer.draw_body(car,camera),"Imported body did not render");
-            if(wheels) for(const auto& wheel:car.wheels()) require(renderer.draw_wheel(car,wheel,camera),"Imported wheel did not render");
+            if(wheels) for(const auto& wheel:car.wheels()) require(renderer.draw_wheel(car,wheel,camera)==!car.destroyed(),"Wheel visibility did not match car damage");
             EndMode3D(); EndTextureMode(); Image image=LoadImageFromTexture(texture.texture); ImageFlipVertical(&image); return image;
         };
         Image first=render(); design.type=CarType::Police; car.set_design(design); Image second=render(); int pink=0,green=0;
@@ -81,8 +81,24 @@ void imported_cars() {
             && std::abs((b.y-a.y)-(projected_offset.y-projected_origin.y))<1.1f,"Rendered X/Y/Z offsets do not match the body position");
         require((car.position()-reference).Length()<.001f,"Body offset moved the car reference");
         for(int i=0;i<4;++i) require((car.wheel_center(car.wheels()[i])-wheel_positions[i]).Length()<.001f,"Body offset moved a wheel");
-        UnloadImage(before); UnloadImage(after); UnloadRenderTexture(texture);
-        std::cout << "Imported textured GLBs, node transforms, wheel alignment, refresh and unchanged paint passed\n";
+        UnloadImage(before); UnloadImage(after);
+        const auto differences=[](Image a,Image b) {
+            int count=0;
+            for(int y=0;y<a.height;++y) for(int x=0;x<a.width;++x) {
+                const Color p=GetImageColor(a,x,y), q=GetImageColor(b,x,y);
+                count+=p.r!=q.r || p.g!=q.g || p.b!=q.b;
+            }
+            return count;
+        };
+        car.take_damage(99); Image damaged=render(), bare=render(false);
+        require(differences(damaged,bare)>20,"Surviving car lost its wheels");
+        car.take_damage(1); Image wreck=render(), wreck_body=render(false);
+        require(differences(wreck,wreck_body)==0,"Destroyed car still rendered wheels");
+        car.repair(); Image repaired=render();
+        require(differences(damaged,repaired)==0,"Repair did not restore the wheels");
+        UnloadImage(damaged); UnloadImage(bare); UnloadImage(wreck); UnloadImage(wreck_body); UnloadImage(repaired);
+        UnloadRenderTexture(texture);
+        std::cout << "Imported textured GLBs, node transforms, wheel alignment, refresh, wreck wheel removal and repair passed\n";
     }
     std::filesystem::current_path(previous);
     for(const auto* path:{"assets/cars/textured.glb","assets/cars/late.glb","assets/wheels/tire.glb","assets/cars","assets/wheels","assets"}) std::filesystem::remove(root/path);

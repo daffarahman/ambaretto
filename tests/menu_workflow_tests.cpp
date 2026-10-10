@@ -76,10 +76,10 @@ void require_terrain_preview(const ambaretto::City& city) {
 void duplicate_key() {steps.push_back([]{event(2,KEY_LEFT_CONTROL); event(2,KEY_D);}); steps.push_back([]{event(1,KEY_D); event(1,KEY_LEFT_CONTROL);}); idle();}
 void reset() {steps.clear(); frame=0; title.clear(); should_close=false;}
 void window() {reset(); InitWindow(1024,600,"Menu workflow check"); SetExitKey(KEY_NULL); SetTargetFPS(120);}
-bool blue_background() {const auto image=LoadImageFromScreen(); const Color p=GetImageColor(image,20,140); UnloadImage(image); return p.r==0 && p.g==0 && p.b==170;}
+bool gray_desktop() {const auto image=LoadImageFromScreen(); const Color p=GetImageColor(image,20,140); UnloadImage(image); return p.r==ambaretto::ui::desktop.r && p.g==ambaretto::ui::desktop.g && p.b==ambaretto::ui::desktop.b;}
 bool saved_popup() {const auto image=LoadImageFromScreen(); const Color p=GetImageColor(image,152,300); UnloadImage(image); return p.r==255 && p.g==255 && p.b==255;}
 void open_saved() {key(KEY_F10); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER);}
-void open_city_settings() {key(KEY_F10); for (int i=0;i<6;++i) key(KEY_RIGHT); key(KEY_ENTER);}
+void open_city_settings() {key(KEY_F10); key(KEY_LEFT); key(KEY_LEFT); key(KEY_ENTER);}
 void preview(const char* name) {steps.push_back([=]{require(saved_popup(),"Saved selector did not open as a popup"); auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/name).string().c_str()); UnloadImage(image);});}
 std::string contents(const std::filesystem::path& path) {std::ifstream file(path); return {std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};}
 }
@@ -304,7 +304,7 @@ int main() {
             idle(); key(KEY_V); key(KEY_FIVE); city_click(focus,point);
             steps.push_back([&]{require(placed.spawn && City::cell(placed.spawn->GetX(),placed.spawn->GetZ())==CityCell{64,64}
                 && std::abs(placed.spawn->GetX()-City::center({64,64}).GetX())>3,"Player placement snapped or rejected the building tile");});
-            key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER);
+            key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); for (int i=0;i<3;++i) key(KEY_DOWN); key(KEY_RIGHT); key(KEY_ENTER);
             city_click(focus,point);
             steps.push_back([&]{require(placed.vehicles.size()==1,"Player or building blocked vehicle placement");});
             key(KEY_FIVE); city_click(focus,point); key(KEY_ONE); city_click(focus,point);
@@ -454,11 +454,11 @@ int main() {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
             City selected=city; selected.id=City::create("test").id; selected.name="Placement duplicate test";
             require(selected.save(root/"cities",error),"Placement selector fixture failed");
-            idle(); key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); key(KEY_DOWN); key(KEY_ENTER);
+            idle(); key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); key(KEY_DOWN); key(KEY_DOWN); key(KEY_RIGHT); key(KEY_ENTER);
             duplicate_key();
             steps.push_back([&]{require(std::filesystem::exists(root/"cars/car-Menu test car copy 3.car"),"Car placement selector did not duplicate"); auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/"duplicate-car-selector.png").string().c_str()); UnloadImage(image);});
             click(760,440);
-            key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); for (int i=0;i<14;++i) key(KEY_DOWN); key(KEY_ENTER);
+            key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); key(KEY_DOWN); key(KEY_RIGHT); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER);
             duplicate_key();
             steps.push_back([]{auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/"duplicate-player-selector.png").string().c_str()); UnloadImage(image);});
             click(210,475); key(KEY_ESCAPE); click(760,485);
@@ -473,17 +473,39 @@ int main() {
         } CloseWindow();
         // Pause freezes actual Jolt steps; resume continues; End Game returns to the menu.
         stage="game pause / resume / main menu"; reset(); unsigned paused_steps=0;
+        CityVehicle parked(CityVehicleKind::Car,*city.spawn+Vec3(2.8f,0,0)); parked.car=car;
+        require(city.add_vehicle(parked,error) && city.save(root/"cities",error),"Car HUD fixture failed");
+        const auto dial_visible=[](int x,bool clock) {
+            const auto image=LoadImageFromScreen(); const int y=GetScreenHeight()-110;
+            const Color hub=GetImageColor(image,x,y), tick=GetImageColor(image,x+(clock?76:54),y+(clock?0:54));
+            UnloadImage(image);
+            return hub.r==24 && hub.g==24 && hub.b==24 && tick.r==RAYWHITE.r && tick.g==RAYWHITE.g && tick.b==RAYWHITE.b;
+        };
+        idle(5); steps.push_back([&]{
+            require(dial_visible(450,true) && !dial_visible(450,false) && !dial_visible(662,true),"On-foot HUD must show only the clock beside the map");
+            const auto image=LoadImageFromScreen(); const Color corner=GetImageColor(image,GetScreenWidth()-20,GetScreenHeight()-30);
+            UnloadImage(image);
+            require(corner.r!=ui::face.r || corner.g!=ui::face.g || corner.b!=ui::face.b,"Bottom-right location panel remains visible");
+            capture("on-foot-clock-workflow.png");
+        });
+        key(KEY_E); idle(5);
+        steps.push_back([&]{
+            require(dial_visible(450,false) && dial_visible(662,true) && !dial_visible(450,true),"Car HUD must show the clock to the speedometer's right");
+            capture("car-speedometer-workflow.png");
+        });
+        key(KEY_E); idle(5);
+        steps.push_back([&]{require(dial_visible(450,true) && !dial_visible(450,false) && !dial_visible(662,true),"Exiting the car did not return the clock beside the map");});
         idle(3); key(KEY_ESCAPE);
-        steps.push_back([&]{require(blue_background(),"Escape did not show the paused map"); paused_steps=physics_steps;}); idle(20);
+        steps.push_back([&]{require(gray_desktop(),"Escape did not show the paused map"); paused_steps=physics_steps;}); idle(20);
         steps.push_back([&]{require(physics_steps==paused_steps,"Physics advanced while paused");});
         key(KEY_F10); key(KEY_ENTER); idle(5);
-        steps.push_back([&]{require(!blue_background() && physics_steps>paused_steps,"File > Resume did not resume gameplay");});
-        key(KEY_ESCAPE); steps.push_back([&]{require(blue_background(),"Second Escape did not pause"); paused_steps=physics_steps;}); idle(5);
+        steps.push_back([&]{require(!gray_desktop() && physics_steps>paused_steps,"File > Resume did not resume gameplay");});
+        key(KEY_ESCAPE); steps.push_back([&]{require(gray_desktop(),"Second Escape did not pause"); paused_steps=physics_steps;}); idle(5);
         steps.push_back([&]{require(physics_steps==paused_steps,"Second pause advanced physics");});
         key(KEY_ESCAPE); idle(5);
-        steps.push_back([&]{require(!blue_background() && physics_steps>paused_steps,"Escape did not resume gameplay");});
+        steps.push_back([&]{require(!gray_desktop() && physics_steps>paused_steps,"Escape did not resume gameplay");});
         key(KEY_F10); key(KEY_DOWN); key(KEY_ENTER); idle(3);
-        steps.push_back([]{require(title=="Ambaretto - Main menu" && blue_background(),"End Game did not return to the main menu"); should_close=true;});
+        steps.push_back([]{require(title=="Ambaretto - Main menu" && gray_desktop(),"End Game did not return to the main menu"); should_close=true;});
         std::string executable="menu_workflow_tests",flag="--city",path=(root/"cities"/(city.id+".city")).string();
         char* args[]={executable.data(),flag.data(),path.data()};
         require(ambaretto_main(3,args)==0,"Game workflow failed");

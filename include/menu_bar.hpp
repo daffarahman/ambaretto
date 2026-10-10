@@ -32,7 +32,7 @@ struct MenuInput {
 class MenuBar {
 public:
     explicit MenuBar(MenuMode mode = MenuMode::Game) : mode_(mode) {}
-    void open(int menu = 0) { dropdown_ = menu; item_ = 0; }
+    void open(int menu = 0) { dropdown_ = menu; item_ = subitem_ = 0; submenu_ = -1; }
     void show(MenuCommand command);
     bool save_pending(const ControllerMapping& mapping, const std::filesystem::path& path);
     bool blocking() const { return dropdown_ >= 0 || popup_ != MenuCommand::None; }
@@ -46,7 +46,7 @@ public:
 private:
     MenuMode mode_;
     bool close_mapping(const ControllerMapping& mapping, const std::filesystem::path& path, bool save = false);
-    int dropdown_ = -1, item_ = 0, selected_ = 0, binding_ = 0, group_ = 0;
+    int dropdown_ = -1, item_ = 0, submenu_ = -1, subitem_ = 0, selected_ = 0, binding_ = 0, group_ = 0;
     MenuCommand popup_ = MenuCommand::None;
     bool capturing_ = false, interacted_ = false, dirty_ = false;
     BindingCapture capture_;

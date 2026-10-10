@@ -22,8 +22,8 @@
 
 namespace ambaretto {
 namespace {
-constexpr Color background = ui::dos_blue, panel = ui::dos_blue, border = ui::dos_white;
-constexpr Color ink = ui::dos_white, muted = ui::dos_white, accent = ui::dos_yellow;
+constexpr Color background = ui::face, border = ui::shadow;
+constexpr Color ink = ui::ink, muted = ui::disabled, accent = ui::title_blue, scene_accent = YELLOW;
 constexpr int sidebar = 280;
 enum class Tool { Select, Land, Road, Building, Spawn, Vehicle, Bulldoze, Trees, Ground, Elevation };
 const char* tools[] = {"Select / edit", "Island / expand", "Road", "Building", "Player spawn", "Vehicle", "Bulldoze", "Tree brush", "Ground texture", "Elevation"};
@@ -41,15 +41,19 @@ bool duplicate_pressed() { return (IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RI
 bool close_clicked(Rectangle r, bool interactive = true) { return interactive && hit(ui::window_close(r)) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT); }
 bool button(Rectangle r, const std::string& label, bool selected = false, bool enabled = true, bool interactive = true, int size = 18) {
     const bool hover = interactive && enabled && hit(r);
-    DrawRectangleRec({r.x+2,r.y+2,r.width,r.height},border);
-    DrawRectangleRec(r,enabled && (selected || hover) ? accent : panel);
-    DrawRectangleLinesEx(r,1,border);
-    text(fit(label,size,r.width-20),r.x+10,r.y+(r.height-size)/2,size,enabled ? (selected || hover ? background : ink) : ui::dos_light_blue);
+    const bool pressed = hover && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+    ui::draw_button(r,pressed || selected,selected,enabled);
+    text(fit(label,size,r.width-20),r.x+10+pressed,r.y+(r.height-size)/2+pressed,size,enabled ? ink : muted);
     return hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+}
+bool list_item(Rectangle r, const std::string& label, bool selected, bool enabled = true, bool interactive = true, int size = 18) {
+    DrawRectangleRec(r, selected && enabled ? ui::title_blue : ui::highlight);
+    text(fit(label,size,r.width-20),r.x+10,r.y+(r.height-size)/2,size,!enabled ? muted : selected ? ui::highlight : ink);
+    return interactive && enabled && hit(r) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
 }
 void input(std::string& value, Rectangle r) {
     if ((IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_A)) value.clear();
-    DrawRectangleRec(r,background); DrawRectangleLinesEx(r,2,accent);
+    ui::draw_panel(r,true,ui::highlight);
     std::string visible = value+(int(GetTime()*2)%2 ? "_" : "");
     while (!visible.empty() && ui::measure_text(visible.c_str(),21)>r.width-24) visible.erase(visible.begin());
     text(visible,r.x+12,r.y+(r.height-21)/2,21);
@@ -109,7 +113,7 @@ template<class Load> auto saved_picker(Load load,const char* title,const char* a
         bool clicked=false;
         for (int row=0;row<rows && scroll+row<int(library.size());++row) {
             const int i=scroll+row;
-            if (button({r.x+24,r.y+92+row*38.f,672,34},library[i].name,selection==i,true,active,18)) {selection=i; clicked=true;}
+            if (list_item({r.x+24,r.y+92+row*38.f,672,34},library[i].name,selection==i,true,active,18)) {selection=i; clicked=true;}
         }
         if (library.empty()) text("No saved items yet.",r.x+24,r.y+100,18);
         std::string reason; const bool available=selection>=0 && (!ready || ready(library[selection],reason));
@@ -165,7 +169,7 @@ template<class Load, class Builder> void open_design_menu(Load load, const char*
         text("Start with a new design or open a saved one.",r.x+24,r.y+63,20,accent);
         text("Saved designs",r.x+24,r.y+102,17);
         for (int row=0;row<rows && scroll+row<int(library.size());++row)
-            if (button({r.x+24,r.y+128+row*38.f,520,34},library[scroll+row].name,selection==scroll+row,true,interactive)) selection=scroll+row;
+            if (list_item({r.x+24,r.y+128+row*38.f,520,34},library[scroll+row].name,selection==scroll+row,true,interactive)) selection=scroll+row;
         if (library.empty()) text("No saved designs yet.",r.x+24,r.y+138,18);
         const bool create=button({r.x+576,r.y+128,280,46},"Create new",true,true,interactive) || (interactive && IsKeyPressed(KEY_INSERT));
         const bool open=button({r.x+576,r.y+192,280,46},"Open / edit selected",false,selection>=0,interactive) || (interactive && selection>=0 && IsKeyPressed(KEY_ENTER));
@@ -269,9 +273,9 @@ std::optional<std::string> ground_texture_picker(const std::string& current) {
             const int index = scroll+row; const auto& name = textures[index];
             if (!images.count(name)) images[name] = load_building_texture(name);
             const auto thumb = images[name]; const Rectangle item{r.x+20,r.y+104+row*42,560,38};
-            if (button(item,"",selected==index,thumb.id!=0,interactive)) selected = index;
+            if (list_item(item,"",selected==index,thumb.id!=0,interactive)) selected = index;
             if (thumb.id) DrawTexturePro(thumb,{0,0,float(thumb.width),float(thumb.height)},{item.x+4,item.y+3,32,32},{0,0},0,WHITE);
-            text(fit(name,17,500),item.x+44,item.y+10,17,selected==index || hit(item) ? background : ink);
+            text(fit(name,17,500),item.x+44,item.y+10,17,selected==index ? ui::highlight : ink);
         }
         if (textures.empty()) text("Add image files to assets/textures, then refresh.",r.x+20,r.y+120,16);
         text(fit(status,15,560),r.x+20,r.y+height-78,15,accent);
@@ -332,13 +336,13 @@ void draw_city(const City& city, bool grid,const CarRenderer& cars,const Camera3
             DrawCubeWires({0,.9f,0},1.85f,1.2f,3.7f,ORANGE);
         } else {
             const auto& spec = plane_specs(PlaneType(int(v.kind)-1));
-            DrawCube({0,spec.body_radius+1,0},spec.body_radius*2,spec.body_radius*2,spec.length,ink);
-            DrawCube({0,spec.body_radius+1,0},spec.span,.25f,spec.length*.15f,ink);
+            DrawCube({0,spec.body_radius+1,0},spec.body_radius*2,spec.body_radius*2,spec.length,ui::highlight);
+            DrawCube({0,spec.body_radius+1,0},spec.span,.25f,spec.length*.15f,ui::highlight);
         }
         rlPopMatrix();
     }
     if (city.spawn) {
-        DrawCubeWires(vector(*city.spawn+Vec3(0,.8f,0)),.8f,1.6f,.8f,accent);
+        DrawCubeWires(vector(*city.spawn+Vec3(0,.8f,0)),.8f,1.6f,.8f,scene_accent);
     }
 }
 void building_outline(const CityBuilding& b,float ground,Color color) {
@@ -380,7 +384,7 @@ int mesh_gizmo(Vec3 pivot,Camera3D camera,Rectangle view,Vector2 mouse,bool draw
         if (area<36) continue;
         if (CheckCollisionPointTriangle(mouse,p[0],p[1],p[2]) || CheckCollisionPointTriangle(mouse,p[0],p[2],p[3])) picked = i+3;
         if (draw) {
-            const Color color = active==i+3 ? accent : ColorAlpha(colors[planes[i][0]],.45f);
+            const Color color = active==i+3 ? scene_accent : ColorAlpha(colors[planes[i][0]],.45f);
             // raylib's 2D triangles use counterclockwise screen winding.
             for (auto t : {std::array<int,3>{0,1,2},std::array<int,3>{0,2,3}}) {
                 if ((p[t[1]].x-p[t[0]].x)*(p[t[2]].y-p[t[0]].y)-(p[t[1]].y-p[t[0]].y)*(p[t[2]].x-p[t[0]].x)>0) std::swap(t[1],t[2]);
@@ -395,7 +399,7 @@ int mesh_gizmo(Vec3 pivot,Camera3D camera,Rectangle view,Vector2 mouse,bool draw
         const auto direction = Vector2Normalize(Vector2Subtract(tip,origin)); const Vector2 side{-direction.y,direction.x};
         if (segment_distance(mouse,Vector2Add(origin,Vector2Scale(direction,12)),tip)<8) picked = i;
         if (draw) {
-            const Color color = active==i ? accent : colors[i];
+            const Color color = active==i ? scene_accent : colors[i];
             DrawLineEx(origin,tip,3,color);
             const auto base = Vector2Subtract(tip,Vector2Scale(direction,12));
             DrawTriangle(tip,Vector2Subtract(base,Vector2Scale(side,6)),Vector2Add(base,Vector2Scale(side,6)),color);
@@ -426,9 +430,8 @@ bool mesh_slider(Rectangle r,float& value,float lo,float hi,int id,int& dragging
     if (interactive && hit({r.x-4,r.y-4,r.width+8,r.height+8}) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) dragging = id;
     const float old = value;
     if (interactive && dragging==id && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) value = lo+(hi-lo)*std::clamp((GetMouseX()-r.x)/r.width,0.f,1.f);
-    DrawRectangleRec(r,background); DrawRectangleLinesEx(r,1,border);
     const float t = hi>lo ? (value-lo)/(hi-lo) : 0;
-    DrawRectangleRec({r.x,r.y,r.width*t,r.height},ColorAlpha(accent,.45f)); DrawRectangleRec({r.x+r.width*t-3,r.y-2,6,r.height+4},accent);
+    ui::draw_slider(r,t);
     return old!=value;
 }
 struct BuildingPick {
@@ -468,7 +471,7 @@ std::optional<int> city_settings(int density) {
         BeginDrawing(); ui::draw_desktop(); ui::draw_window(r,"City settings"); ui::draw_window_close(r);
         text("Walking NPC density (%)",r.x+24,r.y+62,18,accent);
         if (selected==0 && active) input(value,field);
-        else { DrawRectangleLinesEx(field,1,border); text(value,field.x+12,field.y+10,21); }
+        else { ui::draw_panel(field,true,ui::highlight); text(value,field.x+12,field.y+10,21); }
         if (const auto number = parsed()) percent = float(*number);
         if (mesh_slider(slider,percent,0,100,0,dragging,active)) { value = std::to_string(int(std::round(percent))); selected = 0; error.clear(); }
         text("0: no pedestrians / 100: current maximum",r.x+24,r.y+198,16);
@@ -693,8 +696,8 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
         DrawPlane({0,-.04f,0},{mesh.size.GetX(),mesh.size.GetZ()},{66,82,92,255});
         if (preview_valid) renderer.draw(camera,preview_daylight,preview_lighting,preview_graphics);
         rlDisableDepthTest(); rlDisableDepthMask();
-        for (int x = 0; x<=tiles[0]; ++x) DrawLine3D({-hx+x*BuildingMesh::tile_size,.015f,-hz},{-hx+x*BuildingMesh::tile_size,.015f,hz},accent);
-        for (int z = 0; z<=tiles[1]; ++z) DrawLine3D({-hx,.015f,-hz+z*BuildingMesh::tile_size},{hx,.015f,-hz+z*BuildingMesh::tile_size},accent);
+        for (int x = 0; x<=tiles[0]; ++x) DrawLine3D({-hx+x*BuildingMesh::tile_size,.015f,-hz},{-hx+x*BuildingMesh::tile_size,.015f,hz},scene_accent);
+        for (int z = 0; z<=tiles[1]; ++z) DrawLine3D({-hx,.015f,-hz+z*BuildingMesh::tile_size},{hx,.015f,-hz+z*BuildingMesh::tile_size},scene_accent);
         rlEnableDepthMask(); rlEnableDepthTest();
         {
             if (mode==2 && tab!=2) for (const auto& t : triangles) if (!t.decal && std::find(selected[2].begin(),selected[2].end(),t.face)!=selected[2].end()) {
@@ -702,8 +705,8 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
                 DrawTriangle3D(vector(t.points[0]+offset),vector(t.points[1]+offset),vector(t.points[2]+offset),{255,161,0,90});
             }
             if (xray) { rlDisableDepthTest(); rlDisableDepthMask(); }
-            for (int i = 0; i<int(edges.size()); ++i) DrawLine3D(vector(points[edges[i][0]]),vector(points[edges[i][1]]),mode==1 && std::find(selected[1].begin(),selected[1].end(),i)!=selected[1].end() ? ORANGE : accent);
-            if (tab==0 && mode==0) for (int i = 0; i<int(points.size()); ++i) DrawSphere(vector(points[i]),camera.fovy*.007f,std::find(vertices.begin(),vertices.end(),i)!=vertices.end() ? ORANGE : ink);
+            for (int i = 0; i<int(edges.size()); ++i) DrawLine3D(vector(points[edges[i][0]]),vector(points[edges[i][1]]),mode==1 && std::find(selected[1].begin(),selected[1].end(),i)!=selected[1].end() ? ORANGE : scene_accent);
+            if (tab==0 && mode==0) for (int i = 0; i<int(points.size()); ++i) DrawSphere(vector(points[i]),camera.fovy*.007f,std::find(vertices.begin(),vertices.end(),i)!=vertices.end() ? ORANGE : ui::highlight);
             if (xray) { rlEnableDepthMask(); rlEnableDepthTest(); }
         }
         if (tab==2 && decal>=0) {
@@ -743,26 +746,26 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
         }
         EndMode3D(); EndTextureMode();
         BeginDrawing(); ui::draw_desktop(); ui::draw_window(window,"Building Creator"); ui::draw_window_close(window);
-        DrawTextureRec(preview.texture,{0,0,float(preview.texture.width),-float(preview.texture.height)},{view.x,view.y},WHITE); DrawRectangleLinesEx(view,1,border);
+        DrawTextureRec(preview.texture,{0,0,float(preview.texture.width),-float(preview.texture.height)},{view.x,view.y},WHITE); ui::draw_frame(view,true);
         if ((tab==0 || tab==3) && !slice && !vertices.empty()) { BeginScissorMode(int(view.x),int(view.y),int(view.width),int(view.height)); mesh_gizmo(pivot,camera,view,GetMousePosition(),true,grab ? handle : -1); EndScissorMode(); }
-        text(std::to_string(tiles[0])+" x "+std::to_string(tiles[1])+" tiles",view.x+10,view.y+10,16,accent);
+        text(std::to_string(tiles[0])+" x "+std::to_string(tiles[1])+" tiles",view.x+10,view.y+10,16,ui::highlight);
         const auto& stats = renderer.stats();
         text(TextFormat("%zu meshes / %zu triangles / %.2f MiB GPU",stats.meshes,stats.emitted_triangles,
-            double(stats.gpu_geometry_bytes+stats.gpu_texture_bytes)/(1024*1024)),view.x+10,view.y+32,14,accent);
+            double(stats.gpu_geometry_bytes+stats.gpu_texture_bytes)/(1024*1024)),view.x+10,view.y+32,14,ui::highlight);
         if (!preview_valid) text("Preview unavailable: undo or reduce the texture/geometry budget.",view.x+10,view.y+58,14,ORANGE);
         if (tab==2 && decal>=0) {
             DrawRectangle(int(view.x+8),int(view.y+56),int(view.width-16),25,background);
-            text(fit("Selected decal "+std::to_string(decal+1)+" / "+std::to_string(mesh.decals.size())+" : "+mesh.decals[decal].texture,14,view.width-32),view.x+16,view.y+61,14,YELLOW);
+            text(fit("Selected decal "+std::to_string(decal+1)+" / "+std::to_string(mesh.decals.size())+" : "+mesh.decals[decal].texture,14,view.width-32),view.x+16,view.y+61,14,ink);
         }
         const char* hint = slice ? "Slice preview / drag the position slider" : tab==2 ? decal_grab ? !decal_move_valid ? "Off wall / move back onto a wall / Esc: cancel" : keyboard_grab ? "Move preview / Click: confirm / Esc: cancel" : "Dragging decal / Release: confirm / Esc: cancel" : place_decal ? "Click walls to place / Esc: finish" : "Click / drag a decal / G: move / Esc: cancel" : tab==1 || tab==4 ? "Click faces / Shift: select more" : "Drag handles / Shift: select more / G: move";
-        text(hint,view.x+10,view.y+view.height-28,15,accent);
+        text(hint,view.x+10,view.y+view.height-28,15,ui::highlight);
         SetMouseCursor(in_view && tab==2 && (place_decal || decal_grab) ? MOUSE_CURSOR_CROSSHAIR : MOUSE_CURSOR_DEFAULT);
         text("Right drag: orbit / Wheel: zoom",view.x,view.y+view.height+10,16);
         const auto control = [&](Rectangle r,const std::string& label,bool chosen=false,bool enabled=true) { return button(r,label,chosen,enabled,can_edit && !grab,16); };
         text("Name",20,88,17); const Rectangle name_box{84,80,310,44};
         if (!grab && click && hit(name_box)) field = 0;
         if (field==0) { input(mesh.name,name_box); if (IsKeyPressed(KEY_ENTER) || (click && !hit(name_box))) field = -1; }
-        else { DrawRectangleLinesEx(name_box,1,border); text(fit(mesh.name,18,286),96,93); }
+        else { ui::draw_panel(name_box,true,ui::highlight); text(fit(mesh.name,18,286),96,93); }
         text("FOOTPRINT",20,132,16,accent);
         int width = tiles[0], depth = tiles[1]; bool resized = false;
         const auto stepper = [&](const char* label,int& value,float y,int id) {
@@ -775,7 +778,7 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
                     catch (const std::exception&) { status = "Enter a tile count between 1 and 128."; }
                     field = -1;
                 }
-            } else { DrawRectangleLinesEx(box,1,border); text(std::to_string(value),160,y+5,17); }
+            } else { ui::draw_panel(box,true,ui::highlight); text(std::to_string(value),160,y+5,17); }
             if (control({312,y,34,30},"-")) { value = std::max(1,value-1); resized = true; field = -1; }
             if (control({356,y,34,30},"+")) { value = std::min(128,value+1); resized = true; field = -1; }
         };
@@ -806,7 +809,7 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
                     catch (const std::exception&) { status = TextFormat("Enter a number from %.2f to %.2f.",lo,hi); }
                     field = -1;
                 }
-            } else { DrawRectangleLinesEx(r,1,border); text(TextFormat("%.3f",value),r.x+10,r.y+5,16); }
+            } else { ui::draw_panel(r,true,ui::highlight); text(TextFormat("%.3f",value),r.x+10,r.y+5,16); }
             return value!=old;
         };
         const auto scroll_tools = [&](float content_height) {
@@ -1022,7 +1025,7 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
         const bool use = control({210,height-122,180,36},"Save and close",true) || command==MenuCommand::UseBuilding;
         const bool cancel = control({view.x+view.width-142,height-122,142,36},"Close");
         text(fit(status,17,GetScreenWidth()-40.f),20,height-49,17,accent); menu.draw(menu_state);
-        text("BUILDING CREATOR",GetScreenWidth()-212.f,8,16,background); EndDrawing(); interactive = true;
+        text("BUILDING CREATOR",GetScreenWidth()-212.f,8,16,ink); EndDrawing(); interactive = true;
         if (!screenshot.empty() && ++frames>=3) { auto capture = LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break; }
         if (cancel) { if (leave()) break; interactive=false; }
         if (use && save_design()) { result = mesh; break; }
@@ -1103,8 +1106,10 @@ std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::pat
         renderer.draw_design(design,Vec3::sZero(),0,camera);
         EndMode3D(); EndTextureMode();
         BeginDrawing(); ui::draw_desktop();
+        ui::draw_panel({8,40,float(width-16),float(height-80)});
+        if (tab!=2) ui::draw_window({view.x-4,44,view.width+8,view.height+44},"Car preview");
         DrawTexturePro(preview.texture,{0,0,float(preview.texture.width),-float(preview.texture.height)},view,{0,0},0,WHITE);
-        DrawRectangleLinesEx(view,1,border); text("Right-drag: orbit / Wheel: zoom / Yellow: front",view.x,view.y+view.height+12,14);
+        ui::draw_frame(view,true); text("Right-drag: orbit / Wheel: zoom / Yellow: front",view.x,view.y+view.height+12,14);
         const auto control = [&](Rectangle r,const std::string& label,bool selected=false,bool enabled=true) {return button(r,label,selected,enabled,active,16);};
         const char* tabs[] = {"Body","Wheel","Tuning"};
         for (int i=0;i<3;++i) if (control({20+i*96.f,44,88,30},tabs[i],tab==i)) { tab=i; scroll=0; naming=false; drag=-1; }
@@ -1113,7 +1118,7 @@ std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::pat
             const Rectangle name{20,102,370,34}; text("Name",20,82,14);
             if (active && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) naming = hit(name);
             if (naming && active) input(design.name,name);
-            else control(name,design.name);
+            else { ui::draw_panel(name,true,ui::highlight); text(fit(design.name,16,name.width-20),name.x+10,name.y+9,16); }
             if (control({20,146,180,30},"Regular",design.type==CarType::Civilian)) design.type=CarType::Civilian;
             if (control({210,146,180,30},"Police",design.type==CarType::Police)) design.type=CarType::Police;
             if (control({20,186,370,28},"Refresh files")) {
@@ -1126,7 +1131,7 @@ std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::pat
                 const float lo[] = {.8f,.3f,1.5f,-4,-4,-4}, hi[] = {4,4,8,4,4,4};
                 const char* labels[] = {"Width","Height","Length","Offset X","Offset Y","Offset Z"};
                 for (int i=0;i<6;++i) {
-                    text(TextFormat("%s: %.2f m",labels[i],double(*values[i])),20,224+i*34.f,14);
+                    text(TextFormat("%s: %.2f m",labels[i],double(*values[i])),20,224+i*34.f,13);
                     if (mesh_slider({164,228+i*34.f,226,10},*values[i],lo[i],hi[i],i,drag,active)) sync();
                 }
             }
@@ -1140,18 +1145,18 @@ std::optional<CarDesign> car_builder(CarDesign design,const std::filesystem::pat
             for (int row=0;row<rows && scroll+row<count;++row) {
                 const int index=scroll+row; const auto label=models[index];
                 const bool selected=(tab==1 ? design.wheel : design.body)==label;
-                if (control({20,y+row*32,370,28},label,selected)) {
+                if (list_item({20,y+row*32,370,28},label,selected,true,active,16)) {
                     if (tab==1) design.wheel=label; else design.body=label;
                     std::string error; status = renderer.available(design,error) ? "Body and wheel ready" : error;
                 }
             }
         }
         const bool saving=control({20,float(height-72),172,34},"Save car",true) || command==MenuCommand::SaveCar || (active && ctrl && IsKeyPressed(KEY_S));
-        const bool use=control({208,float(height-72),172,34},"Save and close",true) || command==MenuCommand::UseCar;
+        const bool use=button({208,float(height-72),172,34},"Save and close",true,true,active,14) || command==MenuCommand::UseCar;
         const bool close=control({396,float(height-72),172,34},"Close");
         if ((saving||use) && save_design() && use) result=design;
         text(fit(status.empty() ? "Choose a body and wheel, size the body, then save." : status,16,width-40.f),20,height-27.f,16,accent);
-        menu.draw(); text("CAR EDITOR",width-136.f,8,16,background); EndDrawing(); interactive=true;
+        menu.draw(); text("CAR EDITOR",width-136.f,8,16,ink); EndDrawing(); interactive=true;
         if (!screenshot.empty() && ++frames>=3) { auto capture=LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break; }
         if (result) break;
         if (close) { if (leave()) break; interactive=false; }
@@ -1218,14 +1223,15 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
         DrawGrid(40,1); renderer.draw(character,camera,{},guides,slot,&design);
         EndMode3D(); EndTextureMode();
         BeginDrawing(); ui::draw_desktop();
+        ui::draw_panel({8,40,float(width-16),float(height-68)});
+        ui::draw_window({view.x-4,44,view.width+8,view.height+44},"Character preview / Right-drag: orbit / Wheel: zoom");
         DrawTexturePro(preview.texture,{0,0,float(preview.texture.width),-float(preview.texture.height)},view,{0,0},0,WHITE);
-        DrawRectangleLinesEx(view,1,border);
-        text("Right-drag: orbit / Wheel: zoom",view.x,63,14);
+        ui::draw_frame(view,true);
         const auto control=[&](Rectangle r,const std::string& label,bool selected=false,bool enabled=true) {return button(r,label,selected,enabled,active,15);};
         text("Character parts",20,50,18,accent);
         const Rectangle name{20,102,370,34}; text("Name",20,82,14);
         if (active && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) naming=hit(name);
-        if (naming && active) input(design.name,name); else control(name,design.name);
+        if (naming && active) input(design.name,name); else { ui::draw_panel(name,true,ui::highlight); text(fit(design.name,15,name.width-20),name.x+10,name.y+9,15); }
         for (int i=0;i<3;++i) if (control({20+i*126.f,146,118,30},character_type_names[i],int(design.type)==i)) design.type=CharacterType(i);
         if (control({20,186,370,28},"Refresh files")) {refresh(); scroll=0;}
         {
@@ -1239,7 +1245,7 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
             if (files[slot].empty()) text("Add GLBs, then Refresh files",20,390,15);
             for (int row=0;row<rows && scroll+row<int(files[slot].size());++row) {
                 const auto& file=files[slot][scroll+row];
-                if (control({20,382+row*32.f,370,28},file,part.model==file)) {part.model=file; status.clear();}
+                if (list_item({20,382+row*32.f,370,28},file,part.model==file,true,active,15)) {part.model=file; status.clear();}
             }
             const float column=(view.width-24)/3,y=float(height-198);
             const char* labels[]={"Scale","Offset (m)","Rotation (deg)"};
@@ -1266,7 +1272,7 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
         const bool close=control({396,float(height-64),140,34},"Close");
         if ((saving || use) && save_design() && use) result=design;
         text(fit(status.empty() ? "Fit GLBs to the rig; paired limbs and shoes mirror automatically." : status,15,width-40.f),20,height-24.f,15,accent);
-        menu.draw(); text("CHARACTER CREATOR",width-224.f,8,16,background); EndDrawing(); interactive=true;
+        menu.draw(); text("CHARACTER CREATOR",width-224.f,8,16,ink); EndDrawing(); interactive=true;
         if (!screenshot.empty() && ++frames>=3) {auto capture=LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break;}
         if (result) break;
         if (close) { if (leave()) break; interactive=false; }
@@ -1417,7 +1423,7 @@ std::optional<CarDesign> choose_car(const std::optional<CarDesign>& current,cons
         BeginDrawing(); ui::draw_desktop(); ui::draw_window(r,"Choose a saved car"); ui::draw_window_close(r);
         text("Save in the car editor, then refresh this list.",r.x+24,r.y+64,18);
         for (int row=0;row<rows && scroll+row<int(library.size());++row)
-            if (button({r.x+24,r.y+104+row*38.f,672,34},library[scroll+row].name,selected==scroll+row,true,interactive)) selected=scroll+row;
+            if (list_item({r.x+24,r.y+104+row*38.f,672,34},library[scroll+row].name,selected==scroll+row,true,interactive)) selected=scroll+row;
         if (library.empty()) text("No saved cars yet",r.x+24,r.y+110,18);
         const bool create=button({r.x+24,r.y+r.height-108,150,36},"Car editor",false,true,interactive);
         const bool duplicate=button({r.x+198,r.y+r.height-108,150,36},"Duplicate",false,selected>=0,interactive) || (interactive && selected>=0 && duplicate_pressed());
@@ -1461,7 +1467,7 @@ std::optional<CharacterDesign> choose_player_character(const std::optional<Chara
         if (interactive && hit(list)) scroll-=int(GetMouseWheelMove());
         scroll=std::clamp(scroll,0,std::max(0,int(library.size())-9));
         for (int row=0;row<9 && scroll+row<int(library.size());++row)
-            if (button({list.x,list.y+row*32.f,list.width,28},library[scroll+row].name,selection==scroll+row,true,interactive,16)) selection=scroll+row;
+            if (list_item({list.x,list.y+row*32.f,list.width,28},library[scroll+row].name,selection==scroll+row,true,interactive,16)) selection=scroll+row;
         const bool use=button({window.x+24,window.y+392,100,36},"Use",true,ready,interactive);
         const bool duplicate=button({window.x+140,window.y+392,150,36},"Duplicate",false,selection>=0,interactive) || (interactive && selection>=0 && duplicate_pressed());
         const bool create=button({window.x+306,window.y+392,224,36},"Character creator",false,true,interactive,17);
@@ -1689,7 +1695,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
                 CityVehicle vehicle{CityVehicleKind(vehicle_kind),brush_point,rotation};
                 if (vehicle.kind==CityVehicleKind::Car) vehicle.car=selected_car;
                 const bool configured = vehicle.kind!=CityVehicleKind::Car || selected_car.has_value();
-                if (tool==Tool::Vehicle && !configured) status="Choose a car in Objects > Choose car";
+                if (tool==Tool::Vehicle && !configured) status="Choose a car in Objects > Car > Choose car";
                 const bool okay = tool==Tool::Spawn ? next.set_spawn(brush_point,status) : tool==Tool::Vehicle ? configured && next.add_vehicle(vehicle,status) : next.erase(brush_point,status);
                 if (okay) { commit(std::move(next)); status = "Change applied"; }
             } else dragging = true;
@@ -1763,7 +1769,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
             if (tool==Tool::Trees) {
                 for (int i = 0; i < 48; ++i) {
                     const float a = i*6.2831853f/48, b = (i+1)*6.2831853f/48, r = brush_size*8.f;
-                    DrawLine3D(vector(brush_point+Vec3(std::cos(a)*r,.2f,std::sin(a)*r)),vector(brush_point+Vec3(std::cos(b)*r,.2f,std::sin(b)*r)),brush_remove ? ORANGE : accent);
+                    DrawLine3D(vector(brush_point+Vec3(std::cos(a)*r,.2f,std::sin(a)*r)),vector(brush_point+Vec3(std::cos(b)*r,.2f,std::sin(b)*r)),brush_remove ? ORANGE : scene_accent);
                 }
             } else if (dragging && tool==Tool::Road) {
                 City proposed = city; std::string error;
@@ -1780,11 +1786,11 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
                         for (std::size_t i = 1; i<inner.size(); ++i) {
                             DrawTriangle3D(vector(inner[i-1]),vector(outer[i-1]),vector(outer[i]),color);
                             DrawTriangle3D(vector(inner[i-1]),vector(outer[i]),vector(inner[i]),color);
-                            DrawLine3D(vector(inner[i-1]),vector(inner[i]),accent); DrawLine3D(vector(outer[i-1]),vector(outer[i]),accent);
+                            DrawLine3D(vector(inner[i-1]),vector(inner[i]),scene_accent); DrawLine3D(vector(outer[i-1]),vector(outer[i]),scene_accent);
                         }
                     } else if (auto border = node.outline(); !border.empty()) {
                         for (auto& p : border) p.SetY(proposed.height(p.GetX(),p.GetZ())+.2f);
-                        for (std::size_t i = 0; i<border.size(); ++i) DrawLine3D(vector(border[i]),vector(border[(i+1)%border.size()]),accent);
+                        for (std::size_t i = 0; i<border.size(); ++i) DrawLine3D(vector(border[i]),vector(border[(i+1)%border.size()]),scene_accent);
                     } else DrawCube(vector(node.center()+Vec3(0,.18f,0)),node.half_size().GetX()*2-1.4f,.15f,node.half_size().GetZ()*2-1.4f,color);
                 }
                 else for (auto p : road_cells) DrawCube(vector(City::center(p,City::level+.18f)),8.4f,.15f,8.4f,color);
@@ -1801,19 +1807,19 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
                     const auto before = city.ground_patch(p), after = elevation_preview->ground_patch(p);
                     bool changed = false;
                     for (int i = 0; i<4; ++i) changed |= before[i].GetY()!=after[i].GetY();
-                    if (selected || changed) tile_outline(*elevation_preview,p,elevation_valid ? accent : RED);
+                    if (selected || changed) tile_outline(*elevation_preview,p,elevation_valid ? scene_accent : RED);
                 }
             } else if (dragging && (tool==Tool::Land || tool==Tool::Ground)) {
                 for (int z = std::min(anchor.z,hover.z); z<=std::max(anchor.z,hover.z); ++z)
                     for (int x = std::min(anchor.x,hover.x); x<=std::max(anchor.x,hover.x); ++x)
-                        tile_outline(city,{x,z},accent);
+                        tile_outline(city,{x,z},scene_accent);
             } else if (tool==Tool::Building) {
                 if (!dragging) preview.cell = hover;
                 City proposed = city; std::string error;
                 const bool valid = proposed.add_building(preview,error);
-                building_outline(preview,city.tile_height(preview.cell),valid ? accent : RED);
+                building_outline(preview,city.tile_height(preview.cell),valid ? scene_accent : RED);
             } else if (tool==Tool::Spawn) {
-                DrawCubeWires(vector(brush_point+Vec3(0,.8f,0)),.8f,1.6f,.8f,accent);
+                DrawCubeWires(vector(brush_point+Vec3(0,.8f,0)),.8f,1.6f,.8f,scene_accent);
             } else if (tool==Tool::Vehicle) {
                 CityVehicle v{CityVehicleKind(vehicle_kind),brush_point,rotation};
                 if (v.kind==CityVehicleKind::Car) {
@@ -1821,25 +1827,25 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
                     if (selected_car) car_renderer.draw_design(*selected_car,brush_point,rotation*PI/2,camera);
                 }
                 const Vec3 half = v.half_size();
-                DrawCubeWires(vector(brush_point+Vec3(0,1,0)),half.GetX()*2,2,half.GetZ()*2,accent);
-            } else tile_outline(city,hover,accent);
+                DrawCubeWires(vector(brush_point+Vec3(0,1,0)),half.GetX()*2,2,half.GetZ()*2,scene_accent);
+            } else tile_outline(city,hover,scene_accent);
         }
         if (selected_building>=0) {
-            const auto& b = city.buildings[selected_building]; building_outline(b,city.tile_height(b.cell),accent);
+            const auto& b = city.buildings[selected_building]; building_outline(b,city.tile_height(b.cell),scene_accent);
         }
         if (selected_vehicle>=0) {
             const auto& v = city.vehicles[selected_vehicle]; const Vec3 half = v.half_size();
-            DrawCubeWires(vector(v.position+Vec3(0,1,0)),half.GetX()*2,2,half.GetZ()*2,accent);
+            DrawCubeWires(vector(v.position+Vec3(0,1,0)),half.GetX()*2,2,half.GetZ()*2,scene_accent);
         }
         EndMode3D();
-        // Mask the scene outside its Macintosh-style document window.
+        // Keep the 3D scene inside the document's client area.
         DrawRectangle(0,menu_height,GetScreenWidth(),12,background);
         DrawRectangle(0,44,sidebar+12,GetScreenHeight()-44,background);
         DrawRectangle(GetScreenWidth()-12,44,12,GetScreenHeight()-44,background);
         DrawRectangle(0,GetScreenHeight()-64,GetScreenWidth(),64,background);
         ui::draw_window({8,44,264,float(GetScreenHeight()-108)},"TOOLBOX");
-        DrawRectangleLinesEx(document,2,border);
-        DrawRectangleLinesEx({document.x+4,document.y+35,document.width-8,document.height-39},1,border);
+        ui::draw_frame(document);
+        ui::draw_frame({document.x+4,document.y+35,document.width-8,document.height-39},true);
         std::string active = tools[int(tool)];
         if (tool==Tool::Building || selected_building>=0) active += " / "+std::to_string((selected_building>=0 ? city.buildings[selected_building].rotation : building_rotation)*90)+" deg";
         if (tool==Tool::Road) active += diagonal_roads ? " / diagonal" : " / L-shaped";
@@ -1860,14 +1866,14 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
             const auto footprint=building_mesh->footprint();
             text(TextFormat("%i x %i tiles / %.0f m",footprint[0],footprint[1],building_mesh->size.GetY()),20,274,14);
         }
-        DrawLine(8,GetScreenHeight()-54,GetScreenWidth()-8,GetScreenHeight()-54,border);
+        ui::draw_panel({8,float(GetScreenHeight()-54),float(GetScreenWidth()-16),42},true);
         const std::string clock = TextFormat("%02i:%02i",city.start_minutes/60,city.start_minutes%60);
         const std::string info = std::string(dirty ? "[UNSAVED] " : "[SAVED] ")+"Start "+clock+" | "+(menu_state.play ? "Player: "+city.player_character->name : !city.spawn ? "Set a spawn to play" : "Choose a Player character");
         text(fit(status,17,GetScreenWidth()-ui::measure_text(info.c_str(),16)-48.f),20,float(GetScreenHeight()-44),17,accent);
         text(info,GetScreenWidth()-ui::measure_text(info.c_str(),16)-20.f,float(GetScreenHeight()-43),16);
         menu_state.top = top; menu_state.grid = grid; menu_state.tool = int(tool);
         menu.draw(menu_state);
-        text("CITY EDITOR",GetScreenWidth()-150.f,8,16,background);
+        text("CITY EDITOR",GetScreenWidth()-150.f,8,16,ink);
         EndDrawing();
         if (choose_building) {
             const auto chosen=saved_picker([&]{return saved_buildings(buildings_directory,status);},"Choose a saved building","Choose building",building_mesh ? building_mesh->name : "",status,buildings_directory);
@@ -1957,7 +1963,7 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
         text("Saved cities",r.x+24,r.y+102,17);
         const bool can_choose=active && !creating;
         for (int row=0;row<rows && scroll+row<int(cities.size());++row)
-            if (button({r.x+24,r.y+128+row*38.f,520,34},cities[scroll+row].name,selection==scroll+row,true,can_choose)) selection=scroll+row;
+            if (list_item({r.x+24,r.y+128+row*38.f,520,34},cities[scroll+row].name,selection==scroll+row,true,can_choose)) selection=scroll+row;
         if (cities.empty()) text("No saved cities yet.",r.x+24,r.y+138,18);
         if (button({r.x+576,r.y+128,280,46},"Create new city",true,true,can_choose)) new_city();
         if (button({r.x+576,r.y+192,280,46},"Open / edit selected",false,has,can_choose)) {selected=cities[selection]; open_editor=true;}
@@ -1974,7 +1980,7 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
             const auto entry = [&](std::string& value,Rectangle box,int id,bool enabled = true) {
                 if (enabled && modal_input && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && hit(box)) new_field = id;
                 if (enabled && new_field==id && modal_input) input(value,box);
-                else { DrawRectangleLinesEx(box,1,enabled ? border : ui::dos_light_blue); text(fit(value,21,box.width-24),box.x+12,box.y+(box.height-21)/2,21,enabled ? ink : ui::dos_light_blue); }
+                else { ui::draw_panel(box,true,enabled ? ui::highlight : ui::face); text(fit(value,21,box.width-24),box.x+12,box.y+(box.height-21)/2,21,enabled ? ink : muted); }
             };
             text("Name",r.x+24,r.y+48,16); entry(name,{r.x+24,r.y+72,572,44},0);
             if (button({r.x+24,r.y+132,278,30},"Perlin terrain",generated_terrain,true,modal_input,16)) generated_terrain = true;
@@ -2025,7 +2031,7 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
                     DrawRectangleLinesEx({view.x+(City::width-preview_x)/2*tile,view.y+(City::width-preview_z)/2*tile,preview_x*tile,preview_z*tile},1,accent);
                 }
             } else text("Fix terrain values to preview",view.x+12,view.y+138,13,accent);
-            DrawRectangleLinesEx(view,1,border);
+            ui::draw_frame(view,true);
             DrawRectangleRec({view.x,r.y+390,14,14},{84,129,74,255}); text("Land",view.x+22,r.y+389,14);
             DrawRectangleRec({view.x+134,r.y+390,14,14},{28,66,108,255}); text("Water",view.x+156,r.y+389,14);
             text(terrain_ready ? "Land: "+std::to_string(terrain_draft.land_count())+" tiles" : "Preview unavailable",view.x,r.y+417,14);

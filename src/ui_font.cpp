@@ -1,4 +1,5 @@
 #include "ui_font.hpp"
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -33,34 +34,61 @@ int measure_text(const char* text, int size) {
     return int(std::ceil(MeasureTextEx(current(), text, float(size), spacing(size)).x));
 }
 void draw_desktop() {
-    ClearBackground(dos_blue);
-    for (int y = 40; y < GetScreenHeight(); y += 16)
-        for (int x = (y / 16 % 2) * 8; x < GetScreenWidth(); x += 16)
-            DrawRectangle(x, y, 2, 2, dos_light_blue);
+    ClearBackground(desktop);
+}
+void draw_frame(Rectangle r, bool sunken) {
+    const Color top[] = {sunken ? shadow : highlight, sunken ? ink : light};
+    const Color bottom[] = {sunken ? highlight : ink, sunken ? light : shadow};
+    for (int i = 0; i < 2; ++i) {
+        DrawRectangle(int(r.x + i), int(r.y + i), int(r.width - 2 * i), 1, top[i]);
+        DrawRectangle(int(r.x + i), int(r.y + i), 1, int(r.height - 2 * i), top[i]);
+        DrawRectangle(int(r.x + i), int(r.y + r.height - 1 - i), int(r.width - 2 * i), 1, bottom[i]);
+        DrawRectangle(int(r.x + r.width - 1 - i), int(r.y + i), 1, int(r.height - 2 * i), bottom[i]);
+    }
+}
+void draw_panel(Rectangle r, bool sunken, Color fill) {
+    DrawRectangleRec(r, fill);
+    draw_frame(r, sunken);
+}
+void draw_button(Rectangle r, bool pressed, bool focused, bool enabled) {
+    draw_panel(r, enabled && pressed);
+    if (focused && enabled) {
+        for (int x = int(r.x + 4); x < r.x + r.width - 4; x += 2) {
+            DrawPixel(x, int(r.y + 4), ink);
+            DrawPixel(x, int(r.y + r.height - 5), ink);
+        }
+        for (int y = int(r.y + 4); y < r.y + r.height - 4; y += 2) {
+            DrawPixel(int(r.x + 4), y, ink);
+            DrawPixel(int(r.x + r.width - 5), y, ink);
+        }
+    }
+}
+void draw_slider(Rectangle r, float fraction) {
+    draw_panel({r.x, r.y + r.height / 2 - 2, r.width, 4}, true);
+    draw_panel({r.x + (r.width - 10) * std::clamp(fraction, 0.f, 1.f), r.y - 4, 10, r.height + 8});
 }
 void draw_window_title(Rectangle r, const char* title) {
-    DrawRectangleRec({r.x + 3, r.y + 3, r.width - 6, 28}, dos_blue);
-    for (int y = 7; y < 28; y += 4) DrawLine(int(r.x + 8), int(r.y + y), int(r.x + r.width - 8), int(r.y + y), dos_white);
+    DrawRectangleRec({r.x + 3, r.y + 3, r.width - 6, 28}, title_blue);
     std::string label = title;
-    while (!label.empty() && measure_text(label.c_str(),18)>r.width-100) label.pop_back();
-    const int width = measure_text(label.c_str(), 18) + 24;
-    const int x = int(r.x + (r.width - width) / 2);
-    DrawRectangle(x, int(r.y + 3), width, 28, dos_white);
-    draw_text(label.c_str(), x + 12, int(r.y + 8), 18, dos_blue);
-    DrawRectangleLinesEx({r.x + 3, r.y + 3, r.width - 6, 29}, 1, dos_white);
+    if (measure_text(label.c_str(), 18) > r.width - 64) {
+        while (!label.empty() && measure_text((label + "...").c_str(), 18) > r.width - 64) label.pop_back();
+        label += "...";
+    }
+    draw_text(label.c_str(), int(r.x + 10), int(r.y + 8), 18, highlight);
 }
 void draw_window_close(Rectangle bounds) {
     const auto r = window_close(bounds);
-    const bool hover = CheckCollisionPointRec(GetMousePosition(),r);
-    DrawRectangleRec(r,hover ? dos_yellow : dos_blue);
-    DrawRectangleLinesEx(r,1,dos_white);
-    draw_text("X",int(r.x+(r.width-measure_text("X",16))/2),int(r.y+2),16,hover ? dos_blue : dos_white);
+    const bool pressed = CheckCollisionPointRec(GetMousePosition(), r) && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+    draw_button(r, pressed);
+    const int x = int(r.x + 7) + pressed, y = int(r.y + 5) + pressed;
+    for (int i = 0; i < 8; ++i) {
+        DrawRectangle(x + i, y + i, 2, 1, ink);
+        DrawRectangle(x + 7 - i, y + i, 2, 1, ink);
+    }
 }
 void draw_window(Rectangle r, const char* title) {
-    DrawRectangleRec({r.x + 5, r.y + 5, r.width, r.height}, {0, 0, 85, 255});
-    DrawRectangleRec(r, dos_blue);
-    DrawRectangleLinesEx(r, 2, dos_white);
-    DrawRectangleLinesEx({r.x + 4, r.y + 35, r.width - 8, r.height - 39}, 1, dos_white);
+    DrawRectangleRec({r.x + 3, r.y + 3, r.width, r.height}, ink);
+    draw_panel(r);
     draw_window_title(r, title);
 }
 void draw_image_text(Image* image, const char* text, int x, int y, int size, Color color) {

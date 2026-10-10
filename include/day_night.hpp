@@ -28,6 +28,7 @@ public:
         seconds_ = hour * 60 + minute;
         return true;
     }
+    float minutes_of_day() const { return float(seconds_); }
     std::array<char, 6> clock() const {
         const int minute = int(seconds_ + 1e-8) % 1440, hour = minute / 60;
         return {{char('0' + hour / 10), char('0' + hour % 10), ':',
@@ -35,18 +36,19 @@ public:
     }
     Daylight lighting() const {
         struct SkyKey { float hour; Vector3 horizon, zenith; };
+        // Clear blues and golden twilight keep fog and reflections out of the pink/purple range.
         static constexpr SkyKey keys[] = {
-            {0, {12, 20, 48}, {4, 7, 24}},
-            {5, {73, 43, 110}, {20, 17, 55}},
-            {6, {249, 151, 191}, {101, 62, 160}},
-            {7, {247, 180, 215}, {102, 116, 202}},
-            {9, {157, 210, 233}, {59, 143, 211}},
-            {16, {160, 211, 230}, {54, 133, 203}},
-            {18, {255, 148, 75}, {119, 72, 160}},
-            {19, {238, 98, 112}, {57, 37, 104}},
-            {20, {79, 52, 116}, {15, 20, 59}},
-            {22, {17, 29, 61}, {5, 10, 31}},
-            {24, {12, 20, 48}, {4, 7, 24}}
+            {0, {20, 38, 69}, {6, 14, 34}},
+            {5, {92, 137, 164}, {28, 64, 105}},
+            {6, {248, 218, 156}, {64, 134, 196}},
+            {7, {205, 230, 233}, {62, 154, 221}},
+            {9, {177, 226, 243}, {38, 137, 224}},
+            {16, {190, 230, 241}, {49, 135, 211}},
+            {18, {248, 196, 116}, {65, 122, 183}},
+            {19, {126, 161, 181}, {32, 68, 112}},
+            {20, {51, 87, 121}, {16, 36, 68}},
+            {22, {25, 44, 76}, {8, 18, 39}},
+            {24, {20, 38, 69}, {6, 14, 34}}
         };
         const auto mix = [](Vector3 a, Vector3 b, float t) {
             return Vector3{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
@@ -65,8 +67,8 @@ public:
         return {unit(mix(keys[i].horizon, keys[i + 1].horizon, t)),
             unit(mix(keys[i].zenith, keys[i + 1].zenith, t)),
             {std::cos(angle) * .9578263f, elevation, std::cos(angle) * .2873479f},
-            mix({1, 1, .96f}, {1, .61f, .43f}, warmth),
-            mix({.16f, .18f, .29f}, {.58f, .58f, .58f}, day), day, 1 - day};
+            mix({1, .99f, .96f}, {1, .80f, .55f}, warmth),
+            mix({.16f, .21f, .30f}, {.60f, .64f, .61f}, day), day, 1 - day};
     }
 private:
     double seconds_ = 8 * 60;

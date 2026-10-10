@@ -16,7 +16,7 @@ struct MinimapView {
     static constexpr float vehicle_pitch = .65f, vehicle_distance = 240;
 
     MinimapView(int screen_height, Vec3 player_position, Vec3 player_forward, const Camera3D& camera, bool in_vehicle = false)
-        : bounds{14, float(screen_height - 194), 320, 180},
+        : bounds{14, float(screen_height - 334), 320, 320},
           anchor{bounds.x + bounds.width * .5f, bounds.y + bounds.height * (in_vehicle ? .72f : .65f)},
           scale(bounds.width / 120), player(player_position), vehicle_view(in_vehicle) {
         const Vec3 fallback = Vec3(player_forward.GetX(), 0, player_forward.GetZ()).NormalizedOr(Vec3(0, 0, -1));

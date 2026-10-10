@@ -5,8 +5,8 @@
 
 namespace ambaretto {
 namespace {
-constexpr Color blue = ui::dos_blue, gray = ui::dos_white, ink = ui::dos_blue, selected = ui::dos_light_blue;
-struct Item { const char* label; MenuCommand command; const char* shortcut = ""; };
+constexpr Color blue = ui::title_blue, gray = ui::face, ink = ui::ink, selected = ui::title_blue;
+struct Item { const char* label; MenuCommand command; const char* shortcut = ""; const Item* children = nullptr; int child_count = 0; };
 constexpr Item files[] = {{"Resume", MenuCommand::Resume, "Esc"}, {"End Game / Main menu", MenuCommand::Cities}};
 constexpr Item edits[] = {{"Recover vehicle", MenuCommand::Recover}, {"Restore car tuning", MenuCommand::CarDefaults}};
 constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Aim mode", MenuCommand::AimMode}};
@@ -19,12 +19,15 @@ constexpr Item tiles[] = {{"Island / expand",MenuCommand::LandTool,"2"}, {"Road:
     {"Ground texture...",MenuCommand::GroundTool,"9"},
     {"Raise ground +2 m",MenuCommand::RaiseGround,"0"}, {"Lower ground -2 m",MenuCommand::LowerGround}};
 constexpr Item buildings[] = {{"Place selected building",MenuCommand::BuildingTool,"4"}, {"Building Creator...",MenuCommand::BuildingCreator}, {"Edit selected building...",MenuCommand::EditBuilding}, {"Rotate building +90",MenuCommand::RotateBuilding,"R"}, {"Choose saved building...",MenuCommand::SavedBuildings}};
-constexpr Item objects[] = {{"Player spawn",MenuCommand::SpawnTool,"5"}, {"Choose car...",MenuCommand::PlaceCar,"6"}, {"Trainer plane",MenuCommand::PlaceTrainer},
-    {"F-18",MenuCommand::PlaceF18}, {"Boeing 747",MenuCommand::PlaceBoeing}, {"Rotate vehicle +90",MenuCommand::RotateObject},
-    {"Trees: sparse",MenuCommand::TreesSparse,"8"}, {"Trees: medium",MenuCommand::TreesMedium}, {"Trees: dense",MenuCommand::TreesDense},
-    {"Smaller tree brush",MenuCommand::BrushSmaller}, {"Larger tree brush",MenuCommand::BrushLarger},
-    {"Car editor...",MenuCommand::CarEditor}, {"Edit selected car...",MenuCommand::EditCar},
-    {"Character creator...",MenuCommand::CharacterCreator}, {"Choose player character...",MenuCommand::ChoosePlayerCharacter}};
+constexpr Item trees[] = {{"Sparse",MenuCommand::TreesSparse,"8"}, {"Medium",MenuCommand::TreesMedium}, {"Dense",MenuCommand::TreesDense},
+    {"Smaller brush",MenuCommand::BrushSmaller}, {"Larger brush",MenuCommand::BrushLarger}};
+constexpr Item player[] = {{"Player spawn",MenuCommand::SpawnTool,"5"}, {"Character creator...",MenuCommand::CharacterCreator},
+    {"Choose player character...",MenuCommand::ChoosePlayerCharacter}};
+constexpr Item cars[] = {{"Choose car...",MenuCommand::PlaceCar,"6"}, {"Car editor...",MenuCommand::CarEditor}, {"Edit selected car...",MenuCommand::EditCar}};
+constexpr Item other_vehicles[] = {{"Trainer plane",MenuCommand::PlaceTrainer}, {"F-18",MenuCommand::PlaceF18}, {"Boeing 747",MenuCommand::PlaceBoeing}};
+constexpr Item objects[] = {{"Trees",MenuCommand::None,"",trees,int(std::size(trees))}, {"Player",MenuCommand::None,"",player,int(std::size(player))},
+    {"Car",MenuCommand::None,"",cars,int(std::size(cars))}, {"Other vehicles",MenuCommand::None,"",other_vehicles,int(std::size(other_vehicles))},
+    {"Rotate vehicle +90",MenuCommand::RotateObject}};
 constexpr Item views[] = {{"Top view", MenuCommand::TopView, "V"}, {"Show grid", MenuCommand::Grid, "G"}, {"Rotate left", MenuCommand::RotateLeft, "Q"}, {"Rotate right", MenuCommand::RotateRight, "E"}, {"Zoom in", MenuCommand::ZoomIn}, {"Zoom out", MenuCommand::ZoomOut}};
 constexpr Item city_settings[] = {{"City settings...",MenuCommand::CitySettings}};
 constexpr Item city_files[] = {{"Create new city...", MenuCommand::NewCity, "Ins"}, {"Open / edit selected", MenuCommand::EditCity, "Enter"}, {"Duplicate selected", MenuCommand::DuplicateCity, "Ctrl+D"}, {"Back", MenuCommand::Quit, "Esc"}};
@@ -71,7 +74,14 @@ Rectangle title_rect(MenuMode mode, int menu) {
     return {x, 0, float(ui::measure_text(menus(mode)[menu].title, 19) + 32), menu_height};
 }
 Rectangle dropdown_rect(MenuMode mode, int menu) { return {title_rect(mode, menu).x, menu_height, mode == MenuMode::Game ? 320.f : 360.f, float(menus(mode)[menu].count * 32 + 8)}; }
-Rectangle item_rect(MenuMode mode, int menu, int item) { auto r = dropdown_rect(mode, menu); return {r.x + 4, r.y + 4 + item * 32, r.width - 8, 32}; }
+Rectangle item_rect(Rectangle r, int item) { return {r.x + 4, r.y + 4 + item * 32, r.width - 8, 32}; }
+Rectangle item_rect(MenuMode mode, int menu, int item) { return item_rect(dropdown_rect(mode, menu), item); }
+Rectangle submenu_rect(MenuMode mode, int menu, int item) {
+    const auto parent = dropdown_rect(mode, menu);
+    const float width = 360, height = float(menus(mode)[menu].items[item].child_count * 32 + 8);
+    const float x = parent.x + parent.width - 4 + width <= GetScreenWidth() ? parent.x + parent.width - 4 : parent.x - width + 4;
+    return {std::max(0.f,x),std::clamp(item_rect(parent,item).y-4, float(menu_height), std::max(float(menu_height),GetScreenHeight()-height)),width,height};
+}
 Rectangle panel_rect() { return {float((GetScreenWidth() - 944) / 2), 64, 944, float(GetScreenHeight() - 96)}; }
 int visible_rows() { return std::max(1, int((panel_rect().height - 264) / 28)); }
 int first_row(int selection, int total) { return std::clamp(selection - visible_rows() / 2, 0, std::max(0, total - visible_rows())); }
@@ -81,20 +91,31 @@ Rectangle button_rect(int index) { auto r = panel_rect(); return {r.x + 20 + ind
 bool hit(Rectangle r) { return CheckCollisionPointRec(GetMousePosition(), r); }
 bool repeat(int key) { return IsKeyPressed(key) || IsKeyPressedRepeat(key); }
 void box(Rectangle r, Color color = gray) {
-    DrawRectangleRec({r.x + 5, r.y + 5, r.width, r.height}, {0, 0, 85, 255});
-    DrawRectangleRec(r, color);
-    DrawRectangleLinesEx(r, 2, blue);
+    ui::draw_panel(r, false, color);
 }
 void text(const char* value, float x, float y, int size = 17, Color color = ink) { ui::draw_text(value, int(x), int(y), size, color); }
+void draw_items(Rectangle bounds, const Item* items, int count, int selection, const MenuState& state) {
+    box(bounds);
+    for (int i = 0; i < count; ++i) {
+        const auto r = item_rect(bounds, i);
+        const auto& item = items[i];
+        if (selection == i) DrawRectangleRec(r, blue);
+        const Color color = !enabled(item.command, state) ? (selection == i ? ui::face : ui::disabled) : selection == i ? ui::highlight : ink;
+        if (checked(item.command, state)) text("*", r.x + 8, r.y + 7, 17, color);
+        text(item.label, r.x + 28, r.y + 7, 17, color);
+        const auto shortcut = item.child_count ? ">" : item.shortcut;
+        text(shortcut, r.x + r.width - 12 - ui::measure_text(shortcut, 17), r.y + 7, 17, color);
+    }
+}
 void button(int index, const char* label) {
     const auto r = button_rect(index);
-    DrawRectangleRec(r, hit(r) ? selected : gray);
-    DrawRectangleLinesEx(r, 1, RAYWHITE);
-    text(label, r.x + 10, r.y + 6, 16, hit(r) ? RAYWHITE : ink);
+    const bool pressed = hit(r) && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+    ui::draw_button(r, pressed);
+    text(label, r.x + 10 + pressed, r.y + 6 + pressed, 16);
 }
 }
 void MenuBar::show(MenuCommand command) {
-    popup_ = command; dropdown_ = -1; capturing_ = false; selected_ = binding_ = group_ = 0; status_.clear();
+    popup_ = command; dropdown_ = submenu_ = -1; capturing_ = false; selected_ = binding_ = group_ = 0; status_.clear();
 }
 bool MenuBar::save_pending(const ControllerMapping& mapping, const std::filesystem::path& path) {
     if (!dirty_) return true;
@@ -198,61 +219,77 @@ MenuCommand MenuBar::update(const MenuState& state, bool mouse_enabled) {
 }
 MenuCommand MenuBar::update(const MenuState& state, const MenuInput& input) {
     interacted_ = false;
-    if (!input.focused) { interacted_ = blocking(); dropdown_ = -1; return MenuCommand::None; }
+    if (!input.focused) { interacted_ = blocking(); dropdown_ = submenu_ = -1; return MenuCommand::None; }
     const bool click = input.mouse_enabled && input.click;
     const auto over = [&](Rectangle r) { return CheckCollisionPointRec(input.mouse, r); };
     const int total = menu_count(mode_);
     if (input.toggle) {
         interacted_ = true;
-        if (dropdown_ < 0) open(); else dropdown_ = -1;
+        if (dropdown_ < 0) open(); else dropdown_ = submenu_ = -1;
         return MenuCommand::None;
     }
     if (click && input.mouse.y < menu_height) {
         interacted_ = true;
-        for (int i = 0; i < total; ++i) if (over(title_rect(mode_, i))) { if (dropdown_ == i) dropdown_ = -1; else open(i); return MenuCommand::None; }
-        dropdown_ = -1; return MenuCommand::None;
+        for (int i = 0; i < total; ++i) if (over(title_rect(mode_, i))) { if (dropdown_ == i) dropdown_ = submenu_ = -1; else open(i); return MenuCommand::None; }
+        dropdown_ = submenu_ = -1; return MenuCommand::None;
     }
     if (dropdown_ < 0) {
         if (mode_ == MenuMode::Game && input.escape) { interacted_ = true; return MenuCommand::Pause; }
         return MenuCommand::None;
     }
     interacted_ = true;
-    if (input.escape) { dropdown_ = -1; return MenuCommand::None; }
-    if (input.horizontal) { dropdown_ = (dropdown_ + input.horizontal + total) % total; item_ = 0; }
+    if (input.escape) { if (submenu_ >= 0) submenu_ = -1; else dropdown_ = -1; return MenuCommand::None; }
+    if (input.horizontal) {
+        if (submenu_ >= 0 && input.horizontal < 0) { submenu_ = -1; return MenuCommand::None; }
+        if (submenu_ < 0 && input.horizontal > 0 && menus(mode_)[dropdown_].items[item_].child_count) {
+            submenu_ = item_; subitem_ = 0; return MenuCommand::None;
+        }
+        open((dropdown_ + input.horizontal + total) % total);
+    }
     const auto& menu = menus(mode_)[dropdown_];
-    item_ = (item_ + input.vertical + menu.count) % menu.count;
-    if (input.mouse_enabled && input.moved) {
+    if (submenu_ >= 0) {
+        const int count = menu.items[submenu_].child_count;
+        subitem_ = (subitem_ + input.vertical + count) % count;
+    } else item_ = (item_ + input.vertical + menu.count) % menu.count;
+    if (input.mouse_enabled && (input.moved || click)) {
         for (int i = 0; i < total; ++i) if (over(title_rect(mode_, i))) { if (dropdown_ != i) open(i); }
-        for (int i = 0; i < menus(mode_)[dropdown_].count; ++i) if (over(item_rect(mode_, dropdown_, i))) item_ = i;
+        const auto& hovered_menu = menus(mode_)[dropdown_];
+        if (submenu_ >= 0 && over(submenu_rect(mode_, dropdown_, submenu_))) {
+            for (int i = 0; i < hovered_menu.items[submenu_].child_count; ++i)
+                if (over(item_rect(submenu_rect(mode_, dropdown_, submenu_), i))) subitem_ = i;
+        } else for (int i = 0; i < hovered_menu.count; ++i) if (over(item_rect(mode_, dropdown_, i))) {
+            item_ = i;
+            if (hovered_menu.items[i].child_count) { if (submenu_ != i) subitem_ = 0; submenu_ = i; }
+            else submenu_ = -1;
+        }
     }
-    if (input.enter || (click && over(item_rect(mode_, dropdown_, item_)))) {
-        const auto command = menus(mode_)[dropdown_].items[item_].command;
-        if (!enabled(command, state)) return MenuCommand::None;
-        dropdown_ = -1;
-        return command;
+    const auto& current_menu = menus(mode_)[dropdown_];
+    const auto& item = submenu_ >= 0 ? current_menu.items[submenu_].children[subitem_] : current_menu.items[item_];
+    const auto bounds = submenu_ >= 0 ? item_rect(submenu_rect(mode_, dropdown_, submenu_), subitem_) : item_rect(mode_, dropdown_, item_);
+    if (input.enter || (click && over(bounds))) {
+        if (item.child_count) { submenu_ = item_; subitem_ = 0; return MenuCommand::None; }
+        if (!enabled(item.command, state)) return MenuCommand::None;
+        dropdown_ = submenu_ = -1;
+        return item.command;
     }
-    if (click && !over(dropdown_rect(mode_, dropdown_))) dropdown_ = -1;
+    if (click && !over(dropdown_rect(mode_, dropdown_)) && (submenu_ < 0 || !over(submenu_rect(mode_, dropdown_, submenu_)))) dropdown_ = submenu_ = -1;
     return MenuCommand::None;
 }
 void MenuBar::draw(const MenuState& state) const {
     DrawRectangle(0, 0, GetScreenWidth(), menu_height, gray);
-    DrawLine(0, menu_height - 1, GetScreenWidth(), menu_height - 1, blue);
+    DrawLine(0, menu_height - 2, GetScreenWidth(), menu_height - 2, ui::shadow);
+    DrawLine(0, menu_height - 1, GetScreenWidth(), menu_height - 1, ui::highlight);
     for (int i = 0; i < menu_count(mode_); ++i) {
         const auto r = title_rect(mode_, i);
-        if (dropdown_ == i) DrawRectangleRec(r, blue);
-        text(menus(mode_)[i].title, r.x + 16, 6, 19, dropdown_ == i ? ui::dos_yellow : ink);
+        if (dropdown_ == i) ui::draw_panel(r, true);
+        text(menus(mode_)[i].title, r.x + 16, 6, 19);
     }
     if (dropdown_ >= 0) {
-        box(dropdown_rect(mode_, dropdown_));
         const auto& menu = menus(mode_)[dropdown_];
-        for (int i = 0; i < menu.count; ++i) {
-            const auto r = item_rect(mode_, dropdown_, i);
-            if (item_ == i) DrawRectangleRec(r, blue);
-            const auto& item = menu.items[i];
-            const Color color = !enabled(item.command, state) ? ui::dos_light_blue : item_ == i ? ui::dos_yellow : ink;
-            if (checked(item.command, state)) text("*", r.x + 8, r.y + 7, 17, color);
-            text(item.label, r.x + 28, r.y + 7, 17, color);
-            text(item.shortcut, r.x + r.width - 12 - ui::measure_text(item.shortcut, 17), r.y + 7, 17, color);
+        draw_items(dropdown_rect(mode_, dropdown_), menu.items, menu.count, item_, state);
+        if (submenu_ >= 0) {
+            const auto& group = menu.items[submenu_];
+            draw_items(submenu_rect(mode_, dropdown_, submenu_), group.children, group.child_count, subitem_, state);
         }
     }
 }
@@ -260,7 +297,7 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
     draw();
     if (mode_ == MenuMode::Game && dropdown_ == 2) {
         const auto r = item_rect(mode_, dropdown_, 2);
-        text(mapping.auto_lock ? "Aim mode: Auto lock" : "Aim mode: Free aim", r.x + 28, r.y + 7, 17, item_ == 2 ? ui::dos_yellow : ink);
+        text(mapping.auto_lock ? "Aim mode: Auto lock" : "Aim mode: Free aim", r.x + 28, r.y + 7, 17, item_ == 2 ? ui::highlight : ink);
     }
     if (popup_ == MenuCommand::None) return;
     DrawRectangle(0, menu_height, GetScreenWidth(), GetScreenHeight() - menu_height, {0, 0, 0, 150});
@@ -269,38 +306,39 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
     ui::draw_window_close(r);
     if (popup_ == MenuCommand::Controllers) {
         BeginScissorMode(int(r.x + 20), int(r.y + 74), int(r.width - 40), 19);
-        text(devices_.empty() ? "Controller detection runs during interactive play." : devices_.c_str(), r.x + 20, r.y + 74, 15, YELLOW);
+        text(devices_.empty() ? "Controller detection runs during interactive play." : devices_.c_str(), r.x + 20, r.y + 74, 15, ui::title_blue);
         EndScissorMode();
         for (int i = 0; i < int(action_groups.size()); ++i) {
             const auto tab = group_rect(i);
-            DrawRectangleRec(tab, i == group_ ? selected : gray);
-            DrawRectangleLinesEx(tab, 1, RAYWHITE);
-            text(action_groups[i].label, tab.x + 10, tab.y + 5, 16, i == group_ ? RAYWHITE : ink);
+            ui::draw_button(tab, i == group_, i == group_);
+            text(action_groups[i].label, tab.x + 10, tab.y + 5, 16);
         }
-        text("ACTION", r.x + 20, r.y + 132, 16, YELLOW);
-        text(capturing_ ? "WAITING FOR INPUT..." : "BINDINGS", r.x + 456, r.y + 132, 16, YELLOW);
+        text("ACTION", r.x + 20, r.y + 132, 16, ui::title_blue);
+        text(capturing_ ? "WAITING FOR INPUT..." : "BINDINGS", r.x + 456, r.y + 132, 16, ui::title_blue);
         const auto& list = mapping.bindings[selected_];
         const int group_first = int(action_groups[group_].first), group_end = int(action_groups[group_].end);
         const int first = group_first + first_row(selected_ - group_first, group_end - group_first), binding_first = first_row(binding_, int(list.size()));
+        ui::draw_panel({r.x + 18, r.y + 152, 420, float(visible_rows() * 28 + 4)}, true, ui::highlight);
+        ui::draw_panel({r.x + 454, r.y + 152, 472, float(visible_rows() * 28 + 4)}, true, ui::highlight);
         for (int i = 0; i < visible_rows(); ++i) {
             if (first + i < group_end) {
                 auto row = row_rect(i, false);
                 if (first + i == selected_) DrawRectangleRec(row, selected);
-                text(action_labels[first + i], row.x + 6, row.y + 5, 16, RAYWHITE);
+                text(action_labels[first + i], row.x + 6, row.y + 5, 16, first + i == selected_ ? ui::highlight : ink);
             }
             if (binding_first + i < int(list.size())) {
                 auto row = row_rect(i, true);
                 if (binding_first + i == binding_) DrawRectangleRec(row, selected);
-                text(binding_label(list[binding_first + i]).c_str(), row.x + 6, row.y + 5, 16, RAYWHITE);
+                text(binding_label(list[binding_first + i]).c_str(), row.x + 6, row.y + 5, 16, binding_first + i == binding_ ? ui::highlight : ink);
             }
         }
-        if (list.empty()) text("Unbound", r.x + 462, r.y + 159, 16, GRAY);
-        text(status_.c_str(), r.x + 20, r.y + r.height - 106, 15, YELLOW);
+        if (list.empty()) text("Unbound", r.x + 462, r.y + 159, 16, ui::disabled);
+        text(status_.c_str(), r.x + 20, r.y + r.height - 106, 15, ui::title_blue);
         button(0, capturing_ ? "Listening..." : "Add binding"); button(1, "Remove binding"); button(2, "Defaults");
         button(3, TextFormat("Deadzone: %d%%", int(std::round(mapping.deadzone * 100)))); button(4, "Save & close");
-        text("Changes save automatically / Esc: close / Insert: add / Delete: remove",r.x+20,r.y+r.height-30,13,RAYWHITE);
+        text("Changes save automatically / Esc: close / Insert: add / Delete: remove",r.x+20,r.y+r.height-30,13,ink);
     } else if (popup_ == MenuCommand::Controls) {
-        text("Keyboard and gamepad defaults. Edit bindings in the main menu's Settings.", r.x + 20, r.y + 58, 16, RAYWHITE);
+        text("Keyboard and gamepad defaults. Edit bindings in the main menu's Settings.", r.x + 20, r.y + 58, 16, ink);
         constexpr const char* lines[] = {
             "Car: W/S or left stick. Opposite direction brakes, then reverses. Space / B: handbrake.",
             "Car horn: H / right-stick click. E / Y: exit, or jump out while moving and tumble.",
@@ -319,12 +357,12 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
             "Tuning camera: right-drag outside panel; scroll to zoom. The map pauses physics."
         };
         const int spacing = std::min(30, int((r.height - 220) / std::size(lines)));
-        for (int i = 0; i < int(std::size(lines)); ++i) text(lines[i], r.x + 20, r.y + 108 + i * spacing, 16, RAYWHITE);
+        for (int i = 0; i < int(std::size(lines)); ++i) text(lines[i], r.x + 20, r.y + 108 + i * spacing, 16, ink);
         button(4, "Close");
     } else {
-        text("AMBARETTO", r.x + 20, r.y + 90, 26, RAYWHITE);
-        text("Build an island city, then explore by car, on foot, or by plane.", r.x + 20, r.y + 145, 18, RAYWHITE);
-        text("Built with C++17, raylib and Jolt Physics.", r.x + 20, r.y + 180, 18, RAYWHITE);
+        text("AMBARETTO", r.x + 20, r.y + 90, 26, ink);
+        text("Build an island city, then explore by car, on foot, or by plane.", r.x + 20, r.y + 145, 18, ink);
+        text("Built with C++17, raylib and Jolt Physics.", r.x + 20, r.y + 180, 18, ink);
         button(4, "Close");
     }
 }

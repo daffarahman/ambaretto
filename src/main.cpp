@@ -16,6 +16,7 @@
 #include "pedestrians.hpp"
 #include "police.hpp"
 #include "minimap.hpp"
+#include "hud_dials.hpp"
 #include <string>
 #include <raylib.h>
 #include <rlgl.h>
@@ -159,6 +160,7 @@ void draw_box(const ambaretto::Vec3& center, const ambaretto::Quat& rotation,
 void draw_car(const ambaretto::Car& car, const ambaretto::CarRenderer& renderer, const Camera3D& camera,
               Shader override_shader = {}) {
     if (!car.design() || !renderer.draw_body(car,camera,override_shader)) return;
+    if (car.destroyed()) return;
     for (const auto& wheel : car.wheels()) {
         const auto mount = car.position() + car.rotate(wheel.mount);
         const auto center = car.wheel_center(wheel);
@@ -201,7 +203,7 @@ void draw_weapon(const ambaretto::Character& character, ambaretto::WeaponType ty
 
 void draw_wanted(const ambaretto::WantedLevel& wanted, int x, int y) {
     if (!wanted.stars()) return;
-    DrawRectangle(x, y, 180, 34, {19, 28, 45, 230});
+    ambaretto::ui::draw_panel({float(x), float(y), 180, 34});
     for (int i = 0; i < 6; ++i) {
         const Vector2 center{float(x + 20 + i * 28), float(y + 16)};
         std::array<Vector2, 12> vertices; vertices[0] = center;
@@ -209,20 +211,20 @@ void draw_wanted(const ambaretto::WantedLevel& wanted, int x, int y) {
             const float angle = -j * PI / 5 - PI / 2, radius = j % 2 ? 4.4f : 10.f;
             vertices[j + 1] = {center.x + std::cos(angle) * radius, center.y + std::sin(angle) * radius};
         }
-        const Color active = wanted.searching() && int(GetTime() * 3) % 2 ? GOLD : RAYWHITE;
-        DrawTriangleFan(vertices.data(), int(vertices.size()), i < wanted.stars() ? active : Color{68, 73, 89, 255});
+        const Color active = wanted.searching() && int(GetTime() * 3) % 2 ? Color{128, 0, 0, 255} : ambaretto::ui::title_blue;
+        DrawTriangleFan(vertices.data(), int(vertices.size()), i < wanted.stars() ? active : ambaretto::ui::shadow);
     }
-    if (wanted.escape_progress() > 0) DrawRectangle(x, y + 31, int(180 * wanted.escape_progress()), 3, GOLD);
+    if (wanted.escape_progress() > 0) DrawRectangle(x + 2, y + 29, int(176 * wanted.escape_progress()), 3, ambaretto::ui::title_blue);
 }
 
 void draw_ammo(const ambaretto::Weapons& weapons, int x, int y) {
     if (weapons.selected() == ambaretto::WeaponType::Unarmed) return;
-    DrawRectangle(x, y, 180, weapons.reloading() ? 62 : 40, {19, 28, 45, 230});
+    ambaretto::ui::draw_panel({float(x), float(y), 180, weapons.reloading() ? 62.f : 40.f});
     const char* ammo = TextFormat("%d / %d", weapons.ammo(), weapons.reserve());
-    ambaretto::ui::draw_text(ammo, x + (180 - ambaretto::ui::measure_text(ammo, 24)) / 2, y + 8, 24, RAYWHITE);
+    ambaretto::ui::draw_text(ammo, x + (180 - ambaretto::ui::measure_text(ammo, 24)) / 2, y + 8, 24, ambaretto::ui::ink);
     if (weapons.reloading()) {
         const char* status = "RELOADING";
-        ambaretto::ui::draw_text(status, x + (180 - ambaretto::ui::measure_text(status, 14)) / 2, y + 40, 14, LIGHTGRAY);
+        ambaretto::ui::draw_text(status, x + (180 - ambaretto::ui::measure_text(status, 14)) / 2, y + 40, 14, ambaretto::ui::disabled);
     }
 }
 
@@ -233,15 +235,15 @@ void draw_weapon_wheel(ambaretto::WeaponType selection, Vector2 cursor) {
     for (int i = 0; i < int(ambaretto::WeaponType::Count); ++i) {
         const bool selected = i == int(selection);
         DrawRing(center, radius * .40f, radius, -135.f + i * 90, -45.f + i * 90, 24,
-            selected ? Color{68, 134, 157, 235} : Color{27, 36, 45, 235});
+            selected ? ambaretto::ui::title_blue : ambaretto::ui::face);
         const float angle = i * 1.57079633f;
         const Vector2 label{center.x + std::sin(angle) * radius * .72f, center.y - std::cos(angle) * radius * .72f};
         const char* name = ambaretto::weapon_data(ambaretto::WeaponType(i)).name;
-        ambaretto::ui::draw_text(name, int(label.x) - ambaretto::ui::measure_text(name, 18) / 2, int(label.y) - 9, 18, selected ? YELLOW : RAYWHITE);
+        ambaretto::ui::draw_text(name, int(label.x) - ambaretto::ui::measure_text(name, 18) / 2, int(label.y) - 9, 18, selected ? ambaretto::ui::highlight : ambaretto::ui::ink);
     }
-    DrawCircleV(center, radius * .39f, {16, 24, 32, 245});
+    DrawCircleV(center, radius * .39f, ambaretto::ui::face);
     const char* name = ambaretto::weapon_data(selection).name;
-    ambaretto::ui::draw_text(name, int(center.x) - ambaretto::ui::measure_text(name, 20) / 2, int(center.y) - 12, 20, RAYWHITE);
+    ambaretto::ui::draw_text(name, int(center.x) - ambaretto::ui::measure_text(name, 20) / 2, int(center.y) - 12, 20, ambaretto::ui::ink);
     const char* hint = "Release to equip";
     ambaretto::ui::draw_text(hint, int(center.x) - ambaretto::ui::measure_text(hint, 18) / 2, int(center.y + radius + 20), 18, RAYWHITE);
     if (selection != ambaretto::WeaponType::Unarmed) {
@@ -372,9 +374,9 @@ void draw_resume_prompt(bool captured) {
     if (!captured) {
         const int panel_width = std::max(408, ambaretto::ui::measure_text("Game running / F10: menu / F2: map", 18) + 28);
         const int x = (GetScreenWidth() - panel_width) / 2 + 14, y = GetScreenHeight() / 2 - 36;
-        DrawRectangle(x - 14, y - 12, panel_width, 87, {19, 28, 35, 235});
-        ambaretto::ui::draw_text("Click to capture mouse", x, y, 20, RAYWHITE);
-        ambaretto::ui::draw_text("Game running / F10: menu / F2: map", x, y + 32, 18, LIGHTGRAY);
+        ambaretto::ui::draw_panel({float(x - 14), float(y - 12), float(panel_width), 87});
+        ambaretto::ui::draw_text("Click to capture mouse", x, y, 20, ambaretto::ui::ink);
+        ambaretto::ui::draw_text("Game running / F10: menu / F2: map", x, y + 32, 18, ambaretto::ui::disabled);
     }
 }
 } // namespace
@@ -1004,13 +1006,12 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < 4; ++i) {
                     const auto button = map_buttons[i];
                     const bool hover = CheckCollisionPointRec(GetMousePosition(), button);
-                    DrawRectangleRec(button, hover ? Color{0, 112, 112, 255} : Color{170, 170, 170, 255});
-                    DrawRectangleLinesEx(button, 1, RAYWHITE);
+                    ambaretto::ui::draw_button(button, hover && IsMouseButtonDown(MOUSE_BUTTON_LEFT));
                     ambaretto::ui::draw_text(labels[i], int(button.x + (button.width - ambaretto::ui::measure_text(labels[i], 16)) / 2),
-                        int(button.y + 7), 16, hover ? RAYWHITE : Color{0, 0, 0, 255});
+                        int(button.y + 7), 16, ambaretto::ui::ink);
                 }
                 scenery.world_map(world_map, map_viewport, scene->player.position(), scene->player.forward(), &scene->police);
-                ambaretto::ui::draw_text("Esc: resume / File: Resume or End Game",int(map_layout.window.x+336),int(map_layout.window.y+53),16,ambaretto::ui::dos_white);
+                ambaretto::ui::draw_text("Esc: resume / File: Resume or End Game",int(map_layout.window.x+336),int(map_layout.window.y+53),16,ambaretto::ui::ink);
             } else {
                 const float nearby_distance = std::min(160.f, graphics.view_distance);
                 scenery.draw_sky(view, daylight, float(GetTime()), graphics);
@@ -1075,23 +1076,24 @@ int main(int argc, char** argv) {
                 const auto region = scene->player.position();
                 if (!tuning_open) {
                     const auto bounds = ambaretto::MinimapView(GetScreenHeight(), region, scene->player.forward(), view).bounds;
-                    const int info_x = int(bounds.x + bounds.width) + 20, info_y = GetScreenHeight() - 42;
+                    const int info_x = int(bounds.x + bounds.width) + 20, info_y = GetScreenHeight() - 244;
+                    const Vector2 dial_center{float(info_x + 96), float(GetScreenHeight() - 110)};
                     const auto draw_info = [&](const char* text, int y) {
-                        ambaretto::ui::draw_text(text, info_x + 1, y + 1, 20, BLACK);
-                        ambaretto::ui::draw_text(text, info_x, y, 20, RAYWHITE);
+                        ambaretto::ui::draw_panel({float(info_x - 8), float(y - 5), float(ambaretto::ui::measure_text(text,20) + 16), 32}, true);
+                        ambaretto::ui::draw_text(text, info_x, y, 20, ambaretto::ui::ink);
                     };
-                    if (!scene->player.on_foot()) {
-                        const auto velocity = scene->player.flying() ? scene->player.plane().velocity() : scene->player.car().velocity();
-                        draw_info(TextFormat("%.0f km/h", velocity.Length() * 3.6f), info_y);
-                    }
+                    ambaretto::draw_clock({dial_center.x + (scene->player.driving() ? 212 : 0), dial_center.y}, day_night.minutes_of_day());
+                    if (scene->player.driving()) ambaretto::draw_speedometer(dial_center,
+                        scene->player.car().velocity().Length() * 3.6f);
+                    else if (scene->player.flying()) draw_info(TextFormat("%.0f km/h", scene->player.plane().velocity().Length() * 3.6f), info_y);
                     const float health = scene->player.character().health();
-                    DrawRectangle(26, ambaretto::menu_height + 18, 184, 16, {26, 20, 25, 235});
-                    DrawRectangle(28, ambaretto::menu_height + 20, int(180 * health / 100), 12, {177, 112, 137, 255});
+                    ambaretto::ui::draw_panel({26, float(ambaretto::menu_height + 18), 184, 16}, true);
+                    DrawRectangle(28, ambaretto::menu_height + 20, int(180 * health / 100), 12, {0, 128, 0, 255});
                     if (scene->player.on_foot()) {
                         if (scene->player.character().covering()) draw_info(scene->player.character().cover_peeking() ? "COVER - exposed while aiming"
                             : scene->player.character().cover_stance() == ambaretto::CoverStance::Crawling ? "COVER - crawling | Q / B: leave"
                             : scene->player.character().cover_stance() == ambaretto::CoverStance::Crouched ? "COVER - crouched | Q / B: leave"
-                            : "COVER - standing | Q / B: leave", info_y - 68);
+                            : "COVER - standing | Q / B: leave", info_y);
                         const auto& weapons = scene->player.weapons();
                         if (scene->player.can_shoot() && weapons.selected() != ambaretto::WeaponType::Unarmed && !weapon_wheel && active) {
                             DrawCircle(GetScreenWidth() / 2, GetScreenHeight() / 2, 3, BLACK);
@@ -1111,26 +1113,23 @@ int main(int argc, char** argv) {
                         ambaretto::ui::draw_text(text, (GetScreenWidth() - ambaretto::ui::measure_text(text, 44)) / 2, GetScreenHeight() / 2 - 22, 44, SKYBLUE);
                     }
                     if (scene->player.flying()) {
-                        draw_info(TextFormat("ALT %.0f m", std::max(0.f, float(region.GetY()) - ambaretto::Environment::water_level)), info_y - 28);
+                        draw_info(TextFormat("ALT %.0f m", std::max(0.f, float(region.GetY()) - ambaretto::Environment::water_level)), info_y - 36);
                     }
-                    const char* location = selected_city.name.c_str();
-                    const int width = ambaretto::ui::measure_text(location, 20), x = GetScreenWidth() - width - 26;
-                    DrawRectangle(x - 12, GetScreenHeight() - 50, width + 24, 36, {19, 28, 45, 230});
-                    ambaretto::ui::draw_text(location, x, GetScreenHeight() - 42, 20, RAYWHITE);
                 }
-                if (notice_time > 0) ambaretto::ui::draw_text(notice.c_str(), 26, scene->player.flying() ? 190 : 161, 20, RAYWHITE);
+                if (notice_time > 0) {
+                    const int y = scene->player.flying() ? 190 : 161;
+                    ambaretto::ui::draw_panel({18, float(y - 6), float(ambaretto::ui::measure_text(notice.c_str(),20) + 16), 32});
+                    ambaretto::ui::draw_text(notice.c_str(), 26, y, 20, ambaretto::ui::ink);
+                }
                 if (tuning_open) tuning_panel.draw(scene->player.car(), GetScreenWidth(), GetScreenHeight());
             }
             if (!map_open) {
-                const int clock_x = tuning_open ? 14 : GetScreenWidth() - 194, clock_y = tuning_open ? 198 : 46;
-                DrawRectangle(clock_x, clock_y, 180, 40, {19, 28, 45, 230});
-                const auto clock = day_night.clock();
-                ambaretto::ui::draw_text(clock.data(), clock_x + (180 - ambaretto::ui::measure_text(clock.data(), 24)) / 2,
-                    clock_y + 8, 24, {174, 231, 246, 255});
-                if (!tuning_open) {
-                    draw_wanted(scene->police.wanted(), clock_x, clock_y + 48);
-                    if (scene->player.on_foot()) draw_ammo(scene->player.weapons(), clock_x,
-                        clock_y + 48 + (scene->police.wanted().stars() ? 42 : 0));
+                if (tuning_open) ambaretto::draw_clock({112, float(GetScreenHeight() - 110)}, day_night.minutes_of_day());
+                else {
+                    const int status_x = GetScreenWidth() - 194, status_y = 94;
+                    draw_wanted(scene->police.wanted(), status_x, status_y);
+                    if (scene->player.on_foot()) draw_ammo(scene->player.weapons(), status_x,
+                        status_y + (scene->police.wanted().stars() ? 42 : 0));
                 }
             }
             if (weapon_wheel) draw_weapon_wheel(wheel_choice, wheel_cursor);
@@ -1167,11 +1166,11 @@ int main(int argc, char** argv) {
                 const bool dismiss = frames>0 && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE)
                     || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(),button)));
                 BeginDrawing(); ambaretto::ui::draw_desktop(); ambaretto::ui::draw_window(panel,"Cannot open city");
-                ambaretto::ui::draw_text("The city could not start. Rendering failed.",int(panel.x+24),int(panel.y+52),18,RAYWHITE);
+                ambaretto::ui::draw_text("The city could not start. Rendering failed.",int(panel.x+24),int(panel.y+52),18,ambaretto::ui::ink);
                 for (std::size_t i = 0; i<lines.size() && i<4; ++i)
-                    ambaretto::ui::draw_text(lines[i].c_str(),int(panel.x+24),int(panel.y+88+i*24),18,YELLOW);
-                DrawRectangleRec(button,CheckCollisionPointRec(GetMousePosition(),button) ? ambaretto::ui::dos_light_blue : ambaretto::ui::dos_white);
-                ambaretto::ui::draw_text("Return to main menu",int(button.x+20),int(button.y+12),18,ambaretto::ui::dos_blue);
+                    ambaretto::ui::draw_text(lines[i].c_str(),int(panel.x+24),int(panel.y+88+i*24),18,ambaretto::ui::title_blue);
+                ambaretto::ui::draw_button(button,CheckCollisionPointRec(GetMousePosition(),button) && IsMouseButtonDown(MOUSE_BUTTON_LEFT));
+                ambaretto::ui::draw_text("Return to main menu",int(button.x+20),int(button.y+12),18,ambaretto::ui::ink);
                 EndDrawing(); ++frames;
                 if (!screenshot.empty() && frames>=3) {
                     const Image capture = LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break;

@@ -66,13 +66,13 @@ int main() {
         require(near(vertical.forward.GetX(), 1), "vertical camera lost player-heading fallback");
         const ambaretto::MinimapView zero(720, player, Vec3::sZero(), looking(Vec3::sZero()));
         require(near(zero.forward.GetZ(), -1) && std::isfinite(zero.rotation()), "zero directions lost north fallback");
-        for (int height : {720, 600}) {
+        for (int height : {1080, 720, 600}) {
             const ambaretto::MinimapView map(height, player, Vec3(0, 0, -1), looking(Vec3(0, 0, -1)));
             require(near(map.bounds.x, 14) && near(map.bounds.y + map.bounds.height, float(height - 14)), "map lost bottom-left margin");
-            require(near(map.bounds.width, 320) && near(map.bounds.height, 180) && near(map.scale, 320.0f / 120), "map lost its 120m zoom");
-            require(near(map.anchor.x, 174) && near(map.anchor.y, float(height - 77)), "look-ahead player anchor changed");
+            require(near(map.bounds.width, 320) && near(map.bounds.height, map.bounds.width) && near(map.scale, 320.0f / 120), "square map lost its 120m zoom");
+            require(near(map.anchor.x, 174) && near(map.anchor.y, float(height - 126)), "look-ahead player anchor changed");
             require(map.contains(map.anchor) && map.contains({map.bounds.x + 6, map.bounds.y + 6}), "visible markers rejected");
-            require(!map.contains({map.bounds.x + 5, map.bounds.y + 6}) && !map.contains({map.bounds.x + 314, map.bounds.y + 175}), "markers escaped clipped bounds");
+            require(!map.contains({map.bounds.x + 5, map.bounds.y + 6}) && !map.contains({map.bounds.x + 314, map.bounds.y + 315}), "markers escaped clipped bounds");
         }
         const Rectangle viewport{20, 60, 1000, 600};
         const Vector2 viewport_center{520, 360};

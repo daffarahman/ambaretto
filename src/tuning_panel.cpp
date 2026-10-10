@@ -6,9 +6,7 @@
 
 namespace ambaretto {
 namespace {
-constexpr Color muted{192, 192, 192, 255};
-constexpr Color selected_color{0, 128, 128, 255}, ink{0, 0, 0, 255};
-constexpr Color accent = YELLOW, track_color = muted;
+constexpr Color muted = ui::disabled, selected_color = ui::title_blue, ink = ui::ink;
 constexpr std::array<int, 3> tab_starts{{0, suspension_controls, suspension_controls + handling_controls}};
 constexpr std::array<int, 3> tab_counts{{suspension_controls, handling_controls,
     int(tuning_controls.size()) - suspension_controls - handling_controls}};
@@ -27,12 +25,12 @@ struct Layout {
 };
 void button(Rectangle r, const char* text, bool selected = false) {
     const bool hover = CheckCollisionPointRec(GetMousePosition(), r);
-    DrawRectangleRec(r, selected || hover ? selected_color : track_color);
-    DrawRectangleLinesEx(r, 1, RAYWHITE);
+    const bool pressed = hover && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+    ui::draw_button(r, pressed || selected, selected);
     int size = 16;
     while (size > 10 && ambaretto::ui::measure_text(text, size) > r.width - 12) --size;
     ambaretto::ui::draw_text(text, int(r.x + (r.width - ambaretto::ui::measure_text(text, size)) / 2),
-        int(r.y + (r.height - size) / 2), size, selected || hover ? RAYWHITE : ink);
+        int(r.y + (r.height - size) / 2), size, ink);
 }
 } // namespace
 
@@ -113,22 +111,20 @@ void TuningPanel::draw(const Car& car, int width, int height) const {
         const float upper = control.value == &CarTuning::travel ? std::min(control.max, car.tuning().rest_length - .05f) : control.max;
         const float fraction = std::clamp((value - control.min) / (upper - control.min), 0.0f, 1.0f);
         if (selected_ == id) DrawRectangleRec({row.x - 6, row.y - 3, row.width + 12, 22}, selected_color);
-        ambaretto::ui::draw_text(control.label, int(row.x), int(row.y), 16, selected_ == id ? accent : RAYWHITE);
+        const Color color = selected_ == id ? ui::highlight : ink;
+        ambaretto::ui::draw_text(control.label, int(row.x), int(row.y), 16, color);
         const std::string text = TextFormat(control.format, double(value * control.display_scale));
-        ambaretto::ui::draw_text(text.c_str(), int(row.x + row.width - ambaretto::ui::measure_text(text.c_str(), 15)), int(row.y), 15, RAYWHITE);
-        DrawRectangleRec({slider.x, slider.y + 3, slider.width, 4}, track_color);
-        DrawRectangleRec({slider.x, slider.y + 3, slider.width * fraction, 4}, accent);
-        const float thumb_width = dragging_ == id ? 14.0f : 10.0f;
-        DrawRectangleRec({slider.x + slider.width * fraction - thumb_width / 2, slider.y - 2, thumb_width, 14}, RAYWHITE);
+        ambaretto::ui::draw_text(text.c_str(), int(row.x + row.width - ambaretto::ui::measure_text(text.c_str(), 15)), int(row.y), 15, color);
+        ui::draw_slider(slider, fraction);
     }
     ambaretto::ui::draw_text("WHEEL CONTACT / compression / load", int(r.x + 18), int(r.y + r.height - 141), 13, muted);
     constexpr const char* names[] = {"FL", "FR", "RL", "RR"};
     for (int i = 0; i < 4; ++i) {
         const auto& wheel = car.wheels()[i];
         const int x = int(r.x + 18 + (i % 2) * 178), y = int(r.y + r.height - 119 + (i / 2) * 26);
-        DrawRectangle(x, y + 4, 6, 6, wheel.grounded ? accent : ORANGE);
+        DrawRectangle(x, y + 4, 6, 6, wheel.grounded ? Color{0, 128, 0, 255} : Color{128, 0, 0, 255});
         ambaretto::ui::draw_text(TextFormat("%s %+.2fm %.1fkN", names[i], double(wheel.compression), double(wheel.normal_force / 1000)),
-                 x + 13, y, 13, RAYWHITE);
+                 x + 13, y, 13, ink);
     }
     button(layout.button(0), "Defaults");
     button(layout.button(1), "Reset car");

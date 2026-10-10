@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -342,18 +343,34 @@ void sharp_map_edges(const ambaretto::EnvironmentRenderer& scenery, RenderTextur
         Image image = LoadImageFromTexture(texture.texture); ImageFlipVertical(&image);
         const Rectangle bounds = full ? viewport : mini.bounds;
         const Vector2 anchor = full ? view.project(player, viewport) : mini.anchor;
+        std::vector<Rectangle> labels;
+        if (full) for (const auto& island : Environment::islands()) {
+            const auto p = view.project(island.center, viewport);
+            const int width = ui::measure_text(island.name, 16);
+            labels.push_back({p.x - width / 2 - 5, p.y - 28, float(width + 10), 24});
+        }
         if (!full) {
-            for (int x : {int(bounds.x + 1), int(bounds.x + bounds.width - 2)})
-                for (int y : {int(bounds.y + 1), int(bounds.y + bounds.height - 2)})
-                    require(same(GetImageColor(image, x, y), BLACK), "minimap content escaped rounded corners");
-            for (int x : {int(bounds.x - 1), int(bounds.x + bounds.width)})
-                require(same(GetImageColor(image, x, int(anchor.y)), BLACK), "minimap retained its outer border");
-            require(!same(GetImageColor(image, int(anchor.x), int(bounds.y + 1)), BLACK), "minimap lost its top edge");
+            for (int x : {int(bounds.x + 3), int(bounds.x + bounds.width - 4)})
+                for (int y : {int(bounds.y + 3), int(bounds.y + bounds.height - 4)})
+                    require(!same(GetImageColor(image, x, y), BLACK), "square minimap corners were clipped");
+            for (int x : {int(bounds.x - 7), int(bounds.x + bounds.width + 6)})
+                require(same(GetImageColor(image, x, int(anchor.y)), BLACK), "minimap escaped its bezel");
+            require(same(GetImageColor(image, int(anchor.x), int(bounds.y - 6)), ui::highlight)
+                && same(GetImageColor(image, int(anchor.x), int(bounds.y + bounds.height + 5)), ui::ink)
+                && same(GetImageColor(image, int(bounds.x - 3), int(anchor.y)), ui::face),
+                "minimap lost its raised grey bezel");
+            require(same(GetImageColor(image, int(anchor.x), int(bounds.y)), ui::shadow)
+                && same(GetImageColor(image, int(anchor.x), int(bounds.y + bounds.height - 1)), ui::highlight),
+                "minimap lost its inset bevel");
         }
         int roads = 0, buildings = 0, blurred = 0;
         for (int y = int(bounds.y + 6); y < int(bounds.y + bounds.height - (full ? 64 : 6)); ++y)
             for (int x = int(bounds.x + 6); x < int(bounds.x + bounds.width - 6); ++x) {
                 if (y >= anchor.y - 16 && y <= anchor.y + 16 && x >= anchor.x - 16 && x <= anchor.x + 60) continue;
+                // Text can blend into grey label windows; check map geometry outside them.
+                if (std::any_of(labels.begin(), labels.end(), [&](Rectangle r) {
+                    return CheckCollisionPointRec({float(x), float(y)}, r);
+                })) continue;
                 const Color color = GetImageColor(image, x, y);
                 roads += same(color, {205, 205, 205, 255});
                 buildings += same(color, {145, 145, 145, 255});
@@ -437,7 +454,7 @@ int main(int argc, char** argv) {
         BeginDrawing(); ClearBackground(BLACK);
         scenery.minimap(player, heading, camera);
         Image screen = LoadImageFromScreen(); EndDrawing();
-        require(marker_pixels(screen, mini.anchor, RAYWHITE) > 5, "rounded minimap disappeared after an offscreen render pass");
+        require(marker_pixels(screen, mini.anchor, RAYWHITE) > 5, "minimap disappeared after an offscreen render pass");
         UnloadImage(screen);
         for (int mode : {0, 1, 2}) {
             const bool full = mode == 2, in_vehicle = mode == 1;

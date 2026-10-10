@@ -5,7 +5,7 @@
 
 namespace ambaretto {
 namespace {
-constexpr Color blue = ui::dos_blue, gray = ui::dos_white, teal = ui::dos_light_blue, ink = ui::dos_blue;
+constexpr Color ink = ui::ink;
 constexpr const char* labels[] = {"Preset", "Sun shadows", "Soft shadow edges", "Shadow distance", "City / vehicle lights",
     "View distance", "Brightness", "Vertical sync", "Frame limit", "4x MSAA (restart)"};
 struct Layout {
@@ -19,17 +19,17 @@ struct Layout {
     Rectangle close() const { return ui::window_close(panel); }
     Rectangle button(int i) const { return {panel.x + 18 + i * 158, panel.y + panel.height - 68, 146, 30}; }
 };
-void text(const char* value, float x, float y, int size = 15, Color color = RAYWHITE) {
+void text(const char* value, float x, float y, int size = 15, Color color = ink) {
     ui::draw_text(value, int(x), int(y), size, color);
 }
 void button(Rectangle r, const char* value, bool selected, bool enabled = true) {
     const bool hover = enabled && CheckCollisionPointRec(GetMousePosition(), r);
-    DrawRectangleRec(r, selected || hover ? teal : gray);
-    DrawRectangleLinesEx(r, selected ? 2 : 1, selected ? YELLOW : RAYWHITE);
+    const bool pressed = hover && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+    ui::draw_button(r, pressed || selected, selected, enabled);
     int size = 15;
     while (size > 11 && ui::measure_text(value, size) > r.width - 12) --size;
     text(value, r.x + (r.width - ui::measure_text(value, size)) / 2, r.y + (r.height - size) / 2, size,
-        !enabled ? DARKGRAY : selected || hover ? RAYWHITE : ink);
+        !enabled ? ui::disabled : ink);
 }
 bool slider_row(int id) { return id == 3 || id == 5 || id == 6; }
 bool enabled(int id, const GraphicsSettings& settings) { return settings.shadows != 0 || (id != 2 && id != 3); }
@@ -168,21 +168,20 @@ void GraphicsPanel::draw(float fps, const std::string& status) const {
         constexpr const char* names[] = {"Low", "Balanced", "High"};
         button(layout.preset(i), names[i], int(pending_.preset()) == i);
     }
-    text(pending_.preset_name(), r.x + 336, r.y + 77, 15, pending_.preset() == GraphicsPreset::Custom ? YELLOW : gray);
-    if (selected_ == 0) DrawRectangleLinesEx({r.x + 14, r.y + 65, layout.left_width + 8, 37}, 1, YELLOW);
+    text(pending_.preset_name(), r.x + 336, r.y + 77, 15, ui::title_blue);
+    if (selected_ == 0) DrawRectangleLinesEx({r.x + 14, r.y + 65, layout.left_width + 8, 37}, 1, ink);
     for (int id = 1; id <= 9; ++id) {
         const auto row = layout.row(id);
         const bool active = enabled(id, pending_);
-        if (selected_ == id) DrawRectangleRec(row, teal);
-        text(labels[id], row.x + 8, row.y + 5, 15, !active ? GRAY : selected_ == id ? YELLOW : RAYWHITE);
+        if (selected_ == id) DrawRectangleRec(row, ui::title_blue);
+        const Color color = !active ? ui::disabled : selected_ == id ? ui::highlight : ink;
+        text(labels[id], row.x + 8, row.y + 5, 15, color);
         const auto label = value_label(id, pending_);
         if (slider_row(id)) {
-            text(label.c_str(), row.x + row.width - ui::measure_text(label.c_str(), 14) - 8, row.y + 5, 14, active ? RAYWHITE : GRAY);
+            text(label.c_str(), row.x + row.width - ui::measure_text(label.c_str(), 14) - 8, row.y + 5, 14, color);
             const auto slider = layout.slider(id);
             const float fraction = (slider_value(id, pending_) - minimum(id)) / (maximum(id) - minimum(id));
-            DrawRectangleRec({slider.x, slider.y + 2, slider.width, 3}, GRAY);
-            DrawRectangleRec({slider.x, slider.y + 2, slider.width * fraction, 3}, active ? YELLOW : DARKGRAY);
-            DrawRectangleRec({slider.x + slider.width * fraction - 5, slider.y - 2, 10, 11}, active ? RAYWHITE : GRAY);
+            ui::draw_slider(slider, fraction);
         } else {
             const auto value = layout.value(id);
             button(value, label.c_str(), selected_ == id, active);
@@ -193,18 +192,18 @@ void GraphicsPanel::draw(float fps, const std::string& status) const {
     for (int id = 1; id <= 9; ++id) if (CheckCollisionPointRec(GetMousePosition(), layout.row(id))) help_id = id;
     int help_size = 13;
     while (help_size>11 && ui::measure_text(help(help_id, pending_),help_size)>r.width-36) --help_size;
-    text(help(help_id, pending_), r.x + 18, r.y + r.height - 137, help_size, YELLOW);
+    text(help(help_id, pending_), r.x + 18, r.y + r.height - 137, help_size, ui::title_blue);
     text(slider_row(help_id) ? "Drag slider / arrows or wheel: adjust / Shift: fine steps" : "Click value / arrows or Enter: change / Tab: next control",
-        r.x + 18, r.y + r.height - 121, 13, gray);
+        r.x + 18, r.y + r.height - 121, 13, ui::disabled);
     const auto fps_label = std::string(TextFormat("Menu: %.0f FPS", double(std::isfinite(fps) ? fps : 0)));
-    text(fps_label.c_str(),r.x+r.width-ui::measure_text(fps_label.c_str(),14)-18,r.y+77,14,YELLOW);
+    text(fps_label.c_str(),r.x+r.width-ui::measure_text(fps_label.c_str(),14)-18,r.y+77,14,ui::title_blue);
     BeginScissorMode(int(r.x + 18), int(r.y + r.height - 105), int(r.width - 36), 28);
     text(status.empty() ? (dirty() ? pending_.msaa != original_.msaa ? "Unsaved changes / MSAA requires app restart" : "Unsaved changes / Apply & save to keep" : "Current settings / no changes") : status.c_str(),
-        r.x + 18, r.y + r.height - 99, 14, status.empty() ? gray : YELLOW);
+        r.x + 18, r.y + r.height - 99, 14, status.empty() ? ui::disabled : ui::title_blue);
     EndScissorMode();
     button(layout.button(0), "Defaults", selected_ == 10);
     button(layout.button(1), "Cancel", selected_ == 11);
     button(layout.button(2), dirty() ? "Apply & save *" : "Apply & save", selected_ == 12);
-    text("Tab/arrows: navigate   Enter: activate   Esc: cancel", r.x + 18, r.y + r.height - 24, 13, gray);
+    text("Tab/arrows: navigate   Enter: activate   Esc: cancel", r.x + 18, r.y + r.height - 24, 13, ui::disabled);
 }
 } // namespace ambaretto

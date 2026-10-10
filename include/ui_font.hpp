@@ -2,8 +2,14 @@
 #include <raylib.h>
 
 namespace ambaretto::ui {
-inline constexpr Color dos_blue{0, 0, 170, 255}, dos_white{255, 255, 255, 255};
-inline constexpr Color dos_yellow{255, 255, 85, 255}, dos_light_blue{85, 85, 255, 255};
+inline constexpr Color face{192, 192, 192, 255}, light{223, 223, 223, 255};
+inline constexpr Color highlight{255, 255, 255, 255}, shadow{128, 128, 128, 255};
+inline constexpr Color ink{0, 0, 0, 255}, title_blue{0, 0, 128, 255};
+inline constexpr Color desktop{128, 128, 128, 255}, disabled{96, 96, 96, 255};
+void draw_frame(Rectangle bounds, bool sunken = false);
+void draw_panel(Rectangle bounds, bool sunken = false, Color fill = face);
+void draw_button(Rectangle bounds, bool pressed = false, bool focused = false, bool enabled = true);
+void draw_slider(Rectangle bounds, float fraction);
 void draw_desktop();
 void draw_window_title(Rectangle bounds, const char* title);
 void draw_window(Rectangle bounds, const char* title);

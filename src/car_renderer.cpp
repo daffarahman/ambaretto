@@ -237,11 +237,11 @@ bool CarRenderer::draw_body(const Car& car,const Camera3D& camera,Shader overrid
     return car.design() && body(*car.design(),car.position(),car.rotation(),camera,override_shader,!car.destroyed());
 }
 bool CarRenderer::draw_wheel(const Car& car,const Wheel& wheel,const Camera3D& camera,Shader override_shader) const {
-    if (!car.design()) return false;
+    if (!car.design() || car.destroyed()) return false;
     const Quat side = Quat::sRotation(Vec3::sAxisY(),wheel.mount.GetX()<0 ? PI : 0);
     const Quat spin = Quat::sRotation(Vec3::sAxisX(),-std::remainder(wheel.spin,2*PI));
     const Quat steering = Quat::sRotation(Vec3::sAxisY(),wheel.front ? car.steering() : 0);
-    return tire(*car.design(),car.wheel_center(wheel),car.rotation()*steering*spin*side,camera,override_shader,!car.destroyed());
+    return tire(*car.design(),car.wheel_center(wheel),car.rotation()*steering*spin*side,camera,override_shader);
 }
 void CarRenderer::draw_design(const CarDesign& design,Vec3 ground,float yaw,const Camera3D& camera) const {
     const Quat rotation = Quat::sRotation(Vec3::sAxisY(),yaw);

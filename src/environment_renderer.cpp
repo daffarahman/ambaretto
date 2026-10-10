@@ -20,22 +20,6 @@ namespace {
 constexpr float pi = 3.14159265359f;
 constexpr int sign_rows = 11;
 constexpr Color map_water{24, 44, 70, 255};
-const char* minimap_fragment = R"GLSL(#version 330
-in vec2 fragTexCoord;
-in vec4 fragColor;
-uniform sampler2D texture0;
-uniform vec4 colDiffuse;
-uniform vec4 clipBounds;
-out vec4 finalColor;
-void main() {
-    const float radius = 14.0;
-    vec2 q = abs(gl_FragCoord.xy - clipBounds.xy - clipBounds.zw * 0.5) - (clipBounds.zw * 0.5 - radius);
-    float distance = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
-    float coverage = 1.0 - smoothstep(-0.5, 0.5, distance);
-    if (coverage <= 0.0) discard;
-    finalColor = texture(texture0, fragTexCoord) * colDiffuse * fragColor;
-    finalColor.a *= coverage;
-})GLSL";
 std::pair<int, int> cell(Vec3 position) {
     return {int(std::floor(position.GetX() / 256)), int(std::floor(position.GetZ() / 256))};
 }
@@ -381,6 +365,7 @@ uniform vec3 horizonColor;
 uniform vec3 zenithColor;
 uniform vec3 sunDirection;
 uniform float night;
+uniform vec3 sunColor;
 uniform float time;
 uniform float brightness;
 out vec4 finalColor;
@@ -392,18 +377,18 @@ void main() {
     vec3 sky = mix(horizonColor, zenithColor, pow(clamp(height / 0.65, 0.0, 1.0), 0.55));
     float sun = max(dot(ray, sunDirection), 0.0);
     float above = smoothstep(-0.035, 0.035, sunDirection.y);
-    sky += vec3(1.0, 0.51, 0.25) * pow(sun, 20.0) * 0.30 * above;
-    sky = mix(sky, vec3(1.0, 0.89, 0.64), smoothstep(cos(0.020), cos(0.016), sun) * above);
+    sky += sunColor * pow(sun, 20.0) * 0.18 * above;
+    sky = mix(sky, mix(sunColor, vec3(1.0), 0.45), smoothstep(cos(0.020), cos(0.016), sun) * above);
     float moon = smoothstep(cos(0.013), cos(0.009), dot(ray, -sunDirection));
     sky = mix(sky, vec3(0.79, 0.86, 1.0), moon * night);
     vec2 stars = vec2(atan(ray.z, ray.x) / 6.2831853 + 0.5, asin(clamp(ray.y, -1.0, 1.0)) / 3.1415927 + 0.5) * vec2(600, 300);
     float seed = hash(floor(stars));
     float star = (1.0 - smoothstep(0.03, 0.14, length(fract(stars) - 0.5))) * step(0.994, seed);
     sky += vec3(0.74, 0.82, 1.0) * star * night * smoothstep(0.03, 0.18, ray.y) * (0.70 + 0.30 * sin(time * 1.2 + seed * 31));
-    // Long, soft cloud wisps pick up the pink/orange horizon at twilight.
+    // White wisps take on a little of the horizon's gold at twilight.
     float cloud = sin(ray.x * 19 + ray.z * 12 + time * 0.002) + sin(ray.x * 41 - ray.z * 27);
     cloud = smoothstep(1.20, 1.90, cloud) * exp(-pow((ray.y - 0.23) * 5.0, 2.0));
-    sky = mix(sky, mix(horizonColor, vec3(1.0), 0.28), cloud * (1.0 - night) * 0.18);
+    sky = mix(sky, mix(horizonColor, vec3(1.0), 0.75), cloud * (1.0 - night) * 0.18);
     finalColor = vec4(sky * brightness, 1.0);
 })GLSL";
 }
@@ -1170,13 +1155,11 @@ void EnvironmentRenderer::load_map(const Environment& env) {
         rectangle(b.center.GetX() - b.size.GetX() / 2, b.center.GetZ() - b.size.GetZ() / 2,
             b.size.GetX(), b.size.GetZ(), {145, 145, 145, 255});
     map_ = map.upload();
-    minimap_shader_ = LoadShaderFromMemory(nullptr, minimap_fragment);
 }
-void EnvironmentRenderer::draw_map(Matrix transform, Shader shader) const {
+void EnvironmentRenderer::draw_map(Matrix transform) const {
     rlDrawRenderBatchActive();
     rlDisableBackfaceCulling();
     Material material = map_.materials[0];
-    if (shader.id) material.shader = shader;
     DrawMesh(map_.meshes[0], material, transform);
     rlEnableBackfaceCulling();
 }
@@ -1247,7 +1230,6 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     if (water_depth_.id) UnloadTexture(water_depth_);
     for (const auto& texture : ground_textures_) if (texture.second.id) UnloadTexture(texture.second);
     UnloadModel(map_);
-    UnloadShader(minimap_shader_);
     UnloadShader(land_shader_); UnloadShader(water_shader_);
     UnloadShader(sky_shader_); UnloadShader(light_shader_);
     if (tree_shader_.id != 0) UnloadShader(tree_shader_);
@@ -1268,6 +1250,7 @@ void EnvironmentRenderer::draw_sky(const Camera3D& camera, const Daylight& light
     SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "brightness"), &settings.brightness, SHADER_UNIFORM_FLOAT);
     vec3("cameraForward", forward); vec3("cameraRight", right); vec3("cameraUp", up);
     vec3("horizonColor", light.horizon); vec3("zenithColor", light.zenith); vec3("sunDirection", light.sun_direction);
+    vec3("sunColor", light.sun_color);
     BeginShaderMode(sky_shader_);
     DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
     EndShaderMode();
@@ -1343,13 +1326,11 @@ void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float
 void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police, bool in_vehicle) const {
     const MinimapView map(GetScreenHeight(), player_position, player_forward, camera, in_vehicle);
     const auto bounds = map.bounds;
-    const Vector4 clip{bounds.x, float(GetRenderHeight()) - bounds.y - bounds.height, bounds.width, bounds.height};
-    SetShaderValue(minimap_shader_, GetShaderLocation(minimap_shader_, "clipBounds"), &clip, SHADER_UNIFORM_VEC4);
+    ui::draw_panel({bounds.x - 6, bounds.y - 6, bounds.width + 12, bounds.height + 12});
     BeginScissorMode(int(bounds.x), int(bounds.y), int(bounds.width), int(bounds.height));
-    BeginShaderMode(minimap_shader_);
     DrawRectangleRec(bounds, map_water);
     const Matrix transform = map.transform();
-    draw_map(transform, minimap_shader_);
+    draw_map(transform);
     if (police && police->wanted().stars()) {
         // The search area lies on the same plane; markers stay readable in screen space.
         const Vec3 center = police->wanted().last_seen();
@@ -1381,10 +1362,11 @@ void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, con
     const Vector2 b{map.anchor.x - delta.x * .5f + delta.y * .55f, map.anchor.y - delta.y * .5f - delta.x * .55f};
     DrawCircleV(map.anchor, 8, {19, 28, 45, 230});
     DrawTriangle(tip, b, a, RAYWHITE);
-    EndShaderMode();
     EndScissorMode();
+    ui::draw_frame(bounds, true);
 }
 void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police) const {
+    ui::draw_panel({viewport.x - 6, viewport.y - 6, viewport.width + 12, viewport.height + 12});
     BeginScissorMode(int(viewport.x), int(viewport.y), int(viewport.width), int(viewport.height));
     DrawRectangleRec(viewport, map_water);
     Matrix transform = MatrixTranslate(-view.center.x, -view.center.y, 0);
@@ -1414,8 +1396,8 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
         const auto p = view.project(island.center, viewport);
         if (!inside(p)) continue;
         const int width = ambaretto::ui::measure_text(island.name, 16);
-        DrawRectangle(int(p.x) - width / 2 - 5, int(p.y) - 28, width + 10, 24, {19, 28, 45, 205});
-        ambaretto::ui::draw_text(island.name, int(p.x) - width / 2, int(p.y) - 24, 16, RAYWHITE);
+        ui::draw_panel({p.x - width / 2 - 5, p.y - 28, float(width + 10), 24});
+        ui::draw_text(island.name, int(p.x) - width / 2, int(p.y) - 24, 16, ui::ink);
     }
     if (!environment_->city()) for (const auto& airport : airports) {
         const auto p = view.project(Vec3(airport.center_x, 0, airport.runway_z), viewport);
@@ -1430,10 +1412,10 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
     const float bar_meters = view.scale >= .5f ? 100 : view.scale >= .15f ? 500 : 1000;
     const float bar_width = bar_meters * view.scale;
     const float bx = viewport.x + 18, by = viewport.y + viewport.height - 20;
-    DrawRectangle(int(bx - 6), int(by - 28), int(bar_width + 20), 40, {19, 28, 45, 210});
-    DrawLineEx({bx, by}, {bx + bar_width, by}, 3, RAYWHITE);
-    ambaretto::ui::draw_text(TextFormat("%.0f m", double(bar_meters)), int(bx), int(by - 23), 14, RAYWHITE);
+    ui::draw_panel({bx - 6, by - 28, bar_width + 20, 40});
+    DrawLineEx({bx, by}, {bx + bar_width, by}, 3, ui::ink);
+    ui::draw_text(TextFormat("%.0f m", double(bar_meters)), int(bx), int(by - 23), 14, ui::ink);
     EndScissorMode();
-    DrawRectangleLinesEx(viewport, 2, {115, 157, 174, 255});
+    ui::draw_frame(viewport, true);
 }
 } // namespace ambaretto
