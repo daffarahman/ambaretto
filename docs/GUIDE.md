@@ -20,6 +20,12 @@ Map editors open asset creators as in-screen menus. **Objects > Car > Choose car
 
 Direct menu flags: `--cities`, `--building-builder`, `--car-editor`, `--character-creator`, `--settings`. Add `--new` to an asset editor to go straight to a blank design; `--screenshot <path.png>` captures its opening menu, or its editor with `--new`.
 
+In Play, open **Edit > Edit current map...** to pause the game and edit that same city. The editor autosaves changes; **File > Save map** or **Ctrl+S** saves immediately. **Escape** or **File > Return to Play** saves changes and rebuilds the world while restoring your player position and active vehicle. **File > End Game / Main menu** leaves the editor. If you delete the vehicle you were using, returning continues on foot.
+
+**File > Save map and progress** or **Ctrl+S** in Play saves both the city and your play checkpoint. Progress also saves every 30 seconds of gameplay and when you leave or close the game. Selecting a city with saved progress offers **Continue**, **Start from beginning**, or **Back**. Continue restores position, heading, active car/aircraft and its motion/health, clock, player health and ammunition. Start from beginning uses the map's saved spawn and start time, with fresh health and ammunition; it keeps map edits. You can also restart immediately with **File > Start from beginning** during Play. Playing again replaces that city's checkpoint as it saves.
+
+Progress lives in a separate `<city-id>.play` file beside the `.city` map; both saves replace their files atomically. There is one checkpoint per city. Traffic, pedestrians, police/wanted state and other world effects restart when the city reloads; Continue preserves the player's session rather than the entire simulation. Screenshot runs neither load nor overwrite progress.
+
 City saves use the `AMBARETTO_CITY` header. For saves exported before the project was renamed, replace only the first word of the first line with `AMBARETTO_CITY`; keep the version number and remaining data unchanged.
 
 ### Building builder
@@ -305,6 +311,8 @@ The 24-minute day/night cycle uses clear blue skies, pale cyan distance fog, fre
 Clouds occupy a world-space layer 400–700 m above sea level, drift with the wind, and use volume density plus sun/moon self-shading. Density sampling supports cameras below, inside or above the layer. The custom shader traces at most 16 samples per pixel, skips empty density and ends rays once opaque. A cached 128 x 128 noise texture supplies filtered 3D noise; the cloud pass runs at half resolution, capped at 640 x 360, and is blended over the full-resolution sun, moon and stars. One color/depth target plus noise uses about 1.8 MiB with 32-bit depth, excluding driver overhead. No history buffers, additional assets or dependencies are needed. If the cloud shader is unsupported, the clear sky remains available. Clouds render as a sky backdrop; they do not fog foreground geometry or cast shadows on terrain.
 
 `volumetric_clouds` checks visible puffs and shading, clear gaps, wind, world-space parallax, night coloring, scene brightness, aircraft views and window resizing. It also reports synchronized sky/cloud rendering time without a frame cap. The Intel Iris Xe check measured about 1.9 ms at 960 x 540 and 3.5 ms at 1920 x 1080; these are sky-only measurements with MSAA off, not full-game frame rates or a guarantee for older GPUs.
+
+`play_session` checks checkpoint round trips, corrupt-data rejection, failed-save preservation, on-foot/car/aircraft restoration, placement identity and fresh starts. `menu_workflow` also exercises map editing and saving from Play, Escape returning to the same vehicle, restart keeping map edits, and both choices when reopening saved progress.
 
 `day_night_cycle` checks the cycle length, pause, midnight rollover, 24-hour time validation, fractional frame timing and the blue/gold sky and lighting palette.
 

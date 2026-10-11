@@ -151,6 +151,7 @@ struct City {
     bool generate_terrain(int tiles_x, int tiles_z, std::uint32_t seed, std::string& error);
 };
 enum class DesignKind { Building, Car, Character };
+bool edit_current_city(City& city, const std::filesystem::path& directory);
 bool main_menu(City& selected, const std::filesystem::path& directory, ControllerMapping& controls,
                GraphicsSettings& graphics, const std::string& screenshot = {});
 void design_menu(DesignKind kind, const std::filesystem::path& root, const std::string& screenshot = {}, bool create_new = false);

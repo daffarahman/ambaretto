@@ -17,6 +17,7 @@
 #include "police.hpp"
 #include "minimap.hpp"
 #include "hud_dials.hpp"
+#include "play_session.hpp"
 #include <string>
 #include <raylib.h>
 #include <rlgl.h>
@@ -34,6 +35,37 @@ Vector3 render_vector(const ambaretto::Vec3& value) {
 }
 Vector3 lerp(Vector3 a, Vector3 b, float t) {
     return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
+}
+
+int choose_progress(const ambaretto::City& city, const std::string& error) {
+    EnableCursor(); SetWindowTitle("Ambaretto - Continue or start again");
+    int choice = error.empty() ? 0 : 1, frames = 0;
+    const char* labels[] = {"Continue", "Start from beginning", "Back"};
+    while (!WindowShouldClose()) {
+        const Rectangle panel{(GetScreenWidth()-760)/2.f, (GetScreenHeight()-260)/2.f, 760, 260};
+        const Rectangle buttons[] = {{panel.x+24,panel.y+190,190,42}, {panel.x+228,panel.y+190,300,42}, {panel.x+542,panel.y+190,190,42}};
+        int accepted = -1;
+        if (frames > 0 && IsWindowFocused()) {
+            if (IsKeyPressed(KEY_ESCAPE)) return -1;
+            if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_UP)) choice = (choice+2)%3;
+            if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_DOWN)) choice = (choice+1)%3;
+            if (IsKeyPressed(KEY_ENTER)) accepted = choice;
+            for (int i = 0; i < 3; ++i) if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(),buttons[i])) accepted = i;
+        }
+        if (accepted == 2) return -1;
+        if (accepted == 1 || (accepted == 0 && error.empty())) return accepted;
+        BeginDrawing(); ambaretto::ui::draw_desktop(); ambaretto::ui::draw_window(panel,city.name.c_str());
+        ambaretto::ui::draw_text("Continue where you left off?",int(panel.x+24),int(panel.y+50),20,ambaretto::ui::ink);
+        ambaretto::ui::draw_text("Start from beginning uses the saved map's spawn and start time.",int(panel.x+24),int(panel.y+86),16,ambaretto::ui::ink);
+        ambaretto::ui::draw_text("Your map edits are kept.",int(panel.x+24),int(panel.y+112),16,ambaretto::ui::ink);
+        if (!error.empty()) ambaretto::ui::draw_text(error.c_str(),int(panel.x+24),int(panel.y+148),14,ambaretto::ui::title_blue);
+        for (int i = 0; i < 3; ++i) {
+            ambaretto::ui::draw_button(buttons[i],false,choice == i,i != 0 || error.empty());
+            ambaretto::ui::draw_text(labels[i],int(buttons[i].x+14),int(buttons[i].y+12),18,i == 0 && !error.empty() ? ambaretto::ui::shadow : ambaretto::ui::ink);
+        }
+        EndDrawing(); ++frames;
+    }
+    return -1;
 }
 
 struct SkidMark { ambaretto::Vec3 from, to; };
@@ -463,12 +495,20 @@ int main(int argc, char** argv) {
         if (preview_settings) ambaretto::settings_menu(controls,graphics,screenshot);
         ambaretto::City selected_city;
         bool direct_city = !city_path.empty();
+        auto map_directory = direct_city ? std::filesystem::absolute(city_path).parent_path() : cities_directory;
+        std::optional<ambaretto::PlaySession> pending_session;
+        bool edit_requested = false, fresh_start = false;
         if (direct_city) {
             std::string error;
             if (!ambaretto::City::load(city_path,selected_city,error)) { TraceLog(LOG_ERROR,"%s",error.c_str()); direct_city = false; }
             else if (!selected_city.playable()) preview_editor = true;
         }
         while (!preview_building && !preview_car && !preview_character && !preview_settings && !WindowShouldClose()) {
+        if (edit_requested) {
+            edit_requested = false;
+            direct_city = ambaretto::edit_current_city(selected_city,map_directory);
+            if (!direct_city) { pending_session.reset(); continue; }
+        }
         if (cities_list || preview_editor || start_graphics || start_controllers) {
             SetWindowTitle("Ambaretto - Cities");
             const auto settings = start_graphics ? ambaretto::MenuCommand::Graphics : start_controllers ? ambaretto::MenuCommand::Controllers : ambaretto::MenuCommand::None;
@@ -479,10 +519,24 @@ int main(int argc, char** argv) {
                 continue;
             }
             start_graphics = start_controllers = false;
+            map_directory = cities_directory;
         } else if (!direct_city) {
             if (!ambaretto::main_menu(selected_city,cities_directory,controls,graphics,screenshot)) break;
+            map_directory = cities_directory;
         }
         direct_city = false; preview_editor = false; cities_list=false;
+        if (!pending_session && !fresh_start && screenshot.empty()) {
+            const auto progress_path = map_directory/(selected_city.id+".play");
+            std::error_code ec;
+            if (std::filesystem::exists(progress_path,ec)) {
+                ambaretto::PlaySession saved; std::string error;
+                if (ambaretto::PlaySession::load(progress_path,saved,error) && saved.city_id != selected_city.id) error = "Progress belongs to a different map.";
+                const int choice = choose_progress(selected_city,error);
+                if (choice < 0) continue;
+                if (choice == 0) pending_session = std::move(saved);
+            }
+        }
+        fresh_start = false;
         SetWindowTitle(("Ambaretto - "+selected_city.name).c_str());
         day_night = ambaretto::DayNight();
         if (!time_override.empty()) day_night.set_time(time_override);
@@ -521,6 +575,18 @@ int main(int argc, char** argv) {
         })) cars.push_back(*vehicle.car);
         cars.erase(std::remove_if(cars.begin(),cars.end(),[&](const auto& design){return !car_renderer.available(design,car_error);}),cars.end());
         auto scene = std::make_unique<Scene>(environment,std::move(cars),std::move(characters));
+        std::string continue_notice;
+        if (pending_session) {
+            if (pending_session->car_design && !car_renderer.available(*pending_session->car_design,car_error)) {
+                pending_session->mode = ambaretto::EntryVehicle::None;
+                continue_notice = "Saved car models unavailable; continued on foot.";
+            }
+            std::string restored;
+            pending_session->restore(scene->player,day_night,restored);
+            if (continue_notice.empty()) continue_notice = restored;
+            if (!time_override.empty()) day_night.set_time(time_override);
+            pending_session.reset();
+        }
         ambaretto::ThirdPersonCamera orbit;
         ambaretto::AimAssist aim_assist;
         ambaretto::ThirdPersonCamera saved_orbit = orbit;
@@ -572,6 +638,15 @@ int main(int argc, char** argv) {
         if (scene->designs.empty()) { notice="No cars available. Create a car in the map editor's Objects menu."; notice_time=10; }
         if (!car_update_error.empty()) { notice="Map car update rejected: "+car_update_error; notice_time=10; }
         if (!graphics_status.empty()) { notice = "Graphics defaults in use: " + graphics_status; notice_time = 8; TraceLog(LOG_WARNING, "%s", notice.c_str()); }
+        if (!continue_notice.empty()) { notice = continue_notice; notice_time = 5; }
+        float progress_save_time = 0;
+        const auto save_progress = [&]() {
+            std::string error;
+            if (!ambaretto::PlaySession::capture(scene->player,day_night).save(map_directory,error)) {
+                notice = error; notice_time = 8; TraceLog(LOG_WARNING,"%s",error.c_str()); return false;
+            }
+            progress_save_time = 0; return true;
+        };
         bool jump_pending = false, discard_mouse = true, orbit_dragging = false, map_dragging = false, flaps = false;
         bool fire_pending = false, suppress_fire = true;
         float shot_flash = 0, hit_marker = 0, death_time = 0, arrest_time = 0, recoil_return = 0, hurt_flash = 0, kill_flash = 0;
@@ -594,6 +669,7 @@ int main(int argc, char** argv) {
                 - mode_value(Action::FootZoomOut, Action::VehicleZoomOut, Action::PlaneZoomOut);
         };
         bool cities_requested = false;
+        bool first_game_frame = true;
         while (!cities_requested && !WindowShouldClose()) {
             const float elapsed = GetFrameTime(), frame = std::min(elapsed, 0.1f);
             shot_flash = std::max(0.f, shot_flash - frame);
@@ -603,7 +679,7 @@ int main(int argc, char** argv) {
             const auto map_viewport = map_layout.viewport;
             const auto& map_buttons = map_layout.buttons;
             if (map_open) world_map.constrain(map_viewport, ambaretto::Environment::extent);
-            bool mode_changed = false;
+            bool mode_changed = first_game_frame;
             const auto toggle_map = [&]() {
                 map_open = !map_open;
                 if (map_open) world_map.focus(scene->player.position(), map_viewport, ambaretto::Environment::extent);
@@ -633,7 +709,7 @@ int main(int argc, char** argv) {
                     SetMouseCursor(MOUSE_CURSOR_DEFAULT);
                 }
             };
-            if (screenshot.empty()) {
+            if (screenshot.empty() && !first_game_frame) {
                 const auto controller_input = ambaretto::read_controllers();
                 controls.update(controller_input);
                 if (!IsWindowFocused()) {
@@ -647,7 +723,22 @@ int main(int argc, char** argv) {
                     tuning_panel.cancel_drag(); orbit_dragging = false; map_dragging = false;
                     if (captured) { captured = false; EnableCursor(); }
                 }
-                if (command == MenuCommand::Cities) { cities_requested = true; EnableCursor(); break; }
+                if (command == MenuCommand::Cities || command == MenuCommand::EditMap || command == MenuCommand::Restart) {
+                    if (!save_progress()) continue;
+                    if (command == MenuCommand::EditMap) {
+                        pending_session = ambaretto::PlaySession::capture(scene->player,day_night);
+                        edit_requested = true;
+                    }
+                    if (command == MenuCommand::Restart) { fresh_start = true; direct_city = true; }
+                    cities_requested = true; EnableCursor(); break;
+                }
+                if (command == MenuCommand::SaveCity || (IsWindowFocused() && !menu.blocking() &&
+                    (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_S))) {
+                    std::string error;
+                    if (!selected_city.save(map_directory,error)) { notice = error; notice_time = 8; }
+                    else if (save_progress()) { notice = "Map and progress saved."; notice_time = 4; }
+                    mode_changed = true;
+                }
                 if (command == MenuCommand::AimMode) {
                     controls.auto_lock = !controls.auto_lock;
                     std::string error;
@@ -752,6 +843,10 @@ int main(int argc, char** argv) {
                 && scene->player.weapons().selected() != ambaretto::WeaponType::Unarmed && controls.value(Action::Aim) > .5f;
             if (!aiming || !controls.auto_lock) aim_assist.reset();
             day_night.advance(elapsed, screenshot.empty() && simulate);
+            if (screenshot.empty() && simulate) {
+                progress_save_time += frame;
+                if (progress_save_time >= 30) { save_progress(); progress_save_time = 0; }
+            }
             if (active && screenshot.empty()) {
                 const bool armed = scene->player.on_foot() && scene->player.weapons().selected() != ambaretto::WeaponType::Unarmed;
                 const bool reload_pressed = controls.pressed(Action::Reload) && scene->player.can_shoot() && armed && !weapon_wheel;
@@ -1135,6 +1230,7 @@ int main(int argc, char** argv) {
             if (weapon_wheel) draw_weapon_wheel(wheel_choice, wheel_cursor);
             menu.draw(controls, mapping_path);
             EndDrawing();
+            first_game_frame = false; // Consume the key that returned from an editor or menu.
             if (!screenshot.empty() && ++rendered_frames >= 90) {
                 const Image capture = LoadImageFromScreen();
                 ExportImage(capture, screenshot.c_str());
@@ -1144,6 +1240,7 @@ int main(int argc, char** argv) {
         }
         if (!menu.save_pending(controls, mapping_path)) TraceLog(LOG_ERROR, "Could not save controller mappings; previous file retained");
         if (!screenshot.empty()) break;
+        if (!cities_requested) save_progress();
         map_open = tuning_open = false; start_menu = start_controllers = start_help = start_graphics = false;
         } catch (const std::exception& error) {
             TraceLog(LOG_ERROR,"Cannot open city: %s",error.what()); EnableCursor(); captured = false;

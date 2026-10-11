@@ -28,6 +28,7 @@ public:
     ~Plane();
     void reset(const Vec3& center, float yaw = 0,
                const Vec3& velocity = Vec3::sZero(), float throttle = 0);
+    void restore_motion(Vec3 position, Quat rotation, Vec3 velocity, float throttle);
     void step(FlightInput input, float dt = fixed_step);
     void set_simulated(bool simulated);
     bool simulated() const { return simulated_; }
@@ -63,6 +64,7 @@ public:
     static constexpr float tire_radius = .26f;
 private:
     friend class PhysicsWorld;
+    friend struct PlaySession;
     void refresh_gear();
     PhysicsWorld& world_;
     PlaneType type_;

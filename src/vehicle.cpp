@@ -531,6 +531,11 @@ void Plane::reset(const Vec3& center, float yaw, const Vec3& speed, float thrott
     for (auto& wheel : wheels_) wheel.spin = 0;
     refresh_gear();
 }
+void Plane::restore_motion(Vec3 center, Quat orientation, Vec3 speed, float throttle) {
+    reset(center, 0, speed, throttle);
+    world_.impl_->system.GetBodyInterface().SetRotation(body_, orientation, JPH::EActivation::Activate);
+    refresh_gear();
+}
 void Plane::refresh_gear() {
     const float rest = specs().gear_rest, radius = specs().wheel_radius;
     const Vec3 down = -rotate(Vec3::sAxisY());
@@ -1492,6 +1497,13 @@ void Car::reset(const Vec3& center_of_mass, float yaw) {
         wheel.spin = wheel.compression = wheel.normal_force = 0;
         wheel.center = center_of_mass + rotation * (wheel.mount - Vec3(0, tuning_.rest_length, 0));
     }
+}
+void Car::restore_motion(Vec3 center, Quat orientation, Vec3 speed) {
+    reset(center, 0);
+    auto& physics = world_.impl_->system.GetBodyInterface();
+    physics.SetPositionAndRotation(body_, center + orientation * body_offset(), orientation, JPH::EActivation::Activate);
+    physics.SetLinearAndAngularVelocity(body_, speed, Vec3::sZero());
+    refresh_wheel_contacts();
 }
 void Car::set_simulated(bool simulated) {
     if (simulated == simulated_) return;

@@ -69,6 +69,7 @@ public:
         bool held, bool pressed, bool aiming, const Police* police = nullptr, const Character* ignore = nullptr);
 private:
     WeaponType selected_ = WeaponType::Unarmed;
+    friend struct PlaySession;
     std::array<int, int(WeaponType::Count)> ammo_{}, reserve_{};
     float cooldown_ = 0, reload_time_ = 0;
     std::minstd_rand random_{731};

@@ -97,6 +97,7 @@ public:
     CarType type() const { return type_; }
     void step(Input input, float dt = fixed_step);
     void reset(const Vec3& center_of_mass, float yaw = 0);
+    void restore_motion(Vec3 position, Quat rotation, Vec3 velocity);
     Vec3 position() const;
     Vec3 velocity() const;
     Quat rotation() const;
@@ -129,6 +130,7 @@ public:
     Vec3 explosion_position() const { return damage_.explosion_position; }
 private:
     friend class PhysicsWorld;
+    friend struct PlaySession;
     void update_wheel_mounts();
     void refresh_wheel_contacts();
     PhysicsWorld& world_;

@@ -127,6 +127,13 @@ int main(int argc, char** argv) {
         dispatch_menu(MenuMode::Main,1,1,MenuCommand::Controllers);
         dispatch_menu(MenuMode::Main,2,0,MenuCommand::Controls);
         dispatch_menu(MenuMode::Main,2,1,MenuCommand::About);
+        dispatch_menu(MenuMode::Game,0,1,MenuCommand::SaveCity);
+        dispatch_menu(MenuMode::Game,0,2,MenuCommand::Restart);
+        dispatch_menu(MenuMode::Game,1,0,MenuCommand::EditMap);
+        dispatch_menu(MenuMode::PlayEditor,0,0,MenuCommand::SaveCity);
+        dispatch_menu(MenuMode::PlayEditor,0,2,MenuCommand::PlayCity);
+        dispatch_menu(MenuMode::PlayEditor,0,3,MenuCommand::Cities);
+        dispatch_menu(MenuMode::PlayEditor,2,0,MenuCommand::LandTool);
         creator.open(1); require(creator.update(state,input)==MenuCommand::Undo,"Creator undo is missing");
         editor.open(); input = {}; input.horizontal = -1; editor.update(state, input);
         input = {}; input.enter = true;

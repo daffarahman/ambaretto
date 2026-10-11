@@ -75,6 +75,7 @@ public:
     const std::optional<CharacterDesign>& design() const { return design_; }
     Vec3 forward() const { return Quat::sRotation(Vec3::sAxisY(), yaw_) * Vec3(0, 0, -1); }
 private:
+    friend struct PlaySession;
     bool cover_wall(Vec3 feet, Vec3 direction, float range, GroundHit& wall, float& height) const;
     bool set_posture(float height, bool force = false);
     void leave_cover();
@@ -119,6 +120,7 @@ public:
     bool can_shoot() const;
     Shot shoot(Vec3 origin, Vec3 direction, bool held, bool pressed, bool aiming);
 private:
+    friend struct PlaySession;
     PhysicsWorld& world_;
     struct EntryTarget { EntryVehicle kind = EntryVehicle::None; Car* car = nullptr; Plane* plane = nullptr; };
     EntryTarget entry_target() const;

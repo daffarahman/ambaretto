@@ -133,7 +133,7 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment,const std::
         for (auto v : city.vehicles) if (v.kind == CityVehicleKind::Car) {
             if (designs && !v.car) continue;
             if (designs && v.car && std::none_of(designs->begin(),designs->end(),[&](const auto& d){return d.name==v.car->name && d.body==v.car->body && d.wheel==v.car->wheel;})) continue;
-            TrafficCar vehicle; vehicle.car = create(); vehicle.npc = false;
+            TrafficCar vehicle; vehicle.car = create(); vehicle.npc = false; vehicle.placement = v.position;
             if (v.car) vehicle.car->set_design(*v.car);
             vehicle.car->reset(v.position+Vec3(0,vehicle.car->ride_height(),0),v.rotation*1.57079633f);
             cars_.push_back(std::move(vehicle));

@@ -10,6 +10,7 @@ struct Road;
 
 struct TrafficCar {
     std::unique_ptr<Car> car;
+    std::optional<Vec3> placement;
     std::unique_ptr<Character> driver; // Created when the hidden occupant leaves the car.
     bool npc = true;
     std::size_t route = 0;

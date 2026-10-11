@@ -504,12 +504,51 @@ int main() {
         steps.push_back([&]{require(physics_steps==paused_steps,"Second pause advanced physics");});
         key(KEY_ESCAPE); idle(5);
         steps.push_back([&]{require(!gray_desktop() && physics_steps>paused_steps,"Escape did not resume gameplay");});
-        key(KEY_F10); key(KEY_DOWN); key(KEY_ENTER); idle(3);
+        // Edit the current map from inside a car, save, and return to the same play session.
+        PlaySession before_edit, saved_progress;
+        key(KEY_E); shortcut(KEY_S);
+        steps.push_back([&]{require(PlaySession::load(root/"cities"/(city.id+".play"),before_edit,error)
+            && before_edit.mode==EntryVehicle::Car,"Play Ctrl+S did not save the current car session");});
+        key(KEY_F10); key(KEY_RIGHT); key(KEY_ENTER); idle(5);
+        steps.push_back([]{require(title=="Ambaretto - City editor","Edit current map did not open the editor from Play");});
+        key(KEY_V); key(KEY_FOUR); city_click(*city.spawn,City::center({67,67})); shortcut(KEY_S);
+        steps.push_back([&]{City edited; require(City::load(root/"cities"/(city.id+".city"),edited,error)
+            && edited.buildings.size()==1,"In-play map edit did not save the building"); capture("in-play-map-editor.png");});
+        key(KEY_ESCAPE); idle(5); shortcut(KEY_S);
+        steps.push_back([&]{capture("returned-from-map-editor.png");
+            require(title=="Ambaretto - "+city.name,"Returning from the editor did not reopen Play");
+            require(dial_visible(450,false),"Returning from the editor did not show the car HUD");
+            require(PlaySession::load(root/"cities"/(city.id+".play"),saved_progress,error),"Returning from the editor could not save progress");
+            require(saved_progress.mode==EntryVehicle::Car,"Returning from the editor lost the current car");
+            require((saved_progress.position-before_edit.position).Length()<1,"Returning from the editor lost the player position");});
+        key(KEY_F10); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER); idle(5); shortcut(KEY_S);
+        steps.push_back([&]{require(dial_visible(450,true) && !dial_visible(450,false)
+            && PlaySession::load(root/"cities"/(city.id+".play"),saved_progress,error)
+            && saved_progress.mode==EntryVehicle::None && (saved_progress.position-*city.spawn).Length()<.2f
+            && std::abs(saved_progress.minutes-city.start_minutes)<5,"Start from beginning did not reset spawn and clock");
+            City edited; require(City::load(root/"cities"/(city.id+".city"),edited,error) && edited.buildings.size()==1,"Restart erased map edits");});
+        key(KEY_E); shortcut(KEY_S);
+        steps.push_back([&]{require(PlaySession::load(root/"cities"/(city.id+".play"),saved_progress,error)
+            && saved_progress.mode==EntryVehicle::Car,"Continue fixture did not save the car");});
+        key(KEY_F10); key(KEY_UP); key(KEY_ENTER); idle(3);
         steps.push_back([]{require(title=="Ambaretto - Main menu" && gray_desktop(),"End Game did not return to the main menu"); should_close=true;});
         std::string executable="menu_workflow_tests",flag="--city",path=(root/"cities"/(city.id+".city")).string();
         char* args[]={executable.data(),flag.data(),path.data()};
         require(ambaretto_main(3,args)==0,"Game workflow failed");
-        std::cout<<"Menus: create/open, draft Save/Discard/Cancel, single-window navigation, Escape pause/resume, End Game passed\n";
+        stage="continue saved game"; reset(); idle(5);
+        steps.push_back([]{require(title=="Ambaretto - Continue or start again","Saved game did not offer Continue / Start from beginning"); capture("continue-or-start-again.png");});
+        key(KEY_ENTER); idle(5); shortcut(KEY_S);
+        steps.push_back([&]{PlaySession continued; require(dial_visible(450,false)
+            && PlaySession::load(root/"cities"/(city.id+".play"),continued,error)
+            && continued.mode==EntryVehicle::Car && (continued.position-saved_progress.position).Length()<1,"Continue did not restore saved gameplay");});
+        key(KEY_F10); key(KEY_UP); key(KEY_ENTER); idle(3); steps.push_back([]{should_close=true;});
+        require(ambaretto_main(3,args)==0,"Continue workflow failed");
+        stage="start again from saved game"; reset(); idle(5); key(KEY_RIGHT); key(KEY_ENTER); idle(5); shortcut(KEY_S);
+        steps.push_back([&]{PlaySession fresh; require(dial_visible(450,true) && !dial_visible(450,false)
+            && PlaySession::load(root/"cities"/(city.id+".play"),fresh,error) && fresh.mode==EntryVehicle::None
+            && (fresh.position-*city.spawn).Length()<.2f && std::abs(fresh.minutes-city.start_minutes)<5,"Start again picker did not reset the saved session"); should_close=true;});
+        require(ambaretto_main(3,args)==0,"Start again workflow failed");
+        std::cout<<"Menus: creation, Save/Discard/Cancel, pause/resume, map editing from Play, Continue and Start from beginning passed\n";
     } catch (const std::exception& e) {
         std::cerr<<e.what()<<'\n'; if (IsWindowReady()) CloseWindow(); return 1;
     }

@@ -1489,7 +1489,7 @@ std::optional<CharacterDesign> choose_player_character(const std::optional<Chara
     UnloadRenderTexture(preview); return result;
 }
 enum class EditorResult { Back, Play, Quit };
-EditorResult editor(City& city,const std::filesystem::path& directory,const std::string& screenshot) {
+EditorResult editor(City& city,const std::filesystem::path& directory,const std::string& screenshot, bool playing = false) {
     Tool tool = Tool::Land;
     int building_size = 1, building_height = 12, building_rotation = 0, vehicle_kind = 0, rotation = 0;
     int brush_size = 3, density = 2, elevation_direction = 1, revision = 0, preview_revision = -1;
@@ -1528,7 +1528,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         }
     };
     std::vector<City> undo, redo;
-    MenuBar menu(MenuMode::Editor);
+    MenuBar menu(playing ? MenuMode::PlayEditor : MenuMode::Editor);
     const auto choose_tool = [&](int index) { tool = Tool(index); painting = dragging = false; selected_building = selected_vehicle = -1; };
     const auto commit = [&](City next) {
         undo.push_back(city); if (undo.size()>32) undo.erase(undo.begin()); redo.clear();
@@ -1619,7 +1619,11 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
             if (value && *value!=city.pedestrian_density) { City next = city; next.pedestrian_density = *value; commit(std::move(next)); status = "Walking NPC density updated"; }
             painting=dragging=false; first_frame=true; continue;
         }
-        if ((command==MenuCommand::Cities || (can_edit && (IsKeyPressed(KEY_ESCAPE)||close_clicked(document)))) && finish(EditorResult::Back)) return EditorResult::Back;
+        if (command==MenuCommand::Cities && finish(EditorResult::Back)) return EditorResult::Back;
+        if (can_edit && (IsKeyPressed(KEY_ESCAPE)||close_clicked(document))) {
+            const auto result = playing ? EditorResult::Play : EditorResult::Back;
+            if (finish(result)) return result;
+        }
         if (command==MenuCommand::Quit && finish(EditorResult::Quit)) return EditorResult::Quit;
         if (command==MenuCommand::PlayCity && finish(EditorResult::Play)) return EditorResult::Play;
         const bool ctrl = IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL);
@@ -1900,6 +1904,10 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         if (!screenshot.empty() && ++frames>=3) { auto image = LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); return EditorResult::Quit; }
     }
 }
+}
+bool edit_current_city(City& city, const std::filesystem::path& directory) {
+    EnableCursor(); SetMouseCursor(MOUSE_CURSOR_DEFAULT);
+    return editor(city, directory, {}, true) == EditorResult::Play;
 }
 bool city_menu(City& selected,const std::filesystem::path& directory,ControllerMapping& controls,
                GraphicsSettings& graphics,bool edit_selected,const std::string& screenshot,bool preview_editor,MenuCommand initial_settings) {
