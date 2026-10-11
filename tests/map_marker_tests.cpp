@@ -226,8 +226,9 @@ void city_crosswalks(RenderTexture2D texture) {
     camera = city_camera(street->center()); camera.fovy = 32;
     image = render_city(scenery, texture, camera);
     // Resolve subpixel markings in a close-up, without relying on the game's MSAA.
+    const float verge_inset=city.road_style.sidewalks ? 2.04f : 1.26f;
     for (float fraction : {0.f, .5f, 1.f}) {
-        const auto path = street->path(fraction, fraction == 0 ? 1.26f : fraction == 1 ? -1.26f : 0);
+        const auto path = street->path(fraction, fraction == 0 ? verge_inset : fraction == 1 ? -verge_inset : 0);
         const Vec3 p = (path.front() + path.back()) / 2;
         const Vector2 point = GetWorldToScreenEx({p.GetX(), City::level + .1f, p.GetZ()}, camera, image.width, image.height);
         int pixels = 0;
@@ -265,9 +266,10 @@ void elevated_road_pixels(RenderTexture2D texture) {
         Image image = render_city(scenery,texture,camera);
         ExportImage(image,diagonal ? "city-elevated-diagonal-road.png" : "city-elevated-cardinal-road.png");
         // Cardinal streets traverse a straight ramp; diagonals stay on a flat raised terrace.
+        const float verge_inset=city.road_style.sidewalks ? 2.04f : 1.26f;
         for (float fraction : {0.f,.25f,.75f,1.f}) {
             const bool verge = fraction==0 || fraction==1;
-            const auto path = node->path(fraction,fraction==0 ? 1.26f : fraction==1 ? -1.26f : 0);
+            const auto path = node->path(fraction,fraction==0 ? verge_inset : fraction==1 ? -verge_inset : 0);
             for (float t : {.25f,.5f,.75f}) {
                 Vec3 p = path.front()+(path.back()-path.front())*t;
                 p.SetY(city.height(p.GetX(),p.GetZ())+.1f);

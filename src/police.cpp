@@ -535,7 +535,9 @@ bool Police::steal(Car& car) {
         crime(Crime::PoliceVehicleTheft, car.position(), observer);
         return true;
     }
-    return false;
+    if (car.type() != CarType::Police) return false;
+    crime(Crime::PoliceVehicleTheft, car.position());
+    return true;
 }
 void Police::raycast(Vec3 origin, Vec3 direction, ShotHit& hit, const Character* ignore) const {
     for (const auto& unit : units_) if (unit.active) for (const auto& officer : unit.officers) if (!officer.seated && officer.character.get() != ignore) {

@@ -211,6 +211,12 @@ void VehicleAudio::update_voice(Voice& voice, float engine_volume, float horn_vo
 void VehicleAudio::update(const Traffic& traffic, const Car& player_car, Vec3 listener, Vec3 listener_right,
                           bool player_driving, bool horn_held, bool running, float dt, float player_throttle) {
     if (!IsAudioDeviceReady()) return;
+    const auto present=[&](const TrafficCar* vehicle) {
+        return std::any_of(traffic.cars().begin(),traffic.cars().end(),[&](const auto& current){return &current==vehicle;});
+    };
+    // Adding or removing racers can invalidate the traffic entries held by voices.
+    for (auto& voice : npcs_) if (voice.vehicle && !present(voice.vehicle)) clear_voice(voice);
+    for (auto& candidate : selected_) if (candidate && !present(candidate)) candidate=nullptr;
     dt = std::isfinite(dt) ? std::clamp(dt, 0.0f, .1f) : 0;
     selection_time_ -= dt;
     if (selection_time_ <= 0 && running) {
@@ -219,7 +225,7 @@ void VehicleAudio::update(const Traffic& traffic, const Car& player_car, Vec3 li
         selected_.fill(nullptr);
         // ponytail: six nearby vehicles at 10 Hz; raise the cap only if dense traffic audibly loses voices.
         for (const auto& vehicle : traffic.cars()) {
-            if (!vehicle.npc || !vehicle.car->simulated() || vehicle.car->destroyed() || vehicle.car.get() == &player_car) continue;
+            if ((!vehicle.npc && !vehicle.racing) || !vehicle.car->simulated() || vehicle.car->destroyed() || vehicle.car.get() == &player_car) continue;
             const float distance = (vehicle.car->position() - listener).LengthSq();
             const float range = vehicle.horn_time > 0 ? 120.0f : 70.0f;
             if (distance >= range * range) continue;
@@ -239,12 +245,12 @@ void VehicleAudio::update(const Traffic& traffic, const Car& player_car, Vec3 li
     for (auto& voice : npcs_) {
         if (voice.vehicle && voice.vehicle->car.get() == &player_car) clear_voice(voice); // Stealing must not duplicate the player's engine.
         if (!voice.vehicle) for (const auto* candidate : selected_) {
-            if (!candidate || !candidate->npc || candidate->car->destroyed() || candidate->car.get() == &player_car) continue;
+            if (!candidate || (!candidate->npc && !candidate->racing) || candidate->car->destroyed() || candidate->car.get() == &player_car) continue;
             bool used = false;
             for (const auto& other : npcs_) if (other.vehicle == candidate) { used = true; break; }
             if (!used) { voice.vehicle = candidate; break; }
         }
-        bool selected = voice.vehicle && voice.vehicle->npc && voice.vehicle->car->simulated() && !voice.vehicle->car->destroyed();
+        bool selected = voice.vehicle && (voice.vehicle->npc || voice.vehicle->racing) && voice.vehicle->car->simulated() && !voice.vehicle->car->destroyed();
         if (selected) selected = std::find(selected_.begin(), selected_.end(), voice.vehicle) != selected_.end();
         float engine_volume = 0, horn_volume = 0, pitch = voice.pitch, pan = voice.pan;
         if (selected && running) {

@@ -542,9 +542,52 @@ void model_tree_collisions() {
     require(false, "no isolated tree available for collision checks");
 }
 }
+void car_only_mode() {
+    using namespace ambaretto;
+    auto city = City::create("Car only tests"); std::string error;
+    require(city.add_land({58,58},{70,70},error) && city.set_spawn({64,64},error), "Car only terrain fixture failed");
+    require(city.add_building({{64,64},1,12},error), "Blocked spawn fixture failed");
+    Environment map(city); PhysicsWorld world(map); Car car(world);
+    Player player(world,car,map);
+    bool rejected = false;
+    try { player.set_play_mode(PlayMode::CarOnly); } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected && player.on_foot(), "Car only started without a chosen car");
+    CarDesign design; design.name="Chosen car"; design.body="body.glb"; design.wheel="wheel.glb";
+    design.tuning.acceleration = 8;
+    car.set_design(design); player.set_play_mode(PlayMode::CarOnly);
+    const auto check = [&] {
+        require(player.driving() && !player.flying() && !player.character().enabled() && &player.car()==&car,
+            "Car only exposed the character or changed the selected car");
+        require(car.design()->name==design.name && car.tuning().acceleration==design.tuning.acceleration,
+            "Car only lost the chosen car or tuning");
+    };
+    check();
+    require(car.can_spawn_at(car.position()) && (car.position()-map.spawn()).Length()>3, "Car only respawn overlaps the spawn building");
+    require(player.interact()==Interaction::Blocked && !player.can_enter() && !player.can_shoot(), "Car only allows exiting or foot actions");
+    const auto start = car.position();
+    for (int i=0;i<240;++i) { player.step({1,0,false,false},{}); check(); }
+    require((car.position()-start).Length()>1, "Chosen car cannot drive");
+    car.take_damage(100); player.step({},{}); check();
+    require(car.destroyed() && player.respawn_remaining()>2.9f, "Destroyed car skipped the respawn countdown");
+    for (int i=0;i<370;++i) { player.step({},{}); check(); }
+    require(!car.destroyed() && car.health()==100 && player.character().alive() && player.respawn_remaining()==0,
+        "Destroyed car did not respawn healthy in the same car");
+    player.respawn_on_foot(Vec3(500,0,500)); check();
+    player.respawn_near(Vec3(500,0,500)); check();
+    car.reset(Vec3(500,-2,500)); player.step({},{}); check();
+    require(player.respawn_remaining()>0, "Submerged car did not begin respawning");
+    for (int i=0;i<370;++i) player.step({},{});
+    check(); require(!map.submerged(player.position()) && car.health()==100, "Submerged car stayed stuck underwater");
+    player.character().take_damage(100); player.step({},{}); check();
+    for (int i=0;i<370;++i) player.step({},{});
+    require(player.character().alive() && player.driving(), "Occupant death escaped Car only");
+    player.set_play_mode(PlayMode::FreeRoam);
+    require(player.on_foot() && player.character().enabled(), "Free roam did not restore on-foot play");
+}
+
 int main() {
     try {
-        character_movement(); health_regeneration(); articulated_ragdoll(); city_collisions_and_interaction(); ragdoll_impact_damage(); car_coasting_and_direction_changes(); mouse_camera(); on_foot_camera(); surface_swimming(); nearby_respawns(); model_tree_collisions();
+        character_movement(); health_regeneration(); articulated_ragdoll(); city_collisions_and_interaction(); ragdoll_impact_damage(); car_coasting_and_direction_changes(); mouse_camera(); on_foot_camera(); surface_swimming(); nearby_respawns(); model_tree_collisions(); car_only_mode();
         std::cout << "All player checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

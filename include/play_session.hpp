@@ -9,6 +9,7 @@ struct PlaySession {
     std::string city_id;
     float minutes = 720, yaw = 0, health = 100, vehicle_health = 100, throttle = 0;
     EntryVehicle mode = EntryVehicle::None;
+    PlayMode play_mode = PlayMode::FreeRoam;
     Vec3 position{0, 0, 0}, velocity{0, 0, 0};
     Quat rotation = Quat::sIdentity();
     PlaneType plane_type = PlaneType::Trainer;

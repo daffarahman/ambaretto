@@ -90,11 +90,15 @@ private:
 
 enum class Interaction { Entered, Exited, TooFast, TooFar, Blocked };
 enum class EntryVehicle { None, Car, Plane };
+enum class PlayMode { FreeRoam, CarOnly, Race };
 class Player {
 public:
     Player(PhysicsWorld& world, Car& car, const Environment& environment, Plane* plane = nullptr, Traffic* traffic = nullptr,
         Pedestrians* pedestrians = nullptr, const std::vector<std::unique_ptr<Plane>>* aircraft = nullptr, Police* police = nullptr);
     void reset();
+    void set_play_mode(PlayMode mode);
+    PlayMode play_mode() const { return play_mode_; }
+    float respawn_remaining() const { return respawn_remaining_; }
     void respawn_on_foot(Vec3 feet, float yaw = 0);
     void respawn_near(Vec3 origin);
     void recover_plane();
@@ -138,5 +142,7 @@ private:
     bool driving_ = true;
     bool flying_ = false;
     bool coasting_ = false;
+    PlayMode play_mode_ = PlayMode::FreeRoam;
+    float respawn_remaining_ = 0;
 };
 } // namespace ambaretto

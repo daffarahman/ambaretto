@@ -28,6 +28,11 @@ void saved_patrols() {
     const std::vector<CarDesign> designs{regular,first,second};
     Police police(world, map, nullptr, nullptr, &designs);
     Player player(world, car, map, nullptr, nullptr, nullptr, nullptr, &police);
+    require(!police.steal(car), "Civilian car accepted as a police vehicle");
+    car.set_design(first); car.set_simulated(true);
+    Vec3 parked = map.spawn()+Vec3(2.8f,0,0); parked.SetY(map.surface_height(parked)+car.ride_height()); car.reset(parked);
+    require(player.interact()==Interaction::Entered && player.driving(), "Parked police car without an AI crew cannot be entered");
+    player.reset(); police.clear();
     int picks[2]{};
     const auto check = [&] {
         int active = 0;

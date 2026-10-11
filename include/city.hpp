@@ -62,7 +62,14 @@ struct CityRoadNode {
     std::vector<Vec3> bend(float fraction = .5f, float inset = 0) const;
     CityRoadPort port(int direction) const;
     std::vector<Vec3> path(float fraction = .5f, float inset = 0) const;
-    std::vector<Vec3> outline() const;
+    std::vector<Vec3> outline(float inset = .7f) const;
+    std::vector<std::array<Vec3,3>> sidewalk_triangles() const;
+};
+struct RoadStyle {
+    std::string road_texture = "asphalt.png", sidewalk_texture = "brick08.png";
+    bool sidewalks = true;
+    bool operator==(const RoadStyle& b) const { return road_texture==b.road_texture && sidewalk_texture==b.sidewalk_texture && sidewalks==b.sidewalks; }
+    bool operator!=(const RoadStyle& b) const { return !(*this==b); }
 };
 struct Tree {
     Vec3 base;
@@ -73,6 +80,11 @@ struct Tree {
     static constexpr float model_trunk_height = 2.5137062f;
     static constexpr float model_trunk_radius = .1256853f;
     float scale() const { return height / model_height; }
+};
+struct RaceMap {
+    std::string name = "New race";
+    int laps = 3;
+    std::vector<Vec3> checkpoints; // Start/finish first; the route closes back to it.
 };
 
 // Terraced islands on an 11.2 m grid, with plain blocks or saved building meshes.
@@ -92,8 +104,10 @@ struct City {
     std::vector<CityBuilding> buildings;
     std::vector<CityVehicle> vehicles;
     std::vector<Tree> trees;
+    std::vector<RaceMap> races;
     int start_minutes = 12 * 60;
     int pedestrian_density = 100;
+    RoadStyle road_style;
     std::optional<Vec3> spawn;
     std::optional<CharacterDesign> player_character;
     bool playable() const { std::string error; return spawn && player_character && player_character->type==CharacterType::Player && player_character->validate(error); }
@@ -155,12 +169,14 @@ struct City {
     bool generate_terrain(int tiles_x, int tiles_z, std::uint32_t seed, std::string& error, TerrainSettings settings = {});
 };
 enum class DesignKind { Building, Car, Character };
-bool edit_current_city(City& city, const std::filesystem::path& directory);
+bool edit_current_city(City& city, const std::filesystem::path& directory, bool car_only = false, bool create_race = false);
+// -1 returns, -2 opens the map editor to create a race.
+int choose_race(const City& city, bool editing = false);
 bool main_menu(City& selected, const std::filesystem::path& directory, ControllerMapping& controls,
                GraphicsSettings& graphics, const std::string& screenshot = {});
 void design_menu(DesignKind kind, const std::filesystem::path& root, const std::string& screenshot = {}, bool create_new = false);
 void settings_menu(ControllerMapping& controls, GraphicsSettings& graphics, const std::string& screenshot = {}, MenuCommand initial_settings = {});
-// Returns a saved playable city on Play; otherwise returns to the main menu.
+// Returns a saved city on Play; otherwise returns to the main menu.
 bool city_menu(City& selected, const std::filesystem::path& directory, ControllerMapping& controls,
                GraphicsSettings& graphics, bool edit_selected = false, const std::string& screenshot = {},
                bool preview_editor = false, MenuCommand initial_settings = {});

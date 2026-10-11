@@ -5,10 +5,10 @@
 
 namespace ambaretto {
 namespace {
-constexpr Color blue = ui::title_blue, gray = ui::face, ink = ui::ink, selected = ui::title_blue;
+constexpr Color blue = ui::title_blue, gray = ui::face, ink = ui::ink;
 struct Item { const char* label; MenuCommand command; const char* shortcut = ""; const Item* children = nullptr; int child_count = 0; };
 constexpr Item files[] = {{"Resume", MenuCommand::Resume, "Esc"}, {"Save map and progress", MenuCommand::SaveCity, "Ctrl+S"},
-    {"Start from beginning", MenuCommand::Restart}, {"End Game / Main menu", MenuCommand::Cities}};
+    {"Start from beginning", MenuCommand::Restart}, {"Start a race...", MenuCommand::StartRace}, {"End Game / Main menu", MenuCommand::Cities}};
 constexpr Item edits[] = {{"Edit current map...", MenuCommand::EditMap}, {"Recover vehicle", MenuCommand::Recover}, {"Restore car tuning", MenuCommand::CarDefaults}};
 constexpr Item settings[] = {{"World map", MenuCommand::Map}, {"Car tuning", MenuCommand::Tuning}, {"Aim mode", MenuCommand::AimMode}};
 constexpr Item helps[] = {{"Controls...", MenuCommand::Controls}, {"About...", MenuCommand::About}};
@@ -21,7 +21,7 @@ constexpr Item editor_edits[] = {{"Undo", MenuCommand::Undo, "Ctrl+Z"}, {"Redo",
 constexpr Item tiles[] = {{"Island / expand",MenuCommand::LandTool,"2"}, {"Road: L-shaped",MenuCommand::RoadBend,"3"}, {"Road: diagonal",MenuCommand::RoadDiagonal},
     {"Ground texture...",MenuCommand::GroundTool,"9"},
     {"Raise ground +2 m",MenuCommand::RaiseGround,"0"}, {"Lower ground -2 m",MenuCommand::LowerGround}};
-constexpr Item buildings[] = {{"Place selected building",MenuCommand::BuildingTool,"4"}, {"Building Creator...",MenuCommand::BuildingCreator}, {"Edit selected building...",MenuCommand::EditBuilding}, {"Rotate building +90",MenuCommand::RotateBuilding,"R"}, {"Choose saved building...",MenuCommand::SavedBuildings}};
+constexpr Item buildings[] = {{"Place selected building",MenuCommand::BuildingTool,"4"}, {"Building Creator...",MenuCommand::BuildingCreator}, {"Edit selected building...",MenuCommand::EditBuilding}, {"Rotate building +90",MenuCommand::RotateBuilding,"R"}, {"Choose saved building...",MenuCommand::SavedBuildings}, {"Place plain block",MenuCommand::PlainBuilding}};
 constexpr Item trees[] = {{"Sparse",MenuCommand::TreesSparse,"8"}, {"Medium",MenuCommand::TreesMedium}, {"Dense",MenuCommand::TreesDense},
     {"Smaller brush",MenuCommand::BrushSmaller}, {"Larger brush",MenuCommand::BrushLarger}};
 constexpr Item player[] = {{"Player spawn",MenuCommand::SpawnTool,"5"}, {"Character creator...",MenuCommand::CharacterCreator},
@@ -31,17 +31,18 @@ constexpr Item other_vehicles[] = {{"Trainer plane",MenuCommand::PlaceTrainer}, 
 constexpr Item objects[] = {{"Trees",MenuCommand::None,"",trees,int(std::size(trees))}, {"Player",MenuCommand::None,"",player,int(std::size(player))},
     {"Car",MenuCommand::None,"",cars,int(std::size(cars))}, {"Other vehicles",MenuCommand::None,"",other_vehicles,int(std::size(other_vehicles))},
     {"Rotate vehicle +90",MenuCommand::RotateObject}};
-constexpr Item views[] = {{"Top view", MenuCommand::TopView, "V"}, {"Show grid", MenuCommand::Grid, "G"}, {"Rotate left", MenuCommand::RotateLeft, "Q"}, {"Rotate right", MenuCommand::RotateRight, "E"}, {"Zoom in", MenuCommand::ZoomIn}, {"Zoom out", MenuCommand::ZoomOut}};
-constexpr Item city_settings[] = {{"City settings...",MenuCommand::CitySettings}};
-constexpr Item city_files[] = {{"Create new city...", MenuCommand::NewCity, "Ins"}, {"Open / edit selected", MenuCommand::EditCity, "Enter"}, {"Duplicate selected", MenuCommand::DuplicateCity, "Ctrl+D"}, {"Back", MenuCommand::Quit, "Esc"}};
+constexpr Item views[] = {{"Top view", MenuCommand::TopView, "V"}, {"Show grid", MenuCommand::Grid, "G"}, {"Rotate left", MenuCommand::RotateLeft, "Q"}, {"Rotate right", MenuCommand::RotateRight, "E"}, {"Zoom in", MenuCommand::ZoomIn}, {"Zoom out", MenuCommand::ZoomOut}, {"Hand / pan", MenuCommand::PanView, "H"}};
+constexpr Item city_settings[] = {{"City settings...",MenuCommand::CitySettings}, {"Road editor...",MenuCommand::RoadEditor}};
+constexpr Item race_items[] = {{"Create race...",MenuCommand::NewRace}, {"Edit / delete races...",MenuCommand::Races}};
+constexpr Item city_files[] = {{"Create new city...", MenuCommand::NewCity, "Ins"}, {"Open / edit selected", MenuCommand::EditCity, "Enter"}, {"Duplicate selected", MenuCommand::DuplicateCity, "Ctrl+D"}, {"Delete selected...", MenuCommand::DeleteCity, "Del"}, {"Back", MenuCommand::Quit, "Esc"}};
 struct Menu { const char* title; const Item* items; int count; };
 constexpr Menu home_menus[] = {{"File", home_files, int(std::size(home_files))}, {"Settings", home_settings, int(std::size(home_settings))}, {"Help", helps, int(std::size(helps))}};
 constexpr Menu game_menus[] = {{"File", files, int(std::size(files))}, {"Edit", edits, int(std::size(edits))}, {"Settings", settings, 3}, {"Help", helps, 2}};
 constexpr Menu editor_menus[] = {{"File", editor_files, int(std::size(editor_files))}, {"Edit", editor_edits, int(std::size(editor_edits))}, {"Tiles", tiles, int(std::size(tiles))},
-    {"Buildings", buildings, int(std::size(buildings))}, {"Objects", objects, int(std::size(objects))}, {"View", views, 6}, {"Settings", city_settings, int(std::size(city_settings))}, {"Help", helps, 2}};
+    {"Buildings", buildings, int(std::size(buildings))}, {"Objects", objects, int(std::size(objects))}, {"View", views, int(std::size(views))}, {"Settings", city_settings, int(std::size(city_settings))}, {"Races",race_items,int(std::size(race_items))}, {"Help", helps, 2}};
 constexpr Menu city_menus[] = {{"File", city_files, int(std::size(city_files))}};
 constexpr Menu play_editor_menus[] = {{"File", play_editor_files, int(std::size(play_editor_files))},
-    editor_menus[1], editor_menus[2], editor_menus[3], editor_menus[4], editor_menus[5], editor_menus[6], editor_menus[7]};
+    editor_menus[1], editor_menus[2], editor_menus[3], editor_menus[4], editor_menus[5], editor_menus[6], editor_menus[7], editor_menus[8]};
 constexpr Item creator_files[] = {{"New building",MenuCommand::NewBuilding}, {"Save building",MenuCommand::SaveBuilding,"Ctrl+S"}, {"Open Saved Building",MenuCommand::SavedBuildings},
     {"Save and close",MenuCommand::UseBuilding}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
 constexpr Menu creator_menus[] = {{"File",creator_files,int(std::size(creator_files))}, {"Edit",editor_edits,2}};
@@ -56,6 +57,7 @@ bool enabled(MenuCommand command, const MenuState& state) {
         case MenuCommand::Undo: return state.undo;
         case MenuCommand::Redo: return state.redo;
         case MenuCommand::PlayCity: return state.play;
+        case MenuCommand::StartRace: return state.race;
         case MenuCommand::EditBuilding: return state.building_selection;
         case MenuCommand::EditCar: return state.car_selection;
         case MenuCommand::ChoosePlayerCharacter: return state.choose_character;
@@ -65,13 +67,14 @@ bool enabled(MenuCommand command, const MenuState& state) {
     }
 }
 bool checked(MenuCommand command, const MenuState& state) {
+    if (command == MenuCommand::PanView) return state.tool==10;
     if (command == MenuCommand::TopView) return state.top;
     if (command == MenuCommand::Grid) return state.grid;
     if (command==MenuCommand::RoadBend || command==MenuCommand::RoadDiagonal) return state.tool==2 && state.diagonal==(command==MenuCommand::RoadDiagonal);
     if (command==MenuCommand::RaiseGround || command==MenuCommand::LowerGround) return state.tool==9 && state.elevation==(command==MenuCommand::RaiseGround ? 1 : -1);
     if (command>=MenuCommand::PlaceCar && command<=MenuCommand::PlaceBoeing) return state.tool==5 && state.vehicle==int(command)-int(MenuCommand::PlaceCar);
     if (command>=MenuCommand::TreesSparse && command<=MenuCommand::TreesDense) return state.tool==7 && state.density==int(command)-int(MenuCommand::TreesSparse)+1;
-    return state.tool >= 0 && int(command) == int(MenuCommand::SelectTool) + state.tool;
+    return state.tool >= 0 && state.tool < 10 && int(command) == int(MenuCommand::SelectTool) + state.tool;
 }
 Rectangle title_rect(MenuMode mode, int menu) {
     float x = 0;
@@ -133,7 +136,7 @@ bool MenuBar::close_mapping(const ControllerMapping& mapping, const std::filesys
     if (!save_pending(mapping, path)) return false;
     popup_ = MenuCommand::None; capturing_ = false; return true;
 }
-MenuCommand MenuBar::update(ControllerMapping& mapping, const std::filesystem::path& path, bool mouse_enabled, const ControllerState& input) {
+MenuCommand MenuBar::update(ControllerMapping& mapping, const std::filesystem::path& path, bool mouse_enabled, const ControllerState& input, const MenuState& state) {
     interacted_ = false;
     devices_.clear();
     for (const auto& pad : input.pads) if (pad.connected) {
@@ -207,7 +210,7 @@ MenuCommand MenuBar::update(ControllerMapping& mapping, const std::filesystem::p
         } else if (IsKeyPressed(KEY_ENTER) || (click && hit(button_rect(4)))) close_mapping(mapping, path, true);
         return MenuCommand::None;
     }
-    const auto command = update({}, mouse_enabled);
+    const auto command = update(state, mouse_enabled);
     if (command == MenuCommand::Controllers || command == MenuCommand::Controls || command == MenuCommand::About) { show(command); return MenuCommand::None; }
     return command;
 }
@@ -286,8 +289,8 @@ void MenuBar::draw(const MenuState& state) const {
     DrawLine(0, menu_height - 1, GetScreenWidth(), menu_height - 1, ui::highlight);
     for (int i = 0; i < menu_count(mode_); ++i) {
         const auto r = title_rect(mode_, i);
-        if (dropdown_ == i) ui::draw_panel(r, true);
-        text(menus(mode_)[i].title, r.x + 16, 6, 19);
+        if (dropdown_ == i) DrawRectangleRec(r,blue);
+        text(menus(mode_)[i].title, r.x + 16, 6, 19,dropdown_ == i ? ui::highlight : ink);
     }
     if (dropdown_ >= 0) {
         const auto& menu = menus(mode_)[dropdown_];
@@ -298,8 +301,8 @@ void MenuBar::draw(const MenuState& state) const {
         }
     }
 }
-void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path&) const {
-    draw();
+void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path&, const MenuState& state) const {
+    draw(state);
     if (mode_ == MenuMode::Game && dropdown_ == 2) {
         const auto r = item_rect(mode_, dropdown_, 2);
         text(mapping.auto_lock ? "Aim mode: Auto lock" : "Aim mode: Free aim", r.x + 28, r.y + 7, 17, item_ == 2 ? ui::highlight : ink);
@@ -315,8 +318,9 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         EndScissorMode();
         for (int i = 0; i < int(action_groups.size()); ++i) {
             const auto tab = group_rect(i);
-            ui::draw_button(tab, i == group_, i == group_);
-            text(action_groups[i].label, tab.x + 10, tab.y + 5, 16);
+            const bool pressed = hit(tab) && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+            ui::draw_button(tab, pressed, i == group_);
+            text(action_groups[i].label, tab.x + 10 + pressed, tab.y + 5 + pressed, 16);
         }
         text("ACTION", r.x + 20, r.y + 132, 16, ui::title_blue);
         text(capturing_ ? "WAITING FOR INPUT..." : "BINDINGS", r.x + 456, r.y + 132, 16, ui::title_blue);
@@ -328,13 +332,15 @@ void MenuBar::draw(const ControllerMapping& mapping, const std::filesystem::path
         for (int i = 0; i < visible_rows(); ++i) {
             if (first + i < group_end) {
                 auto row = row_rect(i, false);
-                if (first + i == selected_) DrawRectangleRec(row, selected);
-                text(action_labels[first + i], row.x + 6, row.y + 5, 16, first + i == selected_ ? ui::highlight : ink);
+                const bool pressed=hit(row) && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+                ui::draw_button(row,pressed,first+i==selected_);
+                text(action_labels[first + i], row.x + 6 + pressed, row.y + 5 + pressed, 16,ink);
             }
             if (binding_first + i < int(list.size())) {
                 auto row = row_rect(i, true);
-                if (binding_first + i == binding_) DrawRectangleRec(row, selected);
-                text(binding_label(list[binding_first + i]).c_str(), row.x + 6, row.y + 5, 16, binding_first + i == binding_ ? ui::highlight : ink);
+                const bool pressed=hit(row) && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+                ui::draw_button(row,pressed,binding_first+i==binding_);
+                text(binding_label(list[binding_first + i]).c_str(), row.x + 6 + pressed, row.y + 5 + pressed, 16,ink);
             }
         }
         if (list.empty()) text("Unbound", r.x + 462, r.y + 159, 16, ui::disabled);

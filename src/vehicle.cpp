@@ -1472,6 +1472,16 @@ void VehicleDamage::repair() {
 void Car::take_damage(float amount, bool by_player) { damage_.take_damage(amount, position(), by_player); }
 void Car::repair() { damage_.repair(); }
 
+bool Car::can_spawn_at(Vec3 center, Quat rotation) const {
+    JPH::BoxShape shape(body_size() / 2, .04f);
+    JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> hits;
+    world_.impl_->system.GetNarrowPhaseQuery().CollideShape(&shape, Vec3::sOne(),
+        JPH::RMat44::sRotationTranslation(rotation, center + rotation * body_offset()), {}, center,
+        hits, {}, {}, JPH::IgnoreSingleBodyFilter(body_));
+    for (const auto& hit : hits.mHits) if (hit.mPenetrationDepth > .005f) return false;
+    return true;
+}
+
 void Car::update_wheel_mounts() {
     const float half_track = tuning_.track_width / 2, half_wheelbase = tuning_.wheelbase / 2;
     for (std::size_t i = 0; i < wheels_.size(); ++i) {

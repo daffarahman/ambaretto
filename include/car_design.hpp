@@ -22,6 +22,7 @@ struct CarDesign {
     static bool load(const std::filesystem::path& path, CarDesign& design, std::string& error);
 };
 std::vector<CarDesign> saved_cars(const std::filesystem::path& directory, std::string& error);
+std::optional<CarDesign> choose_play_car(const std::filesystem::path& directory);
 std::vector<std::string> car_models(const std::filesystem::path& directory, std::string& error);
 std::optional<CarDesign> car_builder(CarDesign design, const std::filesystem::path& directory,
     const std::string& screenshot = {}, std::vector<CarDesign>* saved_designs = nullptr);

@@ -97,6 +97,7 @@ public:
     CarType type() const { return type_; }
     void step(Input input, float dt = fixed_step);
     void reset(const Vec3& center_of_mass, float yaw = 0);
+    bool can_spawn_at(Vec3 center, Quat rotation = Quat::sIdentity()) const;
     void restore_motion(Vec3 position, Quat rotation, Vec3 velocity);
     Vec3 position() const;
     Vec3 velocity() const;

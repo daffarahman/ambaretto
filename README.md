@@ -174,7 +174,7 @@ Reconfiguration updates existing cached settings and rebuilds the affected objec
 
 ## First launch
 
-Choose **Create / edit** to make a city, building, car, or character. A playable city needs a player spawn and a valid saved Player character. The [full guide](docs/GUIDE.md#city-builder) explains the workflow.
+Choose **Create / edit** to make a city, building, car, or character. **Play** lets you choose a city and a mode: **Free roam** needs a spawn and valid Player character; **Car only** needs a spawn and a saved car, keeps you in that car, and respawns it after destruction. The [full guide](docs/GUIDE.md#city-builder) explains the workflow.
 
 CMake copies `assets/` beside the executable automatically. Saved cities and designs also live beside the executable, so keep those folders when moving or backing up a build.
 

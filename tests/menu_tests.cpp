@@ -50,6 +50,8 @@ int main(int argc, char** argv) {
         for (int i = 0; i<int(std::size(tile_actions)); ++i) dispatch(2,i,tile_actions[i]);
         dispatch(3,0,MenuCommand::BuildingTool); dispatch(3,1,MenuCommand::BuildingCreator);
         dispatch(3,4,MenuCommand::SavedBuildings);
+        dispatch(3,5,MenuCommand::PlainBuilding);
+        dispatch(5,6,MenuCommand::PanView);
         const auto dispatch_object = [&](int group,int item,MenuCommand expected) {
             editor.open(4); MenuInput move; move.vertical=group; editor.update(state,move);
             MenuInput accept; accept.enter=true;
@@ -61,6 +63,8 @@ int main(int argc, char** argv) {
         dispatch_object(1,1,MenuCommand::CharacterCreator); dispatch_object(1,2,MenuCommand::ChoosePlayerCharacter);
         dispatch(0,5,MenuCommand::RefreshDesigns);
         dispatch(6,0,MenuCommand::CitySettings);
+        dispatch(6,1,MenuCommand::RoadEditor);
+        dispatch(7,0,MenuCommand::NewRace); dispatch(7,1,MenuCommand::Races);
         MenuBar character_creator(MenuMode::CharacterCreator); character_creator.open(); input={}; input.vertical=1; character_creator.update({},input); input={}; input.enter=true;
         require(character_creator.update({},input)==MenuCommand::SaveCharacter,"Character creator Save menu is missing");
         state.car_selection=true; dispatch_object(2,2,MenuCommand::EditCar); state.car_selection=false;
@@ -129,6 +133,10 @@ int main(int argc, char** argv) {
         dispatch_menu(MenuMode::Main,2,1,MenuCommand::About);
         dispatch_menu(MenuMode::Game,0,1,MenuCommand::SaveCity);
         dispatch_menu(MenuMode::Game,0,2,MenuCommand::Restart);
+        dispatch_menu(MenuMode::Game,0,3,MenuCommand::StartRace);
+        MenuBar race_menu; race_menu.open(); input={}; input.vertical=3; state.race=false; race_menu.update(state,input); input={}; input.enter=true;
+        require(race_menu.update(state,input)==MenuCommand::None && race_menu.blocking(),"Start race was enabled on foot");
+        state.race=true; require(race_menu.update(state,input)==MenuCommand::StartRace,"Start race did not enable while driving");
         dispatch_menu(MenuMode::Game,1,0,MenuCommand::EditMap);
         dispatch_menu(MenuMode::PlayEditor,0,0,MenuCommand::SaveCity);
         dispatch_menu(MenuMode::PlayEditor,0,2,MenuCommand::PlayCity);
@@ -161,7 +169,10 @@ int main(int argc, char** argv) {
         cities.open(); input={}; input.vertical=2; cities.update({},input); input={}; input.enter=true;
         require(cities.update({},input)==MenuCommand::None && cities.blocking(),"Duplicate city was enabled without a selection");
         require(cities.update(state,input)==MenuCommand::DuplicateCity,"Cities File > Duplicate did not dispatch");
-        dispatch_menu(MenuMode::Cities,0,3,MenuCommand::Quit);
+        cities.open(); input={}; input.vertical=3; cities.update({},input); input={}; input.enter=true;
+        require(cities.update({},input)==MenuCommand::None && cities.blocking(),"Delete city was enabled without a selection");
+        require(cities.update(state,input)==MenuCommand::DeleteCity,"Cities File > Delete did not dispatch");
+        dispatch_menu(MenuMode::Cities,0,4,MenuCommand::Quit);
         cities.open(); input={}; input.vertical=-1; cities.update({},input); input={}; input.enter=true;
         require(cities.update({},input)==MenuCommand::Quit,"Back was not the last Cities File action");
         MenuBar game; game.open(2);
@@ -192,6 +203,9 @@ int main(int argc, char** argv) {
             EndDrawing();
         }
         Image image = LoadImageFromScreen();
+        require(same(GetImageColor(image,0,16),ui::face),"Idle menu title did not stay flat");
+        const int tiles_x=ui::measure_text("File",19)+ui::measure_text("Edit",19)+64;
+        require(same(GetImageColor(image,tiles_x,16),ui::title_blue),"Open menu title lost its flat selection highlight");
         require(same(GetImageColor(image, 1000, 12), ui::face), "Menu bar lost its Windows 95 gray palette");
         require(same(GetImageColor(image, 1000, 580), ui::desktop), "Desktop lost its gray palette");
         require(same(GetImageColor(image, 800, 76), ui::title_blue), "Window title bar was not navy blue");

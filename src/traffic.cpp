@@ -104,7 +104,7 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment,const std::
     const auto create = [&]() { auto car = std::make_unique<Car>(world); if (!civilian.empty()) car->set_design(civilian[design_index++%civilian.size()]); return car; };
     if (environment.city()) {
         const City& city = *environment.city();
-        routes_ = city.traffic_routes();
+        routes_ = city.traffic_routes(city.road_style.sidewalks ? 3.f : 2.38f);
         for (const auto& node : city.road_network()) if (node.edges.size()>=3) intersections_.push_back({node.center(),node.half_size()});
         // ponytail: at most 200 NPCs, with the existing 48-car physics pool; spatial route indexing can raise this later.
         int remaining = 200;
@@ -182,6 +182,14 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment,const std::
 bool Traffic::is_npc(const Car* car) const {
     for (const auto& vehicle : cars_) if (vehicle.car.get() == car) return vehicle.npc;
     return false;
+}
+Car& Traffic::add_racer(const CarDesign& design) {
+    TrafficCar vehicle; vehicle.car = std::make_unique<Car>(world_,design);
+    vehicle.npc = false; vehicle.racing = true; vehicle.car->set_simulated(false);
+    cars_.push_back(std::move(vehicle)); return *cars_.back().car;
+}
+void Traffic::remove_racers() {
+    cars_.erase(std::remove_if(cars_.begin(),cars_.end(),[](const auto& car){return car.racing;}),cars_.end());
 }
 bool Traffic::steal(Car& car) {
     if (car.destroyed()) return false;
@@ -314,7 +322,7 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         vehicle.horn_time = std::max(0.0f, vehicle.horn_time - dt);
         vehicle.horn_cooldown = std::max(0.0f, vehicle.horn_cooldown - dt);
         vehicle.pass_retry = std::max(0.0f, vehicle.pass_retry - dt);
-        if (&car == controlled) continue;
+        if (&car == controlled || vehicle.racing) continue;
         if (car.destroyed()) { if (car.simulated()) car.step({}, dt); continue; }
         if (!vehicle.npc) { if (car.simulated()) car.step({0, 0, false, true}, dt); continue; }
         const auto& route = routes_[vehicle.route];

@@ -18,6 +18,7 @@
 #include "minimap.hpp"
 #include "hud_dials.hpp"
 #include "play_session.hpp"
+#include "race.hpp"
 #include <string>
 #include <raylib.h>
 #include <rlgl.h>
@@ -37,7 +38,7 @@ Vector3 lerp(Vector3 a, Vector3 b, float t) {
     return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
 }
 
-int choose_progress(const ambaretto::City& city, const std::string& error) {
+int choose_progress(const ambaretto::City& city, const std::string& error, const ambaretto::PlaySession& saved) {
     EnableCursor(); SetWindowTitle("Ambaretto - Continue or start again");
     int choice = error.empty() ? 0 : 1, frames = 0;
     const char* labels[] = {"Continue", "Start from beginning", "Back"};
@@ -57,10 +58,13 @@ int choose_progress(const ambaretto::City& city, const std::string& error) {
         BeginDrawing(); ambaretto::ui::draw_desktop(); ambaretto::ui::draw_window(panel,city.name.c_str());
         ambaretto::ui::draw_text("Continue where you left off?",int(panel.x+24),int(panel.y+50),20,ambaretto::ui::ink);
         ambaretto::ui::draw_text("Start from beginning uses the saved map's spawn and start time.",int(panel.x+24),int(panel.y+86),16,ambaretto::ui::ink);
-        ambaretto::ui::draw_text("Your map edits are kept.",int(panel.x+24),int(panel.y+112),16,ambaretto::ui::ink);
+        const auto details = error.empty() ? saved.play_mode == ambaretto::PlayMode::CarOnly
+            ? "Car only / " + saved.car_design->name : std::string("Free roam / On foot, cars and aircraft") : "Your map edits are kept.";
+        ambaretto::ui::draw_text(details.c_str(),int(panel.x+24),int(panel.y+112),16,ambaretto::ui::ink);
         if (!error.empty()) ambaretto::ui::draw_text(error.c_str(),int(panel.x+24),int(panel.y+148),14,ambaretto::ui::title_blue);
         for (int i = 0; i < 3; ++i) {
-            ambaretto::ui::draw_button(buttons[i],false,choice == i,i != 0 || error.empty());
+            const bool pressed = frames > 0 && IsWindowFocused() && CheckCollisionPointRec(GetMousePosition(),buttons[i]) && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+            ambaretto::ui::draw_button(buttons[i],pressed,choice == i,i != 0 || error.empty());
             ambaretto::ui::draw_text(labels[i],int(buttons[i].x+14),int(buttons[i].y+12),18,i == 0 && !error.empty() ? ambaretto::ui::shadow : ambaretto::ui::ink);
         }
         EndDrawing(); ++frames;
@@ -68,7 +72,75 @@ int choose_progress(const ambaretto::City& city, const std::string& error) {
     return -1;
 }
 
+std::optional<ambaretto::PlayMode> choose_play_mode(const ambaretto::City& city) {
+    EnableCursor(); SetWindowTitle("Ambaretto - Choose play mode");
+    ambaretto::CharacterRenderer renderer; std::string reason;
+    const bool free_roam = renderer.available(city, reason);
+    int selection = free_roam ? 0 : 1, frames = 0;
+    const char* labels[] = {"Free roam", "Car only", "Race", "Back"};
+    const char* descriptions[] = {"Explore on foot, enter cars, and fly aircraft.",
+        "Choose a car. Stay behind the wheel. Respawn in the same car.", "Choose a road race and compete against four random civilian cars."};
+    while (!WindowShouldClose()) {
+        const Rectangle panel{(GetScreenWidth()-800)/2.f,(GetScreenHeight()-458)/2.f,800,458};
+        const Rectangle rows[] = {{panel.x+24,panel.y+94,752,72},{panel.x+24,panel.y+180,752,72},{panel.x+24,panel.y+266,752,72},{panel.x+24,panel.y+392,208,40}};
+        int accepted = -1;
+        if (frames > 0 && IsWindowFocused()) {
+            if (IsKeyPressed(KEY_ESCAPE)) return {};
+            if (IsKeyPressed(KEY_UP)) selection = (selection+3)%4;
+            if (IsKeyPressed(KEY_DOWN)) selection = (selection+1)%4;
+            if (IsKeyPressed(KEY_ENTER)) accepted = selection;
+            for (int i = 0; i < 4; ++i) if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(),rows[i])) accepted = selection = i;
+        }
+        if (accepted == 3) return {};
+        if (accepted == 1 || accepted == 2 || (accepted == 0 && free_roam)) return ambaretto::PlayMode(accepted);
+        BeginDrawing(); ambaretto::ui::draw_desktop(); ambaretto::ui::draw_window(panel,"Choose play mode");
+        ambaretto::ui::draw_window_close(panel);
+        if (frames > 0 && IsWindowFocused() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(),ambaretto::ui::window_close(panel))) { EndDrawing(); return {}; }
+        ambaretto::ui::draw_text(city.name.c_str(),int(panel.x+24),int(panel.y+50),20,ambaretto::ui::ink);
+        for (int i = 0; i < 4; ++i) {
+            const bool enabled = i != 0 || free_roam;
+            const bool pressed = frames > 0 && IsWindowFocused() && CheckCollisionPointRec(GetMousePosition(),rows[i]) && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+            ambaretto::ui::draw_button(rows[i],pressed,selection == i,enabled);
+            ambaretto::ui::draw_text(labels[i],int(rows[i].x+16),int(rows[i].y+12),20,enabled ? ambaretto::ui::ink : ambaretto::ui::shadow);
+            if (i < 3) ambaretto::ui::draw_text(descriptions[i],int(rows[i].x+16),int(rows[i].y+43),16,enabled ? ambaretto::ui::ink : ambaretto::ui::shadow);
+        }
+        ambaretto::ui::draw_text(free_roam ? "Up / Down: select   Enter: play   Esc: back"
+            : "Free roam needs a valid Player character selected in the city editor.",int(panel.x+24),int(panel.y+358),16,ambaretto::ui::title_blue);
+        EndDrawing(); ++frames;
+    }
+    return {};
+}
+
 struct SkidMark { ambaretto::Vec3 from, to; };
+int race_result(const ambaretto::Race& race, bool free_roam) {
+    EnableCursor(); SetWindowTitle("Ambaretto - Race finished");
+    int selection=free_roam ? 0 : 1; bool interactive=false;
+    const char* labels[]={"Continue Free roam","Continue Car only","Start another race","Main menu"};
+    while (!WindowShouldClose()) {
+        const Rectangle panel{(GetScreenWidth()-760)/2.f,(GetScreenHeight()-400)/2.f,760,400};
+        const bool active=interactive && IsWindowFocused(); int accepted=-1;
+        if (active) {
+            if (IsKeyPressed(KEY_DOWN)) selection=(selection+1)%4;
+            if (IsKeyPressed(KEY_UP)) selection=(selection+3)%4;
+            if (IsKeyPressed(KEY_ENTER)) accepted=selection;
+            if (IsKeyPressed(KEY_ESCAPE)) accepted=3;
+        }
+        BeginDrawing(); ambaretto::ui::draw_desktop(); ambaretto::ui::draw_window(panel,race.failed() ? "Race ended" : "Congratulations!");
+        const std::string result=race.failed() ? "Your car could not finish this race." : "Finished #"+std::to_string(race.progress().place)+" of 5 / "+std::to_string(int(race.progress().time))+" seconds";
+        ambaretto::ui::draw_text(result.c_str(),int(panel.x+24),int(panel.y+54),20,ambaretto::ui::ink);
+        for (int i = 0; i < 4; ++i) {
+            const Rectangle row{panel.x+24,panel.y+108+i*62,712,48}; const bool enabled=i!=0 || free_roam;
+            const bool hit=active && CheckCollisionPointRec(GetMousePosition(),row);
+            ambaretto::ui::draw_button(row,hit && IsMouseButtonDown(MOUSE_BUTTON_LEFT),selection==i,enabled);
+            ambaretto::ui::draw_text(labels[i],int(row.x+16),int(row.y+15),18,enabled ? ambaretto::ui::ink : ambaretto::ui::disabled);
+            if (hit && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) accepted=i;
+        }
+        if (!free_roam) ambaretto::ui::draw_text("Free roam needs a Player character in the map editor.",int(panel.x+24),int(panel.y+372),15,ambaretto::ui::ink);
+        EndDrawing(); interactive=true;
+        if (accepted>=0 && (accepted!=0 || free_roam)) return accepted;
+    }
+    return 3;
+}
 struct Scene {
     const ambaretto::Environment& environment;
     std::vector<ambaretto::CarDesign> designs;
@@ -81,6 +153,7 @@ struct Scene {
     ambaretto::Pedestrians pedestrians{world, environment, &characters};
     ambaretto::Police police{world, environment, &traffic, &pedestrians, &designs, &characters};
     ambaretto::Player player{world, car, environment, &plane, &traffic, &pedestrians, &aircraft, &police};
+    std::unique_ptr<ambaretto::Race> race;
     std::vector<SkidMark> marks;
     std::size_t next_mark = 0;
     std::array<ambaretto::Vec3, 4> last_skid{};
@@ -100,6 +173,7 @@ struct Scene {
     }
     void reset() {
         police.clear();
+        if (race) { race->recover_player(); return; }
         if (environment.city() && !player.flying() && player.on_foot()) {
             player.respawn_on_foot(environment.spawn()-ambaretto::Vec3(0,.48f,0));
             marks.clear(); next_mark = 0; last_valid.fill(false); return;
@@ -497,16 +571,21 @@ int main(int argc, char** argv) {
         bool direct_city = !city_path.empty();
         auto map_directory = direct_city ? std::filesystem::absolute(city_path).parent_path() : cities_directory;
         std::optional<ambaretto::PlaySession> pending_session;
-        bool edit_requested = false, fresh_start = false;
+        auto play_mode = ambaretto::PlayMode::FreeRoam;
+        std::optional<ambaretto::CarDesign> selected_play_car;
+        std::string selected_race;
+        std::optional<ambaretto::PlayMode> race_return_mode;
+        bool edit_requested = false, fresh_start = false, create_race_requested = false, race_picker_requested = false, standalone_race_requested = false;
         if (direct_city) {
             std::string error;
             if (!ambaretto::City::load(city_path,selected_city,error)) { TraceLog(LOG_ERROR,"%s",error.c_str()); direct_city = false; }
-            else if (!selected_city.playable()) preview_editor = true;
+            else if (!selected_city.spawn) preview_editor = true;
         }
         while (!preview_building && !preview_car && !preview_character && !preview_settings && !WindowShouldClose()) {
         if (edit_requested) {
             edit_requested = false;
-            direct_city = ambaretto::edit_current_city(selected_city,map_directory);
+            direct_city = ambaretto::edit_current_city(selected_city,map_directory,play_mode != ambaretto::PlayMode::FreeRoam && race_return_mode != ambaretto::PlayMode::FreeRoam,create_race_requested);
+            create_race_requested=false;
             if (!direct_city) { pending_session.reset(); continue; }
         }
         if (cities_list || preview_editor || start_graphics || start_controllers) {
@@ -531,11 +610,36 @@ int main(int argc, char** argv) {
             if (std::filesystem::exists(progress_path,ec)) {
                 ambaretto::PlaySession saved; std::string error;
                 if (ambaretto::PlaySession::load(progress_path,saved,error) && saved.city_id != selected_city.id) error = "Progress belongs to a different map.";
-                const int choice = choose_progress(selected_city,error);
+                if (error.empty() && saved.play_mode == ambaretto::PlayMode::CarOnly) {
+                    ambaretto::CarRenderer renderer;
+                    if (!renderer.available(*saved.car_design,error)) error = "Saved car models unavailable. Start again to choose another car.";
+                }
+                const int choice = choose_progress(selected_city,error,saved);
                 if (choice < 0) continue;
                 if (choice == 0) pending_session = std::move(saved);
             }
         }
+        if (!pending_session && !fresh_start && screenshot.empty()) {
+            bool ready = false;
+            while (const auto mode = choose_play_mode(selected_city)) {
+                if (*mode == ambaretto::PlayMode::Race) {
+                    int chosen=ambaretto::choose_race(selected_city);
+                    while (chosen==-2) {
+                        if (!ambaretto::edit_current_city(selected_city,map_directory,true,true)) break;
+                        chosen=ambaretto::choose_race(selected_city);
+                    }
+                    if (chosen<0) continue;
+                    selected_race=selected_city.races[chosen].name; race_return_mode.reset();
+                }
+                if (*mode != ambaretto::PlayMode::FreeRoam) {
+                    selected_play_car = ambaretto::choose_play_car(map_directory.parent_path()/"cars");
+                    if (!selected_play_car) continue;
+                } else selected_play_car.reset();
+                play_mode = *mode; ready = true; break;
+            }
+            if (!ready) continue;
+        }
+        if (pending_session) { play_mode = pending_session->play_mode; selected_play_car = pending_session->car_design; }
         fresh_start = false;
         SetWindowTitle(("Ambaretto - "+selected_city.name).c_str());
         day_night = ambaretto::DayNight();
@@ -549,7 +653,7 @@ int main(int argc, char** argv) {
         std::string character_error;
         auto characters=ambaretto::saved_characters(cities_directory.parent_path()/"characters",character_error);
         selected_city.update_player_character(characters);
-        if (!character_renderer.available(selected_city,character_error)) {
+        if (play_mode == ambaretto::PlayMode::FreeRoam && !character_renderer.available(selected_city,character_error)) {
             TraceLog(LOG_WARNING,"%s",character_error.c_str());
             if (!screenshot.empty()) break;
             direct_city=true; preview_editor=true; continue;
@@ -578,6 +682,7 @@ int main(int argc, char** argv) {
         std::string continue_notice;
         if (pending_session) {
             if (pending_session->car_design && !car_renderer.available(*pending_session->car_design,car_error)) {
+                if (play_mode == ambaretto::PlayMode::CarOnly) throw std::runtime_error("Saved car models unavailable. Start again to choose another car.");
                 pending_session->mode = ambaretto::EntryVehicle::None;
                 continue_notice = "Saved car models unavailable; continued on foot.";
             }
@@ -586,6 +691,16 @@ int main(int argc, char** argv) {
             if (continue_notice.empty()) continue_notice = restored;
             if (!time_override.empty()) day_night.set_time(time_override);
             pending_session.reset();
+        } else if (play_mode != ambaretto::PlayMode::FreeRoam) {
+            scene->car.set_design(*selected_play_car);
+            scene->player.set_play_mode(ambaretto::PlayMode::CarOnly);
+            if (play_mode == ambaretto::PlayMode::Race) {
+                const auto found=std::find_if(selected_city.races.begin(),selected_city.races.end(),[&](const auto& race){return race.name==selected_race;});
+                if (found==selected_city.races.end()) { fresh_start=false; continue; }
+                scene->race=ambaretto::Race::start(scene->world,environment,scene->traffic,scene->player.car(),*found,scene->designs,car_error);
+                if (!scene->race) throw std::runtime_error(car_error);
+                scene->player.set_play_mode(ambaretto::PlayMode::Race);
+            }
         }
         ambaretto::ThirdPersonCamera orbit;
         ambaretto::AimAssist aim_assist;
@@ -635,12 +750,13 @@ int main(int argc, char** argv) {
         double accumulator = 0;
         float notice_time = mapping_error.empty() ? 0 : 8;
         std::string notice = mapping_error;
-        if (scene->designs.empty()) { notice="No cars available. Create a car in the map editor's Objects menu."; notice_time=10; }
+        if (scene->designs.empty() && !scene->player.car().design()) { notice="No cars available. Create a car in the map editor's Objects menu."; notice_time=10; }
         if (!car_update_error.empty()) { notice="Map car update rejected: "+car_update_error; notice_time=10; }
         if (!graphics_status.empty()) { notice = "Graphics defaults in use: " + graphics_status; notice_time = 8; TraceLog(LOG_WARNING, "%s", notice.c_str()); }
         if (!continue_notice.empty()) { notice = continue_notice; notice_time = 5; }
         float progress_save_time = 0;
         const auto save_progress = [&]() {
+            if (scene->race) return true;
             std::string error;
             if (!ambaretto::PlaySession::capture(scene->player,day_night).save(map_directory,error)) {
                 notice = error; notice_time = 8; TraceLog(LOG_WARNING,"%s",error.c_str()); return false;
@@ -717,7 +833,9 @@ int main(int argc, char** argv) {
                     captured = false; resume_capture = false;
                     tuning_panel.cancel_drag(); orbit_dragging = false; map_dragging = false; discard_mouse = true;
                 }
-                const auto command = menu.update(controls, mapping_path, !captured, controller_input);
+                ambaretto::MenuState menu_state; menu_state.race=scene->player.driving() && !scene->race;
+                auto command = menu.update(controls, mapping_path, !captured, controller_input,menu_state);
+                if (race_picker_requested && !first_game_frame) { command=MenuCommand::StartRace; race_picker_requested=false; }
                 if (menu.blocking() || menu.interacted()) {
                     mode_changed = true; jump_pending = false; discard_mouse = true;
                     tuning_panel.cancel_drag(); orbit_dragging = false; map_dragging = false;
@@ -726,17 +844,46 @@ int main(int argc, char** argv) {
                 if (command == MenuCommand::Cities || command == MenuCommand::EditMap || command == MenuCommand::Restart) {
                     if (!save_progress()) continue;
                     if (command == MenuCommand::EditMap) {
-                        pending_session = ambaretto::PlaySession::capture(scene->player,day_night);
+                        if (scene->race) { play_mode=ambaretto::PlayMode::Race; selected_race=scene->race->map().name; selected_play_car=scene->player.car().design(); fresh_start=true; }
+                        else pending_session = ambaretto::PlaySession::capture(scene->player,day_night);
                         edit_requested = true;
                     }
-                    if (command == MenuCommand::Restart) { fresh_start = true; direct_city = true; }
+                    if (command == MenuCommand::Restart) {
+                        play_mode = scene->player.play_mode(); selected_play_car = scene->player.car().design();
+                        fresh_start = true; direct_city = true;
+                    }
                     cities_requested = true; EnableCursor(); break;
+                }
+                if (command == MenuCommand::StartRace) {
+                    if (!scene->player.driving()) { notice="Enter a car before starting a race."; notice_time=5; }
+                    else if (scene->race) { notice="Finish the current race first."; notice_time=4; }
+                    else {
+                        const int chosen=ambaretto::choose_race(selected_city);
+                        if (chosen==-2 && (standalone_race_requested || save_progress())) {
+                            pending_session=ambaretto::PlaySession::capture(scene->player,day_night); play_mode=scene->player.play_mode();
+                            edit_requested=create_race_requested=race_picker_requested=cities_requested=true; EnableCursor(); break;
+                        }
+                        if (chosen>=0 && (standalone_race_requested || save_progress())) {
+                            auto race=ambaretto::Race::start(scene->world,environment,scene->traffic,scene->player.car(),selected_city.races[chosen],scene->designs,notice);
+                            if (race) {
+                                if (standalone_race_requested) race_return_mode.reset(); else race_return_mode=scene->player.play_mode();
+                                selected_race=selected_city.races[chosen].name; scene->race=std::move(race);
+                                scene->player.set_play_mode(ambaretto::PlayMode::Race); scene->police.clear();
+                                map_open=tuning_open=false; snap_camera();
+                            }
+                            else notice_time=8;
+                        }
+                        SetWindowTitle(("Ambaretto - "+selected_city.name).c_str());
+                        standalone_race_requested=false;
+                    }
+                    mode_changed=true; accumulator=0; discard_mouse=true; captured=!map_open && !tuning_open;
+                    if (captured) DisableCursor(); else EnableCursor();
                 }
                 if (command == MenuCommand::SaveCity || (IsWindowFocused() && !menu.blocking() &&
                     (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_S))) {
                     std::string error;
                     if (!selected_city.save(map_directory,error)) { notice = error; notice_time = 8; }
-                    else if (save_progress()) { notice = "Map and progress saved."; notice_time = 4; }
+                    else if (save_progress()) { notice = scene->race ? "Map saved. Active races restart when you leave." : "Map and progress saved."; notice_time = 4; }
                     mode_changed = true;
                 }
                 if (command == MenuCommand::AimMode) {
@@ -864,7 +1011,8 @@ int main(int argc, char** argv) {
                         notice = result == ambaretto::Interaction::Entered ? (scene->player.flying() ? "Entered plane - increase throttle to take off" :
                             stealing ? "Pulled driver out - stole traffic car" : "Entered car") : scene->player.character().ragdolling()
                             ? "Jumped out - brace for impact" : "On foot";
-                    } else if (result == ambaretto::Interaction::Blocked) notice = "Exit blocked - move the vehicle to an open space";
+                    } else if (scene->player.play_mode() != ambaretto::PlayMode::FreeRoam) notice = "Stay in your car. R / D-pad up: recover.";
+                    else if (result == ambaretto::Interaction::Blocked) notice = "Exit blocked - move the vehicle to an open space";
                     else notice = "Move closer to a car or plane to enter";
                     notice_time = 2.5f;
                 }
@@ -946,7 +1094,13 @@ int main(int argc, char** argv) {
                 walking.jump = jump_pending;
                 scene->police.set_view({camera.position.x, camera.position.y, camera.position.z},
                     {camera.target.x - camera.position.x, camera.target.y - camera.position.y, camera.target.z - camera.position.z});
-                scene->player.step(driving, walking, ambaretto::fixed_step, flight);
+                const bool was_respawning = scene->player.respawn_remaining() > 0;
+                if (scene->race) scene->race->step();
+                scene->player.step(scene->race && (scene->race->countdown()>0 || scene->race->done() || scene->race->failed()) ? ambaretto::Input{0,0,false,true} : driving, walking, ambaretto::fixed_step, flight);
+                if (scene->race) scene->race->finish();
+                if (was_respawning && scene->player.respawn_remaining() == 0) {
+                    scene->police.clear(); snap_camera(); notice = "Respawned in your selected car."; notice_time = 3;
+                }
                 if (active && !weapon_wheel && !suppress_fire && screenshot.empty() && scene->player.can_shoot()
                     && scene->player.weapons().selected() != ambaretto::WeaponType::Unarmed && controls.value(Action::Fire) > .5f) {
                     const auto ray = GetScreenToWorldRay({GetScreenWidth() * .5f, GetScreenHeight() * .5f}, camera);
@@ -986,6 +1140,20 @@ int main(int argc, char** argv) {
                     if (arrest_time > 3) { scene->respawn_on_foot(); snap_camera(); arrest_time = 0; suppress_fire = true; }
                 } else arrest_time = 0;
                 accumulator -= double(ambaretto::fixed_step);
+                if (scene->race && (scene->race->done() || scene->race->failed())) { accumulator=0; break; }
+            }
+            if (scene->race && (scene->race->done() || scene->race->failed())) {
+                const bool failed=scene->race->failed();
+                const int place=scene->race->progress().place;
+                const int result=race_return_mode ? int(*race_return_mode) : race_result(*scene->race,character_renderer.available(selected_city,character_error));
+                scene->race.reset(); race_return_mode.reset();
+                if (result==3) { cities_requested=true; EnableCursor(); break; }
+                scene->player.set_play_mode(result==0 ? ambaretto::PlayMode::FreeRoam : ambaretto::PlayMode::CarOnly);
+                play_mode=scene->player.play_mode();
+                if (failed) scene->reset();
+                if (result==2) { race_picker_requested=true; standalone_race_requested=true; }
+                notice=failed ? "Race ended. Continue driving." : "Race finished #"+std::to_string(place)+" of 5. Continue driving."; notice_time=6;
+                captured=true; DisableCursor(); discard_mouse=true; snap_camera(); SetWindowTitle(("Ambaretto - "+selected_city.name).c_str());
             }
             if (scene->world.take_player_kill()) kill_flash = .18f;
             const auto target = focus();
@@ -1152,6 +1320,11 @@ int main(int argc, char** argv) {
                     draw_weapon_model({pickup.position + ambaretto::Vec3(0, .08f, 0), ambaretto::Quat::sRotation(ambaretto::Vec3::sAxisZ(), 1.57079633f)}, pickup.weapon);
                 }
                 EndShaderMode();
+                if (scene->race) {
+                    const auto p=scene->race->checkpoint();
+                    DrawCylinderWires(render_vector(p),4,4,4,20,YELLOW);
+                    DrawLine3D(render_vector(p),render_vector(p+ambaretto::Vec3(0,12,0)),YELLOW);
+                }
                 draw_vehicle_damage(scene->car, car_renderer, view, nearby_distance);
                 for (const auto& vehicle : scene->traffic.cars()) if (vehicle.car->simulated())
                     draw_vehicle_damage(*vehicle.car, car_renderer, view, nearby_distance);
@@ -1168,6 +1341,15 @@ int main(int argc, char** argv) {
                     {150, 150, 150, static_cast<unsigned char>(110 * kill_flash / .18f)});
                 draw_resume_prompt(captured || tuning_open || !screenshot.empty());
                 if (!tuning_open) scenery.minimap(scene->player.position(), scene->player.forward(), view, &scene->police, !scene->player.on_foot());
+                if (scene->race && !tuning_open) {
+                    const ambaretto::MinimapView minimap(GetScreenHeight(),scene->player.position(),scene->player.forward(),view,true);
+                    auto marker=minimap.project(scene->race->checkpoint());
+                    if (std::isfinite(marker.x) && std::isfinite(marker.y)) {
+                        marker.x=std::clamp(marker.x,minimap.bounds.x+8,minimap.bounds.x+minimap.bounds.width-8);
+                        marker.y=std::clamp(marker.y,minimap.bounds.y+8,minimap.bounds.y+minimap.bounds.height-8);
+                        DrawCircleV(marker,6,BLACK); DrawCircleV(marker,4,YELLOW);
+                    }
+                }
                 const auto region = scene->player.position();
                 if (!tuning_open) {
                     const auto bounds = ambaretto::MinimapView(GetScreenHeight(), region, scene->player.forward(), view).bounds;
@@ -1181,9 +1363,18 @@ int main(int argc, char** argv) {
                     if (scene->player.driving()) ambaretto::draw_speedometer(dial_center,
                         scene->player.car().velocity().Length() * 3.6f);
                     else if (scene->player.flying()) draw_info(TextFormat("%.0f km/h", scene->player.plane().velocity().Length() * 3.6f), info_y);
-                    const float health = scene->player.character().health();
+                    const bool car_only = scene->player.play_mode() != ambaretto::PlayMode::FreeRoam;
+                    const float health = car_only ? scene->player.car().health() : scene->player.character().health();
                     ambaretto::ui::draw_panel({26, float(ambaretto::menu_height + 18), 184, 16}, true);
                     DrawRectangle(28, ambaretto::menu_height + 20, int(180 * health / 100), 12, {0, 128, 0, 255});
+                    const char* health_label = scene->race ? "Race / Car health" : car_only ? "Car only / Car health" : "Free roam / Player health";
+                    ambaretto::ui::draw_panel({20,float(ambaretto::menu_height+36),float(ambaretto::ui::measure_text(health_label,16)+12),28});
+                    ambaretto::ui::draw_text(health_label,26,ambaretto::menu_height+40,16,ambaretto::ui::ink);
+                    if (car_only && scene->player.respawn_remaining() > 0) {
+                        DrawRectangle(0,ambaretto::menu_height,GetScreenWidth(),GetScreenHeight()-ambaretto::menu_height,{22,8,8,140});
+                        const char* text = TextFormat("Respawning in your car in %d",int(std::ceil(scene->player.respawn_remaining())));
+                        ambaretto::ui::draw_text(text,(GetScreenWidth()-ambaretto::ui::measure_text(text,30))/2,GetScreenHeight()/2-15,30,RAYWHITE);
+                    }
                     if (scene->player.on_foot()) {
                         if (scene->player.character().covering()) draw_info(scene->player.character().cover_peeking() ? "COVER - exposed while aiming"
                             : scene->player.character().cover_stance() == ambaretto::CoverStance::Crawling ? "COVER - crawling | Q / B: leave"
@@ -1228,7 +1419,21 @@ int main(int argc, char** argv) {
                 }
             }
             if (weapon_wheel) draw_weapon_wheel(wheel_choice, wheel_cursor);
-            menu.draw(controls, mapping_path);
+            if (scene->race && !map_open && !tuning_open) {
+                const auto& race=*scene->race; const auto& p=race.progress();
+                const Rectangle panel{float(GetScreenWidth()/2-240),44,480,68}; ambaretto::ui::draw_panel(panel);
+                const auto suffix=" / Lap "+std::to_string(p.lap+1)+"/"+std::to_string(race.map().laps)+" / #"+std::to_string(race.position())+" of 5";
+                auto name=race.map().name;
+                while (name.size()>1 && ambaretto::ui::measure_text((name+"..."+suffix).c_str(),18)>456) name.pop_back();
+                const auto info=name+(name.size()<race.map().name.size() ? "..." : "")+suffix;
+                ambaretto::ui::draw_text(info.c_str(),int(panel.x+12),int(panel.y+10),18,ambaretto::ui::ink);
+                const auto detail=race.countdown()>0 ? "Starting in "+std::to_string(int(std::ceil(race.countdown()))) : "Checkpoint "+(p.next ? std::to_string(p.next) : std::string("Start / finish"))+" / "+std::to_string(int(race.elapsed()))+" s";
+                ambaretto::ui::draw_text(detail.c_str(),int(panel.x+12),int(panel.y+38),17,ambaretto::ui::title_blue);
+                const auto target=GetWorldToScreen(render_vector(race.checkpoint()+ambaretto::Vec3(0,5,0)),camera);
+                if (target.x>0 && target.x<GetScreenWidth() && target.y>ambaretto::menu_height && target.y<GetScreenHeight()) ambaretto::ui::draw_text(p.next ? "CHECKPOINT" : "FINISH",int(target.x),int(target.y),18,YELLOW);
+            }
+            ambaretto::MenuState menu_state; menu_state.race=scene->player.driving() && !scene->race;
+            menu.draw(controls, mapping_path,menu_state);
             EndDrawing();
             first_game_frame = false; // Consume the key that returned from an editor or menu.
             if (!screenshot.empty() && ++rendered_frames >= 90) {
@@ -1243,6 +1448,7 @@ int main(int argc, char** argv) {
         if (!cities_requested) save_progress();
         map_open = tuning_open = false; start_menu = start_controllers = start_help = start_graphics = false;
         } catch (const std::exception& error) {
+            pending_session.reset(); fresh_start = false;
             TraceLog(LOG_ERROR,"Cannot open city: %s",error.what()); EnableCursor(); captured = false;
             std::vector<std::string> lines;
             std::string remaining = error.what();
@@ -1263,7 +1469,7 @@ int main(int argc, char** argv) {
                 const bool dismiss = frames>0 && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE)
                     || (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(),button)));
                 BeginDrawing(); ambaretto::ui::draw_desktop(); ambaretto::ui::draw_window(panel,"Cannot open city");
-                ambaretto::ui::draw_text("The city could not start. Rendering failed.",int(panel.x+24),int(panel.y+52),18,ambaretto::ui::ink);
+                ambaretto::ui::draw_text("The city could not start.",int(panel.x+24),int(panel.y+52),18,ambaretto::ui::ink);
                 for (std::size_t i = 0; i<lines.size() && i<4; ++i)
                     ambaretto::ui::draw_text(lines[i].c_str(),int(panel.x+24),int(panel.y+88+i*24),18,ambaretto::ui::title_blue);
                 ambaretto::ui::draw_button(button,CheckCollisionPointRec(GetMousePosition(),button) && IsMouseButtonDown(MOUSE_BUTTON_LEFT));

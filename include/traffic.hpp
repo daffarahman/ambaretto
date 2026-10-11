@@ -13,6 +13,7 @@ struct TrafficCar {
     std::optional<Vec3> placement;
     std::unique_ptr<Character> driver; // Created when the hidden occupant leaves the car.
     bool npc = true;
+    bool racing = false;
     std::size_t route = 0;
     const char* route_name = "";
     float cruise_speed = 8;
@@ -38,6 +39,8 @@ public:
     const std::vector<TrafficCar>& cars() const { return cars_; }
     bool is_npc(const Car* car) const;
     bool steal(Car& car);
+    Car& add_racer(const CarDesign& design);
+    void remove_racers();
     void finish(Vec3 player_position, float dt = fixed_step);
     void step(Car* controlled, const Car& starter_car, const Plane* plane,
               const Vec3* pedestrian, Vec3 player_position, float dt = fixed_step, const Police* police = nullptr);

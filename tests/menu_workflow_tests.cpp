@@ -13,11 +13,19 @@ namespace {
 std::vector<std::function<void()>> steps;
 std::size_t frame=0;
 unsigned physics_steps=0,window_count=0;
+unsigned model_loads=0,image_loads=0,shader_loads=0,mesh_uploads=0,render_targets=0,preview_draws=0;
+int largest_preview=0;
+double frame_begin=0;
+bool measure_preview=false;
+std::vector<double> preview_frames;
+ambaretto::PhysicsWorld* active_world=nullptr;
+Camera3D scene_camera{};
 std::string title;
 std::string typed_text;
 const char* stage="start";
-bool should_close=false;
-void require(bool ok,const char* message) {if (!ok) throw std::runtime_error(message);}
+bool should_close=false,focused=true;
+struct WorkflowFailure { std::string message; };
+void require(bool ok,const char* message) {if (!ok) throw WorkflowFailure{message};}
 void event(unsigned type,int a=0,int b=0) {PlayAutomationEvent({0,type,{a,b,0,0}});}
 void idle(int count=2) {while (count-->0) steps.push_back([]{});}
 void click(int x,int y) {steps.push_back([=]{event(7,x,y); event(6,MOUSE_BUTTON_LEFT);}); steps.push_back([]{event(5,MOUSE_BUTTON_LEFT);}); idle();}
@@ -27,6 +35,10 @@ void city_click(ambaretto::Vec3 focus,ambaretto::Vec3 point) {
         const auto p=GetWorldToScreen({point.GetX(),point.GetY(),point.GetZ()},camera);
         event(7,int(p.x),int(p.y)); event(6,MOUSE_BUTTON_LEFT);
     });
+    steps.push_back([]{event(5,MOUSE_BUTTON_LEFT);}); idle();
+}
+void map_click(ambaretto::Vec3 point) {
+    steps.push_back([=]{const auto p=GetWorldToScreen({point.GetX(),point.GetY(),point.GetZ()},scene_camera); event(7,int(p.x),int(p.y)); event(6,MOUSE_BUTTON_LEFT);});
     steps.push_back([]{event(5,MOUSE_BUTTON_LEFT);}); idle();
 }
 void key(int code) {steps.push_back([=]{event(2,code);}); steps.push_back([=]{event(1,code);}); idle();}
@@ -58,6 +70,24 @@ void building_drag(ambaretto::Vec3 size,Vector3 from,Vector3 to,bool outside=fal
 }
 void shortcut(int code) {steps.push_back([=]{event(2,KEY_LEFT_CONTROL); event(2,code);}); steps.push_back([=]{event(1,code); event(1,KEY_LEFT_CONTROL);}); idle();}
 void capture(const char* name) {auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/name).string().c_str()); UnloadImage(image);}
+void require_button(Rectangle r,bool pressed=false) {
+    const auto image=LoadImageFromScreen();
+    const auto left=GetImageColor(image,int(r.x),int(r.y+r.height/2)),right=GetImageColor(image,int(r.x+r.width-1),int(r.y+r.height/2));
+    UnloadImage(image);
+    const auto matches=[](Color a,Color b){return a.r==b.r && a.g==b.g && a.b==b.b;};
+    if (!matches(left,pressed ? ambaretto::ui::shadow : ambaretto::ui::highlight)
+        || !matches(right,pressed ? ambaretto::ui::highlight : ambaretto::ui::ink))
+        throw WorkflowFailure{std::string(pressed ? "Pressed" : "Idle")+" button at "+std::to_string(int(r.x))+","+std::to_string(int(r.y))
+            +" has incorrect bevel (left "+std::to_string(left.r)+", right "+std::to_string(right.r)+")"};
+}
+void require_preview(Rectangle r) {
+    const auto image=LoadImageFromScreen(); int pixels=0;
+    for (int y=int(r.y+12);y<r.y+r.height-12;y+=3) for (int x=int(r.x+12);x<r.x+r.width-12;x+=3) {
+        const auto c=GetImageColor(image,x,y);
+        if (!(c.r==18 && c.g==30 && c.b==49) && !(c.r>230 && c.g>230 && c.b>230)) ++pixels;
+    }
+    UnloadImage(image); require(pixels>100,"Saved item preview is empty or unavailable");
+}
 std::string terrain_pixels() {
     const auto image=LoadImageFromScreen(); std::string pixels;
     for (int z=0;z<ambaretto::City::width;++z) for (int x=0;x<ambaretto::City::width;++x) {
@@ -74,32 +104,48 @@ void require_terrain_preview(const ambaretto::City& city) {
     require(matched>15000,"Terrain preview is missing or obscured");
 }
 void duplicate_key() {steps.push_back([]{event(2,KEY_LEFT_CONTROL); event(2,KEY_D);}); steps.push_back([]{event(1,KEY_D); event(1,KEY_LEFT_CONTROL);}); idle();}
-void reset() {steps.clear(); frame=0; title.clear(); should_close=false;}
+void reset() {steps.clear(); frame=0; title.clear(); should_close=false; focused=true; frame_begin=0; measure_preview=false; preview_frames.clear(); active_world=nullptr;}
 void window() {reset(); InitWindow(1024,600,"Menu workflow check"); SetExitKey(KEY_NULL); SetTargetFPS(120);}
 bool gray_desktop() {const auto image=LoadImageFromScreen(); const Color p=GetImageColor(image,20,140); UnloadImage(image); return p.r==ambaretto::ui::desktop.r && p.g==ambaretto::ui::desktop.g && p.b==ambaretto::ui::desktop.b;}
 bool saved_popup() {const auto image=LoadImageFromScreen(); const Color p=GetImageColor(image,152,300); UnloadImage(image); return p.r==255 && p.g==255 && p.b==255;}
 void open_saved() {key(KEY_F10); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER);}
-void open_city_settings() {key(KEY_F10); key(KEY_LEFT); key(KEY_LEFT); key(KEY_ENTER);}
-void preview(const char* name) {steps.push_back([=]{require(saved_popup(),"Saved selector did not open as a popup"); auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/name).string().c_str()); UnloadImage(image);});}
+void open_city_settings() {key(KEY_F10); key(KEY_LEFT); key(KEY_LEFT); key(KEY_LEFT); key(KEY_ENTER);}
+void preview(const char* name) {steps.push_back([=]{require(saved_popup(),"Saved selector did not open as a popup"); require_preview({176,152,672,206}); capture(name);});}
 std::string contents(const std::filesystem::path& path) {std::ifstream file(path); return {std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};}
 }
 extern "C" void __real_InitWindow(int,int,const char*);
 extern "C" void __wrap_InitWindow(int w,int h,const char* name) {++window_count; SetConfigFlags(FLAG_WINDOW_HIDDEN|FLAG_WINDOW_RESIZABLE); __real_InitWindow(w,h,name);}
-extern "C" bool __wrap_IsWindowFocused() {return true;}
+extern "C" bool __wrap_IsWindowFocused() {return focused;}
 extern "C" bool __real_WindowShouldClose();
 extern "C" bool __wrap_WindowShouldClose() {return should_close || __real_WindowShouldClose();}
 extern "C" void __real_SetWindowTitle(const char*);
 extern "C" void __wrap_SetWindowTitle(const char* name) {title=name; __real_SetWindowTitle(name);}
 extern "C" void __real__ZN9ambaretto12PhysicsWorld4stepEf(ambaretto::PhysicsWorld*,float);
-extern "C" void __wrap__ZN9ambaretto12PhysicsWorld4stepEf(ambaretto::PhysicsWorld* world,float dt) {++physics_steps; __real__ZN9ambaretto12PhysicsWorld4stepEf(world,dt);}
+extern "C" void __wrap__ZN9ambaretto12PhysicsWorld4stepEf(ambaretto::PhysicsWorld* world,float dt) {active_world=world; ++physics_steps; __real__ZN9ambaretto12PhysicsWorld4stepEf(world,dt);}
 extern "C" void __real_EndDrawing();
 extern "C" int __real_GetCharPressed();
 extern "C" int __wrap_GetCharPressed() {if (typed_text.empty()) return __real_GetCharPressed(); const int c=typed_text.front(); typed_text.erase(typed_text.begin()); return c;}
+extern "C" Model __real_LoadModel(const char*);
+extern "C" Model __wrap_LoadModel(const char* path) {++model_loads; return __real_LoadModel(path);}
+extern "C" Image __real_LoadImage(const char*);
+extern "C" Image __wrap_LoadImage(const char* path) {++image_loads; return __real_LoadImage(path);}
+extern "C" Shader __real_LoadShaderFromMemory(const char*,const char*);
+extern "C" Shader __wrap_LoadShaderFromMemory(const char* vertex,const char* fragment) {++shader_loads; return __real_LoadShaderFromMemory(vertex,fragment);}
+extern "C" void __real_UploadMesh(Mesh*,bool);
+extern "C" void __wrap_UploadMesh(Mesh* mesh,bool dynamic) {++mesh_uploads; __real_UploadMesh(mesh,dynamic);}
+extern "C" RenderTexture2D __real_LoadRenderTexture(int,int);
+extern "C" RenderTexture2D __wrap_LoadRenderTexture(int width,int height) {++render_targets; largest_preview=std::max({largest_preview,width,height}); return __real_LoadRenderTexture(width,height);}
+extern "C" void __real_BeginTextureMode(RenderTexture2D);
+extern "C" void __wrap_BeginTextureMode(RenderTexture2D target) {++preview_draws; __real_BeginTextureMode(target);}
+extern "C" void __real_BeginMode3D(Camera3D);
+extern "C" void __wrap_BeginMode3D(Camera3D camera) {scene_camera=camera; __real_BeginMode3D(camera);}
 extern "C" void __wrap_EndDrawing() {
+    if (measure_preview && frame_begin>0) preview_frames.push_back((GetTime()-frame_begin)*1000);
     __real_EndDrawing();
     if (frame<steps.size()) steps[frame++]();
     else if (++frame==steps.size()+3) {auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/"menu-workflow-last.png").string().c_str()); UnloadImage(image);}
-    else if (frame>steps.size()+1200) throw std::runtime_error(std::string("UI workflow timed out: ")+stage);
+    else if (frame>steps.size()+1200) throw WorkflowFailure{std::string("UI workflow timed out: ")+stage};
+    frame_begin=GetTime();
 }
 int main() {
     using namespace ambaretto;
@@ -115,6 +161,27 @@ int main() {
             require(!models.empty(),"Character component fixtures missing"); player.parts[i].model=models.front();
         }
         require(player.save(root/"characters",error),"Player fixture save failed");
+        stage="button press and release"; window(); {
+            ui::FontResource font; PhysicsWorld world(false); Car car(world); TuningPanel tuning;
+            GraphicsPanel graphics; graphics.open({}); ControllerMapping controls; MenuBar menu;
+            const auto check_press=[&](Rectangle button,const std::function<void()>& draw) {
+                event(7,int(button.x+button.width/2),int(button.y+button.height/2));
+                for (bool pressed : {false,true,false}) {
+                    event(pressed ? 6 : 5,MOUSE_BUTTON_LEFT);
+                    for (int i=0;i<3;++i) {BeginDrawing(); ui::draw_desktop(); draw(); EndDrawing();}
+                    require_button(button,pressed);
+                }
+            };
+            menu.show(MenuCommand::Controllers);
+            check_press({60,162,216,28},[&]{menu.draw(controls,{});});
+            check_press({60,218,416,28},[&]{menu.draw(controls,{});});
+            auto r=graphics.bounds(1024,600);
+            check_press({r.x+120,r.y+70,94,28},[&]{graphics.draw(120,{});});
+            check_press({r.x+18,r.y+108,r.width-36,std::min(42.f,(r.height-252)/9)-2},[&]{graphics.draw(120,{});});
+            r=tuning.bounds(1024,600);
+            check_press({r.x+18,r.y+66,110,30},[&]{tuning.draw(car,1024,600);});
+            check_press({r.x+12,r.y+108,360,22},[&]{tuning.draw(car,1024,600);});
+        } CloseWindow();
         // Open/edit, cancel the unsaved prompt, then save and close through that prompt.
         stage="character open / draft save"; window(); {
             ui::FontResource font;
@@ -138,7 +205,9 @@ int main() {
         stage="main menu navigation"; window(); {
             ui::FontResource font; City selected; ControllerMapping controls; GraphicsSettings graphics;
             const auto initial_windows=window_count;
-            idle(); click(300,265);
+            idle();
+            steps.push_back([]{for (int i=0;i<4;++i) require_button({(GetScreenWidth()-620)/2.f+24,(GetScreenHeight()-388)/2.f+82+i*56.f,572,42});});
+            click(300,265);
             steps.push_back([]{require(title=="Ambaretto - Create / edit","Create / edit did not open the editor list");});
             click(300,290);
             steps.push_back([]{require(title=="Ambaretto - Cars","Menu click did not open Cars");});
@@ -271,6 +340,55 @@ int main() {
         City city=City::create("Menu pause test");
         require(city.add_land({60,60},{68,68},error) && city.set_spawn({64,64},error),"Game fixture failed");
         city.player_character=player; require(city.save(root/"cities",error),"Game fixture save failed");
+        stage="map icon controls"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
+            City edited=City::create("Map controls"); const auto directory=root/"control-cities";
+            const auto object=City::center({66,64}),empty=City::center({65,66});
+            require(edited.add_land({56,56},{74,74},error) && edited.set_spawn(CityCell{64,64},error)
+                && edited.add_building({{66,64},1,12},error) && edited.add_building({{68,64},1,12},error)
+                && edited.save(directory,error),"Map controls fixture failed");
+            const auto original=contents(saved_path(edited,directory)); const auto terrain=edited.tiles;
+            Camera3D initial{}; Vector3 before{};
+            idle(); steps.push_back([&]{initial=scene_camera; require_button({16,56,40,40},true); require_button({60,56,40,40}); capture("city-controls.png");});
+            click(80,356); click(80,260); click(36,304);
+            steps.push_back([&]{require(title=="Ambaretto - City editor" && contents(saved_path(edited,directory))==original,
+                "Disabled Play, Delete or Undo changed the map or left the editor");});
+            steps.push_back([]{focused=false;}); click(36,120);
+            steps.push_back([&]{require(Vector3Distance(scene_camera.position,initial.position)<.01f,"Unfocused toolbar rotated the camera"); focused=true;});
+            click(36,120); steps.push_back([&]{require(Vector3Distance(scene_camera.position,initial.position)>500,"Rotate left icon did nothing");});
+            click(80,120); steps.push_back([&]{require(Vector3Distance(scene_camera.position,initial.position)<.01f,"Rotate right icon did not reverse rotation");});
+            click(36,164); steps.push_back([]{require(std::abs(scene_camera.fovy-340)<.01f,"Zoom in icon did nothing");});
+            click(80,164); steps.push_back([]{require(std::abs(scene_camera.fovy-400)<.01f,"Zoom out icon did not reverse zoom");});
+            click(36,208); click(80,208);
+            steps.push_back([]{require(scene_camera.up.z==-1,"Top view icon did nothing"); require_button({60,188,40,40});});
+            map_click(empty); click(80,76); map_click(empty);
+            steps.push_back([&]{require(std::abs(scene_camera.target.x-empty.GetX())<1 && std::abs(scene_camera.target.z-empty.GetZ())<1,
+                "Hand click did not center the map");});
+            map_click(object);
+            steps.push_back([&]{require(std::abs(scene_camera.target.x-object.GetX())<1 && std::abs(scene_camera.target.z-object.GetZ())<1,
+                "Repeated hand clicks did not center the map"); before=scene_camera.target; event(7,512,300); event(6,MOUSE_BUTTON_LEFT);});
+            steps.push_back([]{event(7,562,330);}); steps.push_back([]{event(5,MOUSE_BUTTON_LEFT);}); idle();
+            steps.push_back([&]{require(std::abs(scene_camera.target.x-before.x+50*400.f/600)<.1f
+                && std::abs(scene_camera.target.z-before.z+30*400.f/600)<.1f,"Hand drag jumped or centered instead of panning");
+                require(edited.tiles==terrain && edited.buildings.size()==2 && contents(saved_path(edited,directory))==original,
+                    "Selection or camera controls modified the map"); before=scene_camera.target; event(7,512,300); event(6,MOUSE_BUTTON_LEFT);});
+            steps.push_back([]{event(7,80,400);}); steps.push_back([]{event(7,512,300);}); steps.push_back([]{event(5,MOUSE_BUTTON_LEFT);}); idle();
+            steps.push_back([&]{require(Vector3Distance(scene_camera.target,before)<.01f,"Hand drag resumed after leaving the canvas");});
+            click(36,76); map_click(object); click(80,260);
+            steps.push_back([&]{require(edited.buildings.size()==1 && edited.tiles==terrain,"Delete icon did not remove only the selected building");});
+            key(KEY_F10); click(36,304);
+            steps.push_back([&]{require(edited.buildings.size()==1,"Closing a menu leaked a click into Undo");});
+            click(36,304); steps.push_back([&]{require(edited.buildings.size()==2,"Undo icon did not restore the deleted building");});
+            click(80,304); steps.push_back([&]{require(edited.buildings.size()==1,"Redo icon did not repeat the deletion");});
+            click(36,304); click(36,260); map_click(object);
+            steps.push_back([&]{require(edited.buildings.size()==1 && edited.tiles==terrain,"Bulldoze icon did not remove the clicked building");});
+            click(36,356);
+            steps.push_back([&]{City saved; require(City::load(saved_path(edited,directory),saved,error) && saved.buildings.size()==1,"Save icon did not persist the map");});
+            click(36,304); steps.push_back([&]{edited.player_character=player;}); click(80,356);
+            require(city_menu(edited,directory,controls,graphics,true),"Enabled Play icon did not start the city");
+            City saved; require(City::load(saved_path(edited,directory),saved,error) && saved.buildings.size()==2 && saved.player_character,
+                "Play icon did not save edits before starting");
+        } CloseWindow();
         stage="city pedestrian density settings"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
             idle(); open_city_settings();
@@ -292,6 +410,32 @@ int main() {
             City loaded;
             require(City::load(root/"cities"/(city.id+".city"),loaded,error) && loaded.pedestrian_density==25 && loaded.player_character,
                 "City density or embedded player did not persist after leaving the editor");
+        } CloseWindow();
+        stage="global road editor"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
+            const RoadStyle original=city.road_style;
+            const auto open_roads=[] {key(KEY_F10); key(KEY_LEFT); key(KEY_LEFT); key(KEY_LEFT); key(KEY_DOWN); key(KEY_ENTER);};
+            idle(); open_roads(); idle(3);
+            steps.push_back([]{capture("road-editor-preview.png");});
+            key(KEY_V); steps.push_back([]{capture("road-editor-top-preview.png");}); key(KEY_V);
+            click(130,260); key(KEY_ESCAPE);
+            steps.push_back([&]{require(city.road_style==original,"Cancel applied the road preview to the city");});
+            open_roads(); click(130,260); click(750,547);
+            steps.push_back([&]{require(!city.road_style.sidewalks,"Road editor did not disable sidewalks globally");});
+            shortcut(KEY_Z); steps.push_back([&]{require(city.road_style==original,"Global road style did not undo");});
+            shortcut(KEY_Y); steps.push_back([&]{require(!city.road_style.sidewalks,"Global road style did not redo");});
+            open_roads(); click(130,200); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER); idle(3);
+            click(750,547);
+            steps.push_back([&]{require(city.road_style.road_texture=="brick01.png","Road texture picker did not apply the selected texture");});
+            open_roads(); click(130,260); click(130,375); for (int i=0;i<7;++i) key(KEY_UP); key(KEY_ENTER); idle(3);
+            steps.push_back([]{capture("road-editor-custom-preview.png");});
+            click(750,547);
+            steps.push_back([&]{require(city.road_style.sidewalks && city.road_style.sidewalk_texture=="brick01.png","Sidewalk texture did not apply globally");});
+            key(KEY_ESCAPE); click(760,485);
+            require(!city_menu(city,root/"cities",controls,graphics,true),"Road editor unexpectedly started Play");
+            City loaded;
+            require(City::load(root/"cities"/(city.id+".city"),loaded,error) && loaded.road_style==city.road_style,
+                "Road style did not persist after leaving the editor");
         } CloseWindow();
         stage="free player and vehicle placement"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
@@ -342,12 +486,63 @@ int main() {
         } CloseWindow();
         stage="map building popup"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
-            idle(); click(100,130); preview("map-building-popup.png"); key(KEY_ENTER);
+            idle(); key(KEY_F10); for (int i=0;i<3;++i) key(KEY_RIGHT); for (int i=0;i<4;++i) key(KEY_DOWN); key(KEY_ENTER);
+            preview("map-building-popup.png"); key(KEY_ENTER);
             steps.push_back([&]{require(city.buildings.empty(),"Building selection leaked a placement into the map");});
+            key(KEY_F10); for (int i=0;i<3;++i) key(KEY_RIGHT); for (int i=0;i<5;++i) key(KEY_DOWN); key(KEY_ENTER);
+            key(KEY_V); city_click(*city.spawn,City::center({66,66}));
+            steps.push_back([&]{require(city.buildings.size()==1 && !city.buildings[0].mesh,"Plain block menu kept the saved building design");});
+            shortcut(KEY_Z);
             key(KEY_ESCAPE); click(760,485);
             require(!city_menu(city,root/"cities",controls,graphics,true),"Building selector started a game");
         } CloseWindow();
-        // Play has no edit commands and rejects missing player data, then starts by clicking a city.
+        // Deletion defaults to Cancel, then removes only the confirmed saved design.
+        const auto deletion_root=root/"deletion";
+        require(building.save(deletion_root/"buildings",error) && car.save(deletion_root/"cars",error)
+            && player.save(deletion_root/"characters",error),"Deletion fixtures failed");
+        for (const auto kind : {DesignKind::Building,DesignKind::Car,DesignKind::Character}) {
+            stage="design deletion"; window(); {
+                ui::FontResource font;
+                const auto path=kind==DesignKind::Building ? saved_path(building,deletion_root/"buildings")
+                    : kind==DesignKind::Car ? saved_path(car,deletion_root/"cars") : saved_path(player,deletion_root/"characters");
+                const auto original=contents(path);
+                idle(); key(KEY_DELETE); key(KEY_ENTER);
+                steps.push_back([&]{require(contents(path)==original,"Default Enter confirmed deletion");});
+                key(KEY_DELETE); key(KEY_ESCAPE);
+                steps.push_back([&]{require(contents(path)==original,"Escape confirmed deletion");});
+                click(860,345);
+                steps.push_back([]{capture("delete-design-confirmation.png");});
+                if (kind==DesignKind::Character) {key(KEY_LEFT); key(KEY_ENTER);} else click(280,394);
+                steps.push_back([&]{require(!std::filesystem::exists(path)
+                    && contents(path.parent_path()/"deleted"/(path.filename().string()+"-1")/path.filename())==original,"Confirmed deletion did not keep a backup");});
+                key(KEY_DELETE); duplicate_key(); key(KEY_ESCAPE);
+                design_menu(kind,deletion_root);
+            } CloseWindow();
+        }
+        stage="saved popup deletion"; window(); {
+            ui::FontResource font; const auto directory=deletion_root/"popup";
+            require(building.save(directory,error),"Popup deletion fixture failed");
+            idle(); open_saved(); key(KEY_DELETE); click(280,394); key(KEY_ENTER);
+            steps.push_back([&]{require(!std::filesystem::exists(saved_path(building,directory)),"Empty saved popup opened or recreated the deleted design");});
+            key(KEY_ESCAPE); key(KEY_ESCAPE);
+            require(!building_builder(building,directory),"Deleting a library design saved the open draft");
+        } CloseWindow();
+        stage="city deletion"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
+            City selected=city; const auto directory=deletion_root/"cities";
+            require(city.save(directory,error),"City deletion fixture failed");
+            const auto path=saved_path(city,directory),progress=directory/(city.id+".play");
+            const auto original=contents(path); std::ofstream(progress)<<"Keep progress";
+            idle(); key(KEY_DELETE); key(KEY_ENTER);
+            steps.push_back([&]{require(contents(path)==original && selected.id==city.id,"Cancel changed the selected city");});
+            key(KEY_DELETE); click(280,394);
+            steps.push_back([&]{const auto archive=directory/"deleted"/(path.filename().string()+"-1");
+                require(selected.id.empty() && !std::filesystem::exists(path) && !std::filesystem::exists(progress)
+                    && contents(archive/path.filename())==original && contents(archive/progress.filename())=="Keep progress","City deletion lost its checkpoint or retained the active city");});
+            key(KEY_DELETE); key(KEY_ESCAPE);
+            require(!city_menu(selected,directory,controls,graphics),"City deletion started Play");
+        } CloseWindow();
+        // Cities stay a list and never construct 3D previews, including in Play.
         const auto play_directory=root/"play/cities";
         auto playable=city; playable.id="0000000000000001"; playable.name="B playable city";
         auto unavailable=City::create("A unavailable city"); unavailable.id="0000000000000002";
@@ -356,16 +551,19 @@ int main() {
         const auto original_playable=contents(playable_path),original_unavailable=contents(unavailable_path);
         stage="play-only city selector"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=unavailable;
-            idle(); key(KEY_F10); key(KEY_ENTER); preview("play-city-selector.png");
+            const auto targets=render_targets,models=model_loads,uploads=mesh_uploads,shaders=shader_loads;
+            idle(); key(KEY_F10); key(KEY_ENTER);
+            steps.push_back([]{require(saved_popup(),"Play city list did not open as a popup"); capture("play-city-selector.png");});
             click(220,170); key(KEY_E); key(KEY_INSERT); key(KEY_DELETE); key(KEY_F2); duplicate_key(); key(KEY_ENTER);
             steps.push_back([]{require(title=="Ambaretto - Play" && saved_popup(),"Unavailable city started playing or opened an editor");});
-            click(220,207);
-            require(main_menu(selected,play_directory,controls,graphics) && selected.id==playable.id,"Clicking a playable city did not start Play");
+            key(KEY_RIGHT); key(KEY_ENTER);
+            require(main_menu(selected,play_directory,controls,graphics) && selected.id==playable.id,"Choosing a playable city did not start Play");
+            require(render_targets==targets && model_loads==models && mesh_uploads==uploads && shader_loads==shaders,"Play city list constructed 3D resources");
             require(contents(playable_path)==original_playable && contents(unavailable_path)==original_unavailable,"Play changed a saved city");
         } CloseWindow();
         stage="city create / edit chooser"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=unavailable;
-            idle(); key(KEY_F2); key(KEY_DELETE);
+            idle(); key(KEY_F2);
             steps.push_back([]{require(title=="Ambaretto - Cities","Removed shortcuts opened city management");});
             key(KEY_ENTER);
             steps.push_back([]{require(title=="Ambaretto - City editor","City chooser Enter did not open the editor");});
@@ -375,6 +573,25 @@ int main() {
             require(!city_menu(selected,play_directory,controls,graphics),"City chooser started a game");
             require(selected.name=="New city" && !selected.spawn && !selected.player_character && selected.land_count()==0,"New empty city was not created");
             require(contents(playable_path)==original_playable && contents(unavailable_path)==original_unavailable,"City chooser changed the existing maps");
+        } CloseWindow();
+        stage="city list scrolling / paging";
+        const auto list_directory=root/"list-cities";
+        std::vector<City> list_cities(12,playable);
+        for (int i=0;i<12;++i) {
+            auto& value=list_cities[i]; value.id=std::string(15,'0')+"3456789abcde"[i]; value.name=std::string(1,char('A'+i))+" list city";
+            require(value.save(list_directory,error),"City list fixture failed");
+        }
+        window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; auto selected=std::make_unique<City>(list_cities.front());
+            const auto targets=render_targets,models=model_loads,uploads=mesh_uploads,shaders=shader_loads;
+            idle(); key(KEY_END); key(KEY_ESCAPE);
+            require(!city_menu(*selected,list_directory,controls,graphics),"City list started Play");
+            reset(); idle(); key(KEY_ENTER); key(KEY_END); key(KEY_PAGE_UP); key(KEY_ENTER);
+            require(main_menu(*selected,list_directory,controls,graphics) && selected->id==list_cities[6].id,"City list End/Page Up chose the wrong row");
+            *selected=list_cities.front(); reset(); idle(); key(KEY_ENTER);
+            steps.push_back([]{event(7,220,210); event(8,0,-3);}); idle(); click(220,170); key(KEY_ENTER);
+            require(main_menu(*selected,list_directory,controls,graphics) && selected->id==list_cities[7].id,"City list wheel scrolling or row selection failed");
+            require(render_targets==targets && model_loads==models && mesh_uploads==uploads && shader_loads==shaders,"Browsing cities allocated 3D resources");
         } CloseWindow();
         stage="terrain preview / regenerate / create"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=unavailable;
@@ -431,13 +648,28 @@ int main() {
         for (auto kind:{DesignKind::Building,DesignKind::Car,DesignKind::Character}) {
             stage="design menu duplicate"; window(); {
                 ui::FontResource font;
+                unsigned loaded_models=0;
+                std::string selected_label;
+                const auto label_pixels=[] {
+                    const auto image=LoadImageFromScreen(); std::string pixels;
+                    for (int y=392;y<414;++y) for (int x=108;x<604;++x) {
+                        const auto c=GetImageColor(image,x,y); pixels+=char(c.r); pixels+=char(c.g); pixels+=char(c.b);
+                    }
+                    UnloadImage(image); return pixels;
+                };
                 const auto original_path=kind==DesignKind::Building ? saved_path(building,root/"buildings")
                     : kind==DesignKind::Car ? saved_path(car,root/"cars") : saved_path(player,root/"characters");
                 const auto original=contents(original_path);
                 const auto copy_path=kind==DesignKind::Building ? root/"buildings/building-Menu test building copy.building"
                     : kind==DesignKind::Car ? root/"cars/car-Menu test car copy.car" : root/"characters/character-Menu test player copy.character";
-                idle(); click(760,345);
+                idle(); steps.push_back([&]{loaded_models=model_loads;}); click(760,345);
                 steps.push_back([=]{require(std::filesystem::exists(copy_path),"Duplicate menu button did not save a copy");});
+                steps.push_back([&]{require(model_loads==loaded_models,"Duplicating a design reloaded its shared models");});
+                steps.push_back([&]{require_preview({96,174,520,210}); selected_label=label_pixels();});
+                key(KEY_RIGHT);
+                steps.push_back([&]{require(label_pixels()!=selected_label,"Right did not cycle away from the duplicated design");});
+                click(170,435);
+                steps.push_back([&]{require(label_pixels()==selected_label,"Previous did not wrap back to the duplicated design");});
                 if (kind==DesignKind::Building) steps.push_back([]{auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/"duplicate-design-menu.png").string().c_str()); UnloadImage(image);});
                 key(KEY_ESCAPE);
                 design_menu(kind,root);
@@ -449,6 +681,34 @@ int main() {
             idle(); open_saved(); duplicate_key(); preview("duplicate-building-popup.png"); key(KEY_ENTER); click(250,495);
             const auto result=building_builder(building,root/"buildings");
             require(result && result->name==building.name+" copy 2" && contents(path)==original,"Building popup did not open a separate duplicate");
+        } CloseWindow();
+        stage="building preview cache / eviction / refresh"; window(); {
+            ui::FontResource font; const auto cache_root=root/"preview-cache";
+            for (int i=0;i<6;++i) {auto value=building; value.name=std::string(1,char('A'+i))+" cached building"; require(value.save(cache_root/"buildings",error),"Preview cache fixture failed");}
+            unsigned uploads=0,images=0,targets=0,draws=0,shaders=0;
+            idle(); key(KEY_RIGHT);
+            steps.push_back([&]{uploads=mesh_uploads; images=image_loads; targets=render_targets; shaders=shader_loads; measure_preview=true;});
+            for (int i=0;i<8;++i) {key(KEY_LEFT); key(KEY_RIGHT);}
+            steps.push_back([&]{
+                measure_preview=false;
+                require(mesh_uploads==uploads && image_loads==images && render_targets==targets && shader_loads==shaders,"Warm preview switches rebuilt GPU resources or decoded images");
+                std::sort(preview_frames.begin(),preview_frames.end());
+                require(!preview_frames.empty(),"Preview frame measurement was empty");
+                std::cout<<"Warm building preview CPU frame median/p95: "<<preview_frames[preview_frames.size()/2]<<" / "<<preview_frames[(preview_frames.size()-1)*95/100]<<" ms (excludes presentation/frame limiter)\n";
+            });
+            steps.push_back([&]{focused=false; draws=preview_draws;}); idle(8);
+            steps.push_back([&]{require(preview_draws==draws,"Unfocused preview kept redrawing"); focused=true;});
+            key(KEY_LEFT);
+            for (int i=0;i<4;++i) key(KEY_RIGHT);
+            steps.push_back([&]{uploads=mesh_uploads;});
+            for (int i=0;i<4;++i) key(KEY_LEFT);
+            steps.push_back([&]{require(mesh_uploads>uploads,"Old building preview was retained beyond the cache limit"); uploads=mesh_uploads;});
+            click(760,402);
+            steps.push_back([&]{require(mesh_uploads>uploads,"Refresh reused stale building geometry"); largest_preview=0; SetWindowSize(2048,1200);}); idle(5);
+            steps.push_back([&]{require(largest_preview>0 && largest_preview<=720,"Large window allocated an oversized preview target"); capture("cached-building-preview.png");});
+            key(KEY_ESCAPE);
+            design_menu(DesignKind::Building,cache_root);
+            std::cout<<"Preview cache: 16 warm switches, zero mesh uploads/image loads/shader loads/target allocations; eviction, refresh, suspension and 720 px cap passed\n";
         } CloseWindow();
         stage="car popup duplicate"; window(); {
             ui::FontResource font; const auto path=saved_path(car,root/"cars"); const auto original=contents(path);
@@ -482,11 +742,11 @@ int main() {
             idle(); key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); key(KEY_DOWN); key(KEY_DOWN); key(KEY_RIGHT); key(KEY_ENTER);
             duplicate_key();
             steps.push_back([&]{require(std::filesystem::exists(root/"cars/car-Menu test car copy 3.car"),"Car placement selector did not duplicate"); auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/"duplicate-car-selector.png").string().c_str()); UnloadImage(image);});
-            click(760,440);
+            click(760,490);
             key(KEY_F10); for (int i=0;i<4;++i) key(KEY_RIGHT); key(KEY_DOWN); key(KEY_RIGHT); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER);
             duplicate_key();
             steps.push_back([]{auto image=LoadImageFromScreen(); ExportImage(image,(std::filesystem::path(GetApplicationDirectory())/"duplicate-player-selector.png").string().c_str()); UnloadImage(image);});
-            click(210,475); key(KEY_ESCAPE); click(760,485);
+            click(210,490); key(KEY_ESCAPE); click(760,485);
             require(!city_menu(selected,root/"cities",controls,graphics,true),"Placement duplicate started a game");
             require(selected.player_character && selected.player_character->name==player.name+" copy 3" && selected.vehicles.empty(),"Placement selectors lost the duplicate or leaked a placement");
         } CloseWindow();
@@ -496,6 +756,80 @@ int main() {
             require(!main_menu(selected,root/"empty/cities",controls,graphics),"Empty Play list started a game");
             require(!std::filesystem::exists(root/"empty/cities"),"Play duplicated or edited an empty library");
         } CloseWindow();
+        stage="car carousel / rotation / wraparound"; window(); {
+            ui::FontResource font; const auto library=saved_cars(root/"cars",error);
+            require(library.size()>1,"Carousel needs multiple saved cars");
+            const auto preview_pixels=[] {
+                const auto image=LoadImageFromScreen(); std::string pixels;
+                for (int y=150;y<360;y+=4) for (int x=312;x<712;x+=4) {
+                    const auto c=GetImageColor(image,x,y); pixels+=char(c.r); pixels+=char(c.g); pixels+=char(c.b);
+                }
+                UnloadImage(image); return pixels;
+            };
+            std::string first_frame;
+            idle(3); steps.push_back([&]{first_frame=preview_pixels();}); idle(24);
+            steps.push_back([&]{require(first_frame!=preview_pixels(),"Selected car preview did not rotate"); capture("rotating-car-selector.png");});
+            for (std::size_t i=0;i<library.size();++i) click(850,470);
+            key(KEY_RIGHT); key(KEY_ENTER);
+            auto selected=choose_play_car(root/"cars");
+            require(selected && selected->name==library[1].name,"Next did not wrap or Right did not cycle to the displayed car");
+            reset(); idle(); click(130,470); key(KEY_ENTER);
+            selected=choose_play_car(root/"cars");
+            require(selected && selected->name==library.back().name,"Previous did not wrap to the last car");
+        } CloseWindow();
+        stage="car carousel / empty and unavailable cars"; window(); {
+            ui::FontResource font;
+            idle(); click(850,470); key(KEY_LEFT); key(KEY_ENTER); key(KEY_ESCAPE);
+            require(!choose_play_car(root/"no-cars"),"Empty carousel selected a car");
+            auto unavailable=car; unavailable.body="missing-preview-body.glb";
+            require(unavailable.save(root/"unavailable-cars",error),"Unavailable car fixture failed");
+            reset(); idle(); click(850,470); key(KEY_RIGHT); key(KEY_ENTER); idle(3);
+            unsigned draws=0;
+            steps.push_back([&]{require(title=="Ambaretto - Choose your car","Unavailable car started driving"); draws=preview_draws;}); idle(8);
+            steps.push_back([&]{require(preview_draws==draws,"Unavailable car preview kept redrawing");}); key(KEY_ESCAPE);
+            require(!choose_play_car(root/"unavailable-cars"),"Carousel accepted an unavailable car");
+        } CloseWindow();
+        City race_city=City::create("Race workflow");
+        require(race_city.add_land({56,56},{73,73},error),error.c_str());
+        for (auto ends : {std::make_pair(CityCell{58,58},CityCell{70,58}),std::make_pair(CityCell{70,58},CityCell{70,70}),
+            std::make_pair(CityCell{70,70},CityCell{58,70}),std::make_pair(CityCell{58,70},CityCell{58,58})})
+            require(race_city.add_road(City::road_stroke(ends.first,ends.second),error),error.c_str());
+        require(race_city.set_spawn(CityCell{60,58},error),error.c_str()); race_city.player_character=player;
+        stage="race editor creation"; window(); {
+            ui::FontResource font;
+            idle(3); replace_text("Test circuit"); click(400,294); key(KEY_ENTER); idle(3); key(KEY_V);
+            city_click(*race_city.spawn,City::center({60,58})); city_click(*race_city.spawn,City::center({68,58}));
+            city_click(*race_city.spawn,City::center({70,68})); city_click(*race_city.spawn,City::center({60,70}));
+            steps.push_back([]{capture("race-editor-course.png");}); click(480,136); key(KEY_ESCAPE);
+            require(edit_current_city(race_city,root/"cities",true,true),"Race editor did not return to Play");
+            require(race_city.races.size()==1 && race_city.races[0].name=="Test circuit" && race_city.races[0].laps==4
+                && race_city.races[0].checkpoints.size()==4,"Race editor did not save name, laps or road clicks");
+        } CloseWindow();
+        stage="race editor edit and delete"; window(); {
+            ui::FontResource font;
+            idle(3); key(KEY_F10); key(KEY_LEFT); key(KEY_LEFT); key(KEY_DOWN); key(KEY_ENTER); idle(3); key(KEY_ENTER);
+            replace_text("Edited circuit"); key(KEY_ENTER); idle(3); key(KEY_V);
+            city_click(*race_city.spawn,race_city.races[0].checkpoints[1]); city_click(*race_city.spawn,City::center({67,58}));
+            city_click(*race_city.spawn,race_city.races[0].checkpoints[2]); click(770,136); click(480,136); key(KEY_ESCAPE);
+            require(edit_current_city(race_city,root/"cities",true),"Race editing did not return to Play");
+            require(race_city.races[0].name=="Edited circuit","Race name edit did not persist");
+            require(race_city.races[0].checkpoints.size()==3 && (race_city.races[0].checkpoints[1]-City::center({67,58})).Length()<1,"Moving and deleting a checkpoint did not persist");
+            event(1,KEY_ESCAPE);
+            reset(); idle(3); key(KEY_F10); key(KEY_LEFT); key(KEY_LEFT); key(KEY_DOWN); key(KEY_ENTER); idle(3); key(KEY_ENTER);
+            click(500,410); idle(3); key(KEY_ESCAPE);
+            require(edit_current_city(race_city,root/"cities",true),"Deleting a race did not return to Play");
+            require(race_city.races.empty(),"Race deletion did not persist");
+        } CloseWindow();
+        RaceMap race_map; race_map.name="Test circuit"; race_map.laps=1;
+        stage="empty race picker"; window(); {
+            ui::FontResource font; idle(3); steps.push_back([]{capture("empty-race-picker.png");}); key(KEY_ESCAPE);
+            require(choose_race(race_city)==-1,"Empty race list did not return with Back"); event(1,KEY_ESCAPE);
+            reset(); idle(3); key(KEY_INSERT); require(choose_race(race_city)==-2,"Empty race list did not offer creation");
+        } CloseWindow();
+        for (auto cell : {CityCell{60,58},CityCell{68,58},CityCell{70,68},CityCell{60,70}}) {
+            Vec3 point; require(snap_race_point(race_city,City::center(cell),point),"Race fixture checkpoint failed"); race_map.checkpoints.push_back(point);
+        }
+        race_city.races.push_back(race_map); require(race_city.save(root/"cities",error),error.c_str());
         // Pause freezes actual Jolt steps; resume continues; End Game returns to the menu.
         stage="game pause / resume / main menu"; reset(); unsigned paused_steps=0;
         CityVehicle parked(CityVehicleKind::Car,*city.spawn+Vec3(2.8f,0,0)); parked.car=car;
@@ -506,7 +840,7 @@ int main() {
             UnloadImage(image);
             return hub.r==24 && hub.g==24 && hub.b==24 && tick.r==RAYWHITE.r && tick.g==RAYWHITE.g && tick.b==RAYWHITE.b;
         };
-        idle(5); steps.push_back([&]{
+        idle(5); steps.push_back([]{capture("play-modes.png");}); key(KEY_ENTER); idle(5); steps.push_back([&]{
             require(dial_visible(450,true) && !dial_visible(450,false) && !dial_visible(662,true),"On-foot HUD must show only the clock beside the map");
             const auto image=LoadImageFromScreen(); const Color corner=GetImageColor(image,GetScreenWidth()-20,GetScreenHeight()-30);
             UnloadImage(image);
@@ -568,12 +902,90 @@ int main() {
             && continued.mode==EntryVehicle::Car && (continued.position-saved_progress.position).Length()<1,"Continue did not restore saved gameplay");});
         key(KEY_F10); key(KEY_UP); key(KEY_ENTER); idle(3); steps.push_back([]{should_close=true;});
         require(ambaretto_main(3,args)==0,"Continue workflow failed");
-        stage="start again from saved game"; reset(); idle(5); key(KEY_RIGHT); key(KEY_ENTER); idle(5); shortcut(KEY_S);
+        stage="start again from saved game"; reset(); idle(5); key(KEY_RIGHT); key(KEY_ENTER); idle(5); key(KEY_ENTER); idle(5); shortcut(KEY_S);
         steps.push_back([&]{PlaySession fresh; require(dial_visible(450,true) && !dial_visible(450,false)
             && PlaySession::load(root/"cities"/(city.id+".play"),fresh,error) && fresh.mode==EntryVehicle::None
             && (fresh.position-*city.spawn).Length()<.2f && std::abs(fresh.minutes-city.start_minutes)<5,"Start again picker did not reset the saved session"); should_close=true;});
         require(ambaretto_main(3,args)==0,"Start again workflow failed");
-        std::cout<<"Menus: creation, Save/Discard/Cancel, pause/resume, map editing from Play, Continue and Start from beginning passed\n";
+        auto driving_city=city; driving_city.id="0000000000000003"; driving_city.name="Car only city"; driving_city.player_character.reset();
+        require(driving_city.save(root/"cities",error),"Car only city fixture failed");
+        path=(root/"cities"/(driving_city.id+".city")).string(); args[2]=path.data();
+        stage="Car only selection / locked exit / restart / edit"; reset(); idle(5);
+        steps.push_back([]{require(title=="Ambaretto - Choose play mode","Spawn-only city did not offer play modes"); capture("play-mode-selector.png");});
+        key(KEY_UP); key(KEY_ENTER);
+        steps.push_back([]{require(title=="Ambaretto - Choose play mode","Free roam accepted a city without a Player character");});
+        key(KEY_DOWN); key(KEY_ENTER); idle(3);
+        steps.push_back([]{require(title=="Ambaretto - Choose your car","Car only did not open the car picker"); capture("play-car-selector.png");});
+        key(KEY_ESCAPE); idle(3);
+        steps.push_back([]{require(title=="Ambaretto - Choose play mode","Cancelling the car picker did not return to mode selection");});
+        key(KEY_ENTER); key(KEY_ENTER); idle(5); shortcut(KEY_S);
+        const auto car_only_path=root/"cities"/(driving_city.id+".play");
+        PlaySession chosen_car;
+        steps.push_back([&]{require(dial_visible(450,false) && PlaySession::load(car_only_path,chosen_car,error)
+            && chosen_car.play_mode==PlayMode::CarOnly && chosen_car.mode==EntryVehicle::Car && chosen_car.car_design,
+            "Car only did not start and save in the selected car"); capture("car-only-gameplay.png");});
+        key(KEY_E); idle(3); shortcut(KEY_S);
+        steps.push_back([&]{PlaySession locked; require(PlaySession::load(car_only_path,locked,error)
+            && locked.mode==EntryVehicle::Car && locked.play_mode==PlayMode::CarOnly && dial_visible(450,false),"Exit key escaped Car only");});
+        Car* runtime_car=nullptr;
+        steps.push_back([&]{GroundHit hit; require(active_world && active_world->cast_ray(chosen_car.position+Vec3(0,8,0),-Vec3::sAxisY(),12,hit)
+            && hit.car,"Cannot find the selected runtime car"); runtime_car=hit.car; runtime_car->take_damage(100);});
+        idle(5); steps.push_back([&]{require(runtime_car->destroyed(),"Destroyed car skipped the countdown"); capture("car-only-respawn-countdown.png");});
+        key(KEY_E); shortcut(KEY_S);
+        steps.push_back([&]{PlaySession destroyed; require(PlaySession::load(car_only_path,destroyed,error)
+            && destroyed.play_mode==PlayMode::CarOnly && destroyed.mode==EntryVehicle::Car && destroyed.vehicle_health==100,
+            "Saving during the countdown lost the chosen car");});
+        idle(440);
+        steps.push_back([&]{require(!runtime_car->destroyed() && runtime_car->health()==100 && dial_visible(450,false),"Countdown failed to return the player to the same car"); capture("car-only-respawned.png");});
+        key(KEY_F10); key(KEY_RIGHT); key(KEY_ENTER); idle(5); key(KEY_ESCAPE); idle(5); shortcut(KEY_S);
+        steps.push_back([&]{PlaySession returned; require(title=="Ambaretto - "+driving_city.name
+            && PlaySession::load(car_only_path,returned,error) && returned.play_mode==PlayMode::CarOnly
+            && returned.car_design->name==chosen_car.car_design->name,"Map editing lost Car only or required a character");});
+        key(KEY_F10); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER); idle(5); shortcut(KEY_S);
+        steps.push_back([&]{PlaySession restarted; require(PlaySession::load(car_only_path,restarted,error)
+            && restarted.play_mode==PlayMode::CarOnly && restarted.mode==EntryVehicle::Car && restarted.car_design->name==chosen_car.car_design->name,
+            "Restart lost the selected car or Car only mode");});
+        key(KEY_F10); key(KEY_UP); key(KEY_ENTER); idle(3); steps.push_back([]{should_close=true;});
+        require(ambaretto_main(3,args)==0,"Car only game workflow failed");
+        stage="continue Car only"; reset(); idle(5); key(KEY_ENTER); idle(5); key(KEY_E); shortcut(KEY_S);
+        steps.push_back([&]{PlaySession continued; require(PlaySession::load(car_only_path,continued,error)
+            && continued.play_mode==PlayMode::CarOnly && continued.mode==EntryVehicle::Car && continued.car_design->name==chosen_car.car_design->name,
+            "Continue lost Car only mode or allowed exiting"); should_close=true;});
+        require(ambaretto_main(3,args)==0,"Car only continuation workflow failed");
+        stage="race mode and completion choices"; reset();
+        auto race_design=car; race_design.name="AAA race car"; race_design.type=CarType::Civilian;
+        require(race_design.save(root/"cars",error),"Civilian race car fixture failed");
+        path=(root/"cities"/(race_city.id+".city")).string(); args[2]=path.data();
+        idle(5); key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER); idle(3);
+        steps.push_back([]{require(title=="Ambaretto - Choose race","Race mode did not open the course list"); capture("race-picker.png");});
+        key(KEY_ENTER); key(KEY_ENTER); idle(5);
+        steps.push_back([&]{require(title=="Ambaretto - "+race_city.name,"Race mode did not start the game"); capture("race-gameplay.png");});
+        Car* racing_player=nullptr;
+        steps.push_back([&]{GroundHit hit; require(active_world && active_world->cast_ray(race_city.races[0].checkpoints[0]+Vec3(0,8,0),-Vec3::sAxisY(),12,hit) && hit.car,"Cannot find race player"); racing_player=hit.car;});
+        idle(420); steps.push_back([&]{racing_player->take_damage(100);}); idle(5);
+        steps.push_back([]{require(title=="Ambaretto - Race finished","Race mode did not show completion choices"); capture("race-finish-choices.png");});
+        key(KEY_DOWN); key(KEY_ENTER); idle(5); shortcut(KEY_S);
+        steps.push_back([&]{PlaySession resumed; require(PlaySession::load(root/"cities"/(race_city.id+".play"),resumed,error) && resumed.play_mode==PlayMode::CarOnly,"Race result did not continue in Car only");});
+        key(KEY_ESCAPE); key(KEY_F10); for (int i = 0; i < 3; ++i) key(KEY_DOWN); key(KEY_ENTER); idle(3); key(KEY_ENTER); idle(420);
+        steps.push_back([&]{racing_player->take_damage(100);}); idle(5); shortcut(KEY_S);
+        steps.push_back([&]{PlaySession resumed; require(title=="Ambaretto - "+race_city.name && PlaySession::load(root/"cities"/(race_city.id+".play"),resumed,error) && resumed.play_mode==PlayMode::CarOnly,"In-game race did not return to the original Car only mode"); should_close=true;});
+        require(ambaretto_main(3,args)==0,"Race gameplay workflow failed");
+        stage="Free roam race returns to Free roam"; reset();
+        City roaming_race=race_city; roaming_race.id=City::create("fresh").id;
+        require(roaming_race.set_spawn(race_map.checkpoints[0]+Vec3(0,0,City::block),error),error.c_str());
+        CityVehicle race_car(CityVehicleKind::Car,*roaming_race.spawn+Vec3(2.8f,0,0)); race_car.car=race_design;
+        require(roaming_race.add_vehicle(race_car,error) && roaming_race.save(root/"cities",error),error.c_str());
+        path=(root/"cities"/(roaming_race.id+".city")).string(); args[2]=path.data();
+        idle(5); key(KEY_ENTER); idle(5); key(KEY_E); idle(5);
+        key(KEY_ESCAPE); key(KEY_F10); for (int i = 0; i < 3; ++i) key(KEY_DOWN); key(KEY_ENTER); idle(3); key(KEY_ENTER); idle(420);
+        steps.push_back([&]{GroundHit hit; require(active_world && active_world->cast_ray(race_map.checkpoints[0]+Vec3(0,8,0),-Vec3::sAxisY(),12,hit) && hit.car,"Free roam car did not enter race"); hit.car->take_damage(100);});
+        idle(5); shortcut(KEY_S);
+        steps.push_back([&]{PlaySession resumed; require(title=="Ambaretto - "+roaming_race.name && PlaySession::load(root/"cities"/(roaming_race.id+".play"),resumed,error)
+            && resumed.play_mode==PlayMode::FreeRoam && resumed.mode==EntryVehicle::Car,"In-game race did not return to Free roam in the player's car"); should_close=true;});
+        require(ambaretto_main(3,args)==0,"Free roam race workflow failed");
+        std::cout<<"Menus: creation, Save/Discard/Cancel, pause/resume, map editing, saved play modes and races passed\n";
+    } catch (const WorkflowFailure& e) {
+        std::cerr<<e.message<<'\n'; if (IsWindowReady()) CloseWindow(); return 1;
     } catch (const std::exception& e) {
         std::cerr<<e.what()<<'\n'; if (IsWindowReady()) CloseWindow(); return 1;
     }

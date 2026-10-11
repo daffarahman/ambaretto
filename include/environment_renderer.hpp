@@ -24,6 +24,7 @@ public:
     Shader object_shader() const { return land_shader_; }
     const BuildingRenderStats& building_stats() const { return custom_buildings_.stats(); }
     const std::string& building_warning() const { return custom_buildings_.warning(); }
+    const std::string& road_warning() const { return road_warning_; }
     void minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police = nullptr, bool in_vehicle = false) const;
     void world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police = nullptr) const;
 private:
@@ -38,8 +39,10 @@ private:
     static bool nearby(const Chunk& chunk, const Vector3& focus, float distance);
     std::vector<Chunk> city_chunks_, tree_chunks_, ground_chunks_;
     std::vector<SceneLight> local_lights_;
-    Model terrain_{}, grass_{}, sand_{}, roads_{}, ocean_{}, trees_{}, signs_{}, lights_{}, glows_{}, map_{};
+    Model terrain_{}, grass_{}, sand_{}, roads_{}, sidewalks_{}, ocean_{}, trees_{}, signs_{}, lights_{}, glows_{}, map_{};
     Texture2D soil_texture_{}, grass_texture_{}, sand_texture_{}, asphalt_texture_{}, tree_texture_{}, sign_texture_{}, water_depth_{};
+    Texture2D road_texture_{}, sidewalk_texture_{};
+    std::string road_warning_;
     BuildingRenderer custom_buildings_;
     SkyRenderer sky_;
     std::map<std::string,Texture2D> ground_textures_;

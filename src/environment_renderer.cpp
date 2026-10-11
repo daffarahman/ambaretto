@@ -859,13 +859,22 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     }
     std::string building_error;
     if (!custom_buildings_.build(custom,building_error)) throw std::runtime_error(building_error);
-    MeshBuilder ground, grass, sand, roads, buildings, markings, water;
+    MeshBuilder ground, grass, sand, roads, sidewalks, buildings, markings, water;
     const City& city = *env.city();
     std::map<std::string,MeshBuilder> painted;
     soil_texture_ = load_terrain_texture("soil.png");
     grass_texture_ = load_terrain_texture("grass.png");
     sand_texture_ = load_terrain_texture("beach-sand.png");
     asphalt_texture_ = load_terrain_texture("asphalt.png");
+    road_texture_ = load_terrain_texture(city.road_style.road_texture.c_str());
+    if (!road_texture_.id && city.road_style.road_texture!="asphalt.png") {
+        road_warning_ = "Missing road texture: "+city.road_style.road_texture+" / using asphalt";
+        road_texture_ = load_terrain_texture("asphalt.png");
+    }
+    if (city.road_style.sidewalks) {
+        sidewalk_texture_ = load_terrain_texture(city.road_style.sidewalk_texture.c_str());
+        if (!sidewalk_texture_.id) road_warning_ += (road_warning_.empty() ? "" : " / ")+std::string("Missing sidewalk texture: ")+city.road_style.sidewalk_texture+" / using gray";
+    }
     for (const auto& t : env.triangles()) if (t.surface != Surface::Seabed && !t.deck) {
         const Vec3 center = (env.vertices()[t.a]+env.vertices()[t.b]+env.vertices()[t.c])/3;
         const auto p = City::cell(center.GetX(),center.GetZ());
@@ -886,19 +895,24 @@ void EnvironmentRenderer::load_city(const Environment& env) {
                 }
             }
         }
-        MeshBuilder& mesh = surface == Surface::Grass ? grass : surface == Surface::Sand ? sand : surface == Surface::Road ? roads : ground;
+        if (surface==Surface::Road) {
+            ground_textures_["asphalt.png"] = asphalt_texture_;
+            painted["asphalt.png"].triangle(env.vertices()[t.a],env.vertices()[t.b],env.vertices()[t.c],asphalt_texture_.id ? WHITE : surface_color(surface));
+            continue;
+        }
+        MeshBuilder& mesh = surface == Surface::Grass ? grass : surface == Surface::Sand ? sand : ground;
         const Color tint = surface == Surface::Grass ? (grass_texture_.id ? WHITE : surface_color(surface))
             : surface == Surface::Sand ? (sand_texture_.id ? WHITE : surface_color(surface))
-            : surface == Surface::Road ? (asphalt_texture_.id ? WHITE : surface_color(surface))
             : soil_texture_.id ? WHITE : surface_color(surface);
         mesh.triangle(env.vertices()[t.a],env.vertices()[t.b],env.vertices()[t.c],tint);
     }
     if (std::any_of(city.elevation.begin(),city.elevation.end(),[](auto h){return h>0;})) {
-        roads.ground_city = markings.ground_city = &city;
-        roads.ground_lift = .065f; markings.ground_lift = .09f;
+        roads.ground_city = sidewalks.ground_city = markings.ground_city = &city;
+        roads.ground_lift = .065f; sidewalks.ground_lift = .08f; markings.ground_lift = .09f;
     }
     const auto box = [&](Vec3 c, float width, float depth, Color tint) { markings.box(c,Vec3(width,.025f,depth),tint); };
-    const auto pavement = [&](Vec3 c,float width,float depth) { roads.box(c,Vec3(width,.06f,depth),asphalt_texture_.id ? WHITE : Color{57,64,72,255}); };
+    const auto pavement = [&](Vec3 c,float width,float depth) { roads.box(c,Vec3(width,.06f,depth),road_texture_.id ? WHITE : Color{57,64,72,255}); };
+    const float verge_line = city.road_style.sidewalks ? 2.04f : 1.26f;
     const auto lift = [](Vec3 v,float height) { v.SetY(height); return v; };
     const auto strip = [&](MeshBuilder& mesh,const std::vector<Vec3>& a,const std::vector<Vec3>& b,float height,Color color) {
         for (std::size_t i = 0; i+1 < a.size(); ++i) {
@@ -918,20 +932,23 @@ void EnvironmentRenderer::load_city(const Environment& env) {
         buildings.triangle(c-down,b-down,a-down,concrete);
     }
     for (const auto& node : city.road_network()) {
+        if (city.road_style.sidewalks) for (const auto& t : node.sidewalk_triangles())
+            sidewalks.triangle(lift(t[0],City::level+.08f),lift(t[1],City::level+.08f),lift(t[2],City::level+.08f),sidewalk_texture_.id ? WHITE : Color{172,181,175,255});
         Vec3 c = node.center()+Vec3(0,.035f,0); const Vec3 half = node.half_size();
         const unsigned mask = node.mask;
         const auto inner = node.path(0,.7f), outer = node.path(1,-.7f);
         if (!inner.empty()) {
-            strip(roads,inner,outer,City::level+.065f,asphalt_texture_.id ? WHITE : Color{57,64,72,255});
+            strip(roads,inner,outer,City::level+.065f,road_texture_.id ? WHITE : Color{57,64,72,255});
             strip(markings,node.path(.5f,-.063f),node.path(.5f,.063f),City::level+.09f,{222,210,152,255});
             for (float fraction : {0.f,1.f}) {
-                const float inset = fraction==0 ? 1.26f : -1.26f;
+                const float inset = fraction==0 ? verge_line : -verge_line;
                 strip(markings,node.path(fraction,inset-.049f),node.path(fraction,inset+.049f),City::level+.09f,RAYWHITE);
             }
         } else if (const auto border = node.outline(); !border.empty()) {
             std::vector<Vec3> pavement;
             for (auto p : border) pavement.push_back(lift(p,City::level+.065f));
-            roads.polygon(std::move(pavement),asphalt_texture_.id ? WHITE : Color{57,64,72,255});
+            roads.polygon(std::move(pavement),road_texture_.id ? WHITE : Color{57,64,72,255});
+            const auto line_border = city.road_style.sidewalks ? node.outline(verge_line) : border;
             for (std::size_t i = 0; i < border.size(); ++i) {
                 const Vec3 a = border[i], b = border[(i+1)%border.size()];
                 bool gate_edge = false;
@@ -939,7 +956,10 @@ void EnvironmentRenderer::load_city(const Environment& env) {
                     const Vec3 out((d==1)-(d==3),0,(d==2)-(d==0));
                     gate_edge |= std::abs((a-node.port(d).center).Dot(out))<.001f && std::abs((b-node.port(d).center).Dot(out))<.001f;
                 }
-                if (!gate_edge) line(a+(node.center()-a).NormalizedOr(Vec3::sZero())*.56f,b+(node.center()-b).NormalizedOr(Vec3::sZero())*.56f,.098f,RAYWHITE);
+                if (!gate_edge) {
+                    if (city.road_style.sidewalks) line(line_border[i],line_border[(i+1)%line_border.size()],.098f,RAYWHITE);
+                    else line(a+(node.center()-a).NormalizedOr(Vec3::sZero())*.56f,b+(node.center()-b).NormalizedOr(Vec3::sZero())*.56f,.098f,RAYWHITE);
+                }
             }
             for (int d = 0; d < 4; ++d) if (mask&(1u<<d)) {
                 const auto gate = node.port(d); const Vec3 out((d==1)-(d==3),0,(d==2)-(d==0)), across = out.Cross(Vec3::sAxisY());
@@ -964,10 +984,10 @@ void EnvironmentRenderer::load_city(const Environment& env) {
                     box(c+across*offset+Vec3(0,.04f,0),vertical ? .098f : size,vertical ? size : .098f,color);
                 };
                 marking(0,length,{222,210,152,255});
-                for (float sign : {-1.f,1.f}) marking(sign*(width/2-1.26f),length,RAYWHITE);
+                for (float sign : {-1.f,1.f}) marking(sign*(width/2-verge_line),length,RAYWHITE);
                 if (mask!=5 && mask!=10) {
-                    const float end = (mask==1 || mask==8 ? 1.f : -1.f)*(length/2-.7f);
-                    box(c+along*end+Vec3(0,.04f,0),vertical ? width-2.52f : .112f,vertical ? .112f : width-2.52f,RAYWHITE);
+                    const float end = (mask==1 || mask==8 ? 1.f : -1.f)*(length/2-(city.road_style.sidewalks ? verge_line-.7f : .7f));
+                    box(c+along*end+Vec3(0,.04f,0),vertical ? width-2*verge_line : .112f,vertical ? .112f : width-2*verge_line,RAYWHITE);
                 }
             }
         }
@@ -978,13 +998,13 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     }
     water.quad({-Environment::extent,0,-Environment::extent},{-Environment::extent,0,Environment::extent},
         {Environment::extent,0,Environment::extent},{Environment::extent,0,-Environment::extent},WHITE);
-    terrain_ = ground.upload(); grass_ = grass.upload(); sand_ = sand.upload(); roads_ = roads.upload(); ocean_ = water.upload();
+    terrain_ = ground.upload(); grass_ = grass.upload(); sand_ = sand.upload(); roads_ = roads.upload(); sidewalks_ = sidewalks.upload(); ocean_ = water.upload();
     for (Model model : buildings.upload_chunks()) city_chunks_.push_back(chunk(model));
     for (Model model : markings.upload_chunks()) city_chunks_.push_back(chunk(model));
     land_shader_ = LoadShaderFromMemory(land_vertex,land_fragment.c_str());
     load_water(env);
     light_shader_ = LoadShaderFromMemory(land_vertex,light_fragment);
-    for (Model* model : {&terrain_,&grass_,&sand_,&roads_}) if (model->materials) model->materials[0].shader = land_shader_;
+    for (Model* model : {&terrain_,&grass_,&sand_,&roads_,&sidewalks_}) if (model->materials) model->materials[0].shader = land_shader_;
     for (const auto& batch : painted) for (auto model : batch.second.upload_chunks()) {
         model.materials[0].shader = land_shader_;
         const auto texture = ground_textures_.at(batch.first);
@@ -995,7 +1015,8 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     if (terrain_.materials && soil_texture_.id) SetMaterialTexture(&terrain_.materials[0],MATERIAL_MAP_DIFFUSE,soil_texture_);
     if (grass_.materials && grass_texture_.id) SetMaterialTexture(&grass_.materials[0],MATERIAL_MAP_DIFFUSE,grass_texture_);
     if (sand_.materials && sand_texture_.id) SetMaterialTexture(&sand_.materials[0],MATERIAL_MAP_DIFFUSE,sand_texture_);
-    if (roads_.materials && asphalt_texture_.id) SetMaterialTexture(&roads_.materials[0],MATERIAL_MAP_DIFFUSE,asphalt_texture_);
+    if (roads_.materials && road_texture_.id) SetMaterialTexture(&roads_.materials[0],MATERIAL_MAP_DIFFUSE,road_texture_);
+    if (sidewalks_.materials && sidewalk_texture_.id) SetMaterialTexture(&sidewalks_.materials[0],MATERIAL_MAP_DIFFUSE,sidewalk_texture_);
     land_camera_ = GetShaderLocation(land_shader_,"cameraPosition");
     load_trees(env);
     if (!tree_shader_.id) {
@@ -1177,7 +1198,7 @@ void EnvironmentRenderer::load_trees(const Environment& env) {
 EnvironmentRenderer::~EnvironmentRenderer() {
     UnloadModel(terrain_); UnloadModel(ocean_);
     UnloadModel(grass_); UnloadModel(sand_);
-    UnloadModel(roads_); UnloadModel(signs_);
+    UnloadModel(roads_); UnloadModel(sidewalks_); UnloadModel(signs_);
     UnloadModel(lights_); UnloadModel(glows_);
     for (auto& part : city_chunks_) UnloadModel(part.model);
     for (auto& part : tree_chunks_) UnloadModel(part.model);
@@ -1188,9 +1209,11 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     if (grass_texture_.id != 0) UnloadTexture(grass_texture_);
     if (sand_texture_.id != 0) UnloadTexture(sand_texture_);
     if (asphalt_texture_.id != 0) UnloadTexture(asphalt_texture_);
+    if (road_texture_.id) UnloadTexture(road_texture_);
+    if (sidewalk_texture_.id) UnloadTexture(sidewalk_texture_);
     if (sign_texture_.id) UnloadTexture(sign_texture_);
     if (water_depth_.id) UnloadTexture(water_depth_);
-    for (const auto& texture : ground_textures_) if (texture.second.id) UnloadTexture(texture.second);
+    for (const auto& texture : ground_textures_) if (texture.second.id && texture.second.id!=asphalt_texture_.id) UnloadTexture(texture.second);
     UnloadModel(map_);
     UnloadShader(land_shader_); UnloadShader(water_shader_);
     UnloadShader(light_shader_);
@@ -1220,6 +1243,7 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Dayligh
     rlDrawRenderBatchActive();
     if (depth_bias) { enable(polygon_offset_fill); offset(-1, -1); }
     DrawModel(roads_, {0, 0, 0}, 1, WHITE);
+    DrawModel(sidewalks_, {0, 0, 0}, 1, WHITE);
     if (depth_bias) offset(-1, -2);
     for (const auto& part : city_chunks_) if (nearby(part, camera.position, settings.view_distance)) DrawModel(part.model, {0, 0, 0}, 1, WHITE);
     custom_buildings_.draw(camera,light,lighting,settings);

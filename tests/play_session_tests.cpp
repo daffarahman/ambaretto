@@ -39,6 +39,10 @@ int main() {
         require(saved.save(directory,error),"Progress did not save");
         const auto path=directory/(city.id+".play"); const auto original=contents(path);
         PlaySession loaded;
+        auto legacy = original; legacy.replace(legacy.find("PLAY 2"),6,"PLAY 1"); legacy.erase(legacy.size()-2);
+        { std::ofstream file(path); file << legacy; }
+        require(PlaySession::load(path,loaded,error) && loaded.play_mode==PlayMode::FreeRoam, "Version 1 progress no longer loads as Free roam");
+        require(saved.save(directory,error), "Restoring version 2 fixture failed");
         require(PlaySession::load(path,loaded,error) && loaded.city_id==city.id && loaded.minutes==1305
             && (loaded.position-feet).Length()<.001f && loaded.ammo[1]==weapon_data(WeaponType::Pistol).magazine-1,"Progress round trip lost state");
         player.respawn_on_foot(Vec3(80,3,80)); time.set_time("08:00");
@@ -96,6 +100,34 @@ int main() {
         Player fresh(world,starter,environment);
         require(fresh.on_foot() && (fresh.position()-(environment.spawn()-Vec3(0,.48f,0))).Length()<.001f
             && (*city.spawn-spawn).Length()==0 && city.start_minutes==start_time,"Fresh start changed the map's spawn or start time");
+        {
+            PhysicsWorld car_world(environment); Car chosen(car_world,design); Player driver(car_world,chosen,environment);
+            driver.set_play_mode(PlayMode::CarOnly);
+            chosen.restore_motion(Vec3(60,8,60),Quat::sRotation(Vec3::sAxisY(),.7f),Vec3(2,0,-3)); chosen.take_damage(23);
+            const auto car_only=PlaySession::capture(driver,time);
+            require(car_only.play_mode==PlayMode::CarOnly && car_only.mode==EntryVehicle::Car && car_only.car_design && !car_only.placement,
+                "Car only capture lost its selected car or mode");
+            require(car_only.save(directory,error) && PlaySession::load(path,loaded,error), "Car only progress round trip failed");
+            driver.set_play_mode(PlayMode::FreeRoam); loaded.restore(driver,time,notice);
+            require(driver.play_mode()==PlayMode::CarOnly && driver.driving() && chosen.health()==77 && !driver.character().enabled()
+                && (driver.position()-loaded.position).Length()<.001f && (chosen.velocity()-loaded.velocity).Length()<.001f
+                && driver.interact()==Interaction::Blocked, "Continue lost Car only mode, motion, health or exit lock");
+            const auto retained=contents(path);
+            for (int invalid=0;invalid<4;++invalid) {
+                auto bad=loaded;
+                if (invalid==0) bad.play_mode=PlayMode(9);
+                if (invalid==1) bad.mode=EntryVehicle::None;
+                if (invalid==2) bad.car_design.reset();
+                if (invalid==3) bad.placement=placed.position;
+                require(!bad.save(directory,error) && contents(path)==retained, "Invalid Car only progress overwrote a valid save");
+            }
+            chosen.take_damage(100); driver.step({},{});
+            const auto wreck=PlaySession::capture(driver,time);
+            require(wreck.validate(error) && wreck.play_mode==PlayMode::CarOnly && wreck.mode==EntryVehicle::Car && wreck.vehicle_health==100,
+                "Saving during destruction lost Car only mode");
+            wreck.restore(driver,time,notice);
+            require(driver.driving() && driver.play_mode()==PlayMode::CarOnly && chosen.health()==100, "Wreck continuation fell back to walking");
+        }
         std::filesystem::remove_all(directory);
         std::cout<<"Progress: safe saves, validation, foot/car/aircraft continuation and fresh start passed\n";
     } catch (const std::exception& e) {

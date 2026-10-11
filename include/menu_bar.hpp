@@ -15,7 +15,8 @@ enum class MenuCommand {
     NewBuilding, SaveBuilding, SavedBuildings, UseBuilding, CloseCreator, RotateBuilding,
     CarEditor, EditCar, NewCar, SaveCar, UseCar,
     CharacterCreator, ChoosePlayerCharacter, NewCharacter, SaveCharacter, UseCharacter, RefreshDesigns,
-    Editors, SavedCars, SavedCharacters, DuplicateCity, CitySettings, EditMap, Restart
+    Editors, SavedCars, SavedCharacters, DuplicateCity, CitySettings, EditMap, Restart, PanView, PlainBuilding, RoadEditor,
+    Races, NewRace, StartRace
 };
 enum class MenuMode { Game, Editor, Cities, Creator, CarCreator, CharacterCreator, Main, PlayEditor };
 struct MenuState {
@@ -23,6 +24,7 @@ struct MenuState {
     int tool = -1, vehicle = 0, density = 2, elevation = 1;
     bool car_selection = false;
     bool choose_character = true;
+    bool race = true;
 };
 struct MenuInput {
     Vector2 mouse{};
@@ -41,8 +43,8 @@ public:
     MenuCommand update(const MenuState& state = {}, bool mouse_enabled = true);
     MenuCommand update(const MenuState& state, const MenuInput& input);
     void draw(const MenuState& state = {}) const;
-    MenuCommand update(ControllerMapping& mapping, const std::filesystem::path& path, bool mouse_enabled, const ControllerState& input);
-    void draw(const ControllerMapping& mapping, const std::filesystem::path& path) const;
+    MenuCommand update(ControllerMapping& mapping, const std::filesystem::path& path, bool mouse_enabled, const ControllerState& input, const MenuState& state = {});
+    void draw(const ControllerMapping& mapping, const std::filesystem::path& path, const MenuState& state = {}) const;
 private:
     MenuMode mode_;
     bool close_mapping(const ControllerMapping& mapping, const std::filesystem::path& path, bool save = false);

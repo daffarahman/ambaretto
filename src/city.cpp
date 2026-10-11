@@ -1,4 +1,5 @@
 #include "city.hpp"
+#include "race.hpp"
 #include "environment.hpp"
 #include <algorithm>
 #include <chrono>
@@ -399,7 +400,7 @@ std::vector<Vec3> CityRoadNode::path(float fraction,float inset) const {
     const auto a = port(d), b = port(d+2);
     return {a.center+across*((.5f-fraction)*a.width-inset),b.center+across*((.5f-fraction)*b.width-inset)};
 }
-std::vector<Vec3> CityRoadNode::outline() const {
+std::vector<Vec3> CityRoadNode::outline(float inset) const {
     std::vector<int> arms;
     for (int d = 0; d < 4; ++d) if (mask&(1u<<d)) arms.push_back(d);
     if (arms.size()<3) return {};
@@ -407,7 +408,7 @@ std::vector<Vec3> CityRoadNode::outline() const {
     const auto edge = [&](int d,float side) {
         const auto gate = port(d);
         const Vec3 outward((d==1)-(d==3),0,(d==2)-(d==0));
-        return gate.center+outward.Cross(Vec3::sAxisY())*(side*(gate.width/2-.7f));
+        return gate.center+outward.Cross(Vec3::sAxisY())*(side*(gate.width/2-inset));
     };
     for (std::size_t i = 0; i < arms.size(); ++i) {
         const int d = arms[i], next = arms[(i+1)%arms.size()];
@@ -436,6 +437,39 @@ std::vector<Vec3> CityRoadNode::outline() const {
         }
     }
     return points;
+}
+std::vector<std::array<Vec3,3>> CityRoadNode::sidewalk_triangles() const {
+    std::vector<std::array<Vec3,3>> result;
+    const auto triangle = [&](Vec3 a,Vec3 b,Vec3 c) {
+        const float area = (b-a).Cross(c-a).GetY();
+        if (std::abs(area)<1.e-6f) return;
+        if (area<0) std::swap(b,c);
+        result.push_back({a,b,c});
+    };
+    const auto strip = [&](const std::vector<Vec3>& a,const std::vector<Vec3>& b,bool closed) {
+        for (std::size_t i=0;i<(closed ? a.size() : a.size()-1);++i) {
+            const auto j=(i+1)%a.size(); bool gate=false;
+            if (closed) for (int d=0;d<4;++d) if (mask&(1u<<d)) {
+                const Vec3 out((d==1)-(d==3),0,(d==2)-(d==0));
+                gate|=std::abs((a[i]-port(d).center).Dot(out))<.001f && std::abs((a[j]-port(d).center).Dot(out))<.001f;
+            }
+            if (!gate) { triangle(a[i],a[j],b[j]); triangle(a[i],b[j],b[i]); }
+        }
+    };
+    // The 1.2 m verge follows the existing pavement and the NPC's 1.2 m inset.
+    if (const auto edge=path(0,.7f); !edge.empty()) {
+        strip(edge,path(0,1.9f),false); strip(path(1,-.7f),path(1,-1.9f),false);
+    } else if (const auto edge=outline(); !edge.empty()) strip(edge,outline(1.9f),true);
+    else {
+        const auto rectangle = [&](float inset) {
+            const Vec3 c=center(), h=half_size();
+            const float l=-h.GetX()+(mask&8 ? 0 : inset), r=h.GetX()-(mask&2 ? 0 : inset);
+            const float t=-h.GetZ()+(mask&1 ? 0 : inset), b=h.GetZ()-(mask&4 ? 0 : inset);
+            return std::vector<Vec3>{c+Vec3(l,0,t),c+Vec3(r,0,t),c+Vec3(r,0,b),c+Vec3(l,0,b)};
+        };
+        strip(rectangle(.7f),rectangle(1.9f),true);
+    }
+    return result;
 }
 int City::building_at(CityCell p) const {
     for (std::size_t i = 0; i < buildings.size(); ++i) if (covers(buildings[i], p)) return int(i);
@@ -844,6 +878,8 @@ bool City::validate(std::string& error) const {
     if (!valid_id(id) || !valid_name(name)) return fail(error, "Invalid city name or identifier.");
     if (start_minutes < 0 || start_minutes >= 1440 || trees.size() > 8192) return fail(error,"Invalid starting time or tree count.");
     if (pedestrian_density<0 || pedestrian_density>100) return fail(error,"Pedestrian density must be between 0 and 100 percent.");
+    if (!valid_texture_filename(road_style.road_texture) || !valid_texture_filename(road_style.sidewalk_texture))
+        return fail(error,"Invalid road or sidewalk texture filename.");
     for (const auto& texture : ground_textures)
         if (texture.first<0 || texture.first>=width*width || !land({texture.first%width,texture.first/width})
             || !valid_texture_filename(texture.second)) return fail(error,"Invalid ground texture filename or tile.");
@@ -875,6 +911,13 @@ bool City::validate(std::string& error) const {
             return fail(error,"Invalid tree placement.");
         const int plot = int(std::floor((t.base.GetZ()+1024)/4))*512+int(std::floor((t.base.GetX()+1024)/4));
         if (!plots.insert(plot).second) return fail(error,"Duplicate tree placement.");
+    }
+    if (races.size()>128) return fail(error,"Race limit reached (128 per city).");
+    std::set<std::string> race_names;
+    for (const auto& race : races) {
+        std::vector<RaceLeg> route;
+        if (!race_names.insert(race.name).second) return fail(error,"Race names must be unique in this city.");
+        if (!build_race_route(*this,race,route,error)) { error=race.name+": "+error; return false; }
     }
     return true;
 }
@@ -937,6 +980,11 @@ std::vector<std::vector<Vec3>> City::traffic_routes(float curb_inset) const {
                 route.insert(route.end(),curve.begin(),curve.end());
             } else if (in.Dot(out) > .9f) { route.push_back(a); route.push_back(b); }
             else if (in.Dot(out) < -.9f) {
+                if (curb_inset<1.9f) {
+                    const Vec3 cap=c-in*(along(in)-curb_inset);
+                    route.insert(route.end(),{a,cap+r*lane_in,cap-r*lane_in,b});
+                    continue;
+                }
                 const Vec3 cap = c-in*std::max(1.4f,lane_in-along(in)+1.7f);
                 route.push_back(a);
                 for (int k = 0; k <= 12; ++k) {
@@ -1053,7 +1101,7 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
     if (!file) return fail(error,"Cannot write this city. Your previous save is intact.");
     const bool free_spawn=spawn && (spawn->GetX()!=center(cell(spawn->GetX(),spawn->GetZ())).GetX()
         || spawn->GetZ()!=center(cell(spawn->GetX(),spawn->GetZ())).GetZ());
-    const int version = free_spawn ? 16 : pedestrian_density!=100 ? 15 : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh.has_value();}) ? 14
+    const int version = !races.empty() ? 18 : road_style!=RoadStyle{} ? 17 : free_spawn ? 16 : pedestrian_density!=100 ? 15 : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh.has_value();}) ? 14
         : player_character ? 13 : !ground_textures.empty() ? 12 : std::any_of(vehicles.begin(),vehicles.end(),[](const auto& v){return v.car.has_value();}) ? 11
         : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.rotation!=0;}) ? 9
         : 6;
@@ -1090,6 +1138,14 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
     }
     if (version>=13) { file << int(player_character.has_value()) << '\n'; if (player_character) player_character->write(file); }
     if (version>=15) file << pedestrian_density << '\n';
+    if (version>=17) file << std::quoted(road_style.road_texture) << ' ' << int(road_style.sidewalks) << ' ' << std::quoted(road_style.sidewalk_texture) << '\n';
+    if (version>=18) {
+        file << races.size() << '\n';
+        for (const auto& race : races) {
+            file << std::quoted(race.name) << ' ' << race.laps << ' ' << race.checkpoints.size() << '\n';
+            for (auto p : race.checkpoints) file << p.GetX() << ' ' << p.GetZ() << '\n';
+        }
+    }
     file.close();
     if (!file) return fail(error,"Cannot finish saving. Your previous save is intact.");
     if (std::filesystem::file_size(temporary,ec)>64*1024*1024 || ec)
@@ -1106,7 +1162,7 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
     std::error_code ec;
     if (std::filesystem::file_size(path,ec) > 64*1024*1024 || ec) return fail(error,"City save is missing or too large.");
     std::ifstream file(path); City read; std::string magic, terrain; int version = 0;
-    if (!(file >> magic >> version >> read.id >> std::quoted(read.name) >> terrain) || magic != "AMBARETTO_CITY" || version<1 || version>16
+    if (!(file >> magic >> version >> read.id >> std::quoted(read.name) >> terrain) || magic != "AMBARETTO_CITY" || version<1 || version>18
         || terrain.size() != read.tiles.size()) return fail(error,"Invalid or unsupported city save.");
     for (std::size_t i = 0; i < terrain.size(); ++i) {
         if (terrain[i] < '0' || terrain[i] > (version>=3 ? '3' : '2')) return fail(error,"Invalid city terrain.");
@@ -1238,6 +1294,25 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
     }
     if (version>=15 && (!(file>>read.pedestrian_density) || read.pedestrian_density<0 || read.pedestrian_density>100))
         return fail(error,"Invalid pedestrian density; use 0-100 percent.");
+    if (version>=17) {
+        int enabled;
+        if (!(file>>std::quoted(read.road_style.road_texture)>>enabled>>std::quoted(read.road_style.sidewalk_texture)) || enabled<0 || enabled>1)
+            return fail(error,"Invalid road style settings.");
+        read.road_style.sidewalks=enabled!=0;
+    }
+    if (version>=18) {
+        if (!(file>>count) || count<0 || count>128) return fail(error,"Invalid race count.");
+        for (int i = 0; i < count; ++i) {
+            RaceMap race; int points;
+            if (!(file>>std::quoted(race.name)>>race.laps>>points) || points<2 || points>256) return fail(error,"Invalid race data.");
+            for (int j = 0; j < points; ++j) {
+                float x,z;
+                if (!(file>>x>>z) || !std::isfinite(x) || !std::isfinite(z) || std::abs(x)>=extent || std::abs(z)>=extent) return fail(error,"Invalid race checkpoint.");
+                race.checkpoints.emplace_back(x,read.height(x,z),z);
+            }
+            read.races.push_back(std::move(race));
+        }
+    }
     if (read.spawn) read.spawn->SetY(read.height(read.spawn->GetX(),read.spawn->GetZ()));
     for (auto& v : read.vehicles) {
         if (!std::isfinite(v.position.GetX()) || !std::isfinite(v.position.GetZ())

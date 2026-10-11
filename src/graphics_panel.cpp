@@ -25,10 +25,10 @@ void text(const char* value, float x, float y, int size = 15, Color color = ink)
 void button(Rectangle r, const char* value, bool selected, bool enabled = true) {
     const bool hover = enabled && CheckCollisionPointRec(GetMousePosition(), r);
     const bool pressed = hover && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
-    ui::draw_button(r, pressed || selected, selected, enabled);
+    ui::draw_button(r, pressed, selected, enabled);
     int size = 15;
     while (size > 11 && ui::measure_text(value, size) > r.width - 12) --size;
-    text(value, r.x + (r.width - ui::measure_text(value, size)) / 2, r.y + (r.height - size) / 2, size,
+    text(value, r.x + (r.width - ui::measure_text(value, size)) / 2 + pressed, r.y + (r.height - size) / 2 + pressed, size,
         !enabled ? ui::disabled : ink);
 }
 bool slider_row(int id) { return id == 3 || id == 5 || id == 6; }
@@ -173,12 +173,13 @@ void GraphicsPanel::draw(float fps, const std::string& status) const {
     for (int id = 1; id <= 9; ++id) {
         const auto row = layout.row(id);
         const bool active = enabled(id, pending_);
-        if (selected_ == id) DrawRectangleRec(row, ui::title_blue);
-        const Color color = !active ? ui::disabled : selected_ == id ? ui::highlight : ink;
-        text(labels[id], row.x + 8, row.y + 5, 15, color);
+        const bool pressed = active && CheckCollisionPointRec(GetMousePosition(), row) && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+        ui::draw_button(row, pressed, selected_ == id, active);
+        const Color color = active ? ink : ui::disabled;
+        text(labels[id], row.x + 8 + pressed, row.y + 5 + pressed, 15, color);
         const auto label = value_label(id, pending_);
         if (slider_row(id)) {
-            text(label.c_str(), row.x + row.width - ui::measure_text(label.c_str(), 14) - 8, row.y + 5, 14, color);
+            text(label.c_str(), row.x + row.width - ui::measure_text(label.c_str(), 14) - 8 + pressed, row.y + 5 + pressed, 14, color);
             const auto slider = layout.slider(id);
             const float fraction = (slider_value(id, pending_) - minimum(id)) / (maximum(id) - minimum(id));
             ui::draw_slider(slider, fraction);

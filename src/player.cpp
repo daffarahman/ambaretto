@@ -19,9 +19,21 @@ Player::Player(PhysicsWorld& world, Car& car, const Environment& environment, Pl
     : world_(world), starter_car_(car), car_(&car), environment_(environment), character_(world, &environment, true), plane_(plane), traffic_(traffic),
       pedestrians_(pedestrians), police_(police) { starter_plane_ = plane; aircraft_ = aircraft; reset(); }
 
+void Player::set_play_mode(PlayMode mode) {
+    if (mode != PlayMode::FreeRoam && mode != PlayMode::CarOnly && mode != PlayMode::Race) throw std::invalid_argument("Invalid play mode.");
+    if (mode == PlayMode::Race && (!driving() || !car_->design())) throw std::invalid_argument("Enter a car before starting a race.");
+    const bool racing = play_mode_ == PlayMode::Race || mode == PlayMode::Race;
+    if (mode == PlayMode::CarOnly && !racing && !starter_car_.design()) throw std::invalid_argument("Choose a car before starting Car only.");
+    play_mode_ = mode;
+    if (racing) return;
+    if (mode == PlayMode::CarOnly) car_ = &starter_car_;
+    reset();
+}
+
 void Player::reset() {
     world_.take_player_kill();
-    if (environment_.city() && (car_ == &starter_car_ || on_foot())) {
+    respawn_remaining_ = 0;
+    if (play_mode_ == PlayMode::FreeRoam && environment_.city() && (car_ == &starter_car_ || on_foot())) {
         starter_car_.set_simulated(false);
         starter_car_.reset({-9000,-8,-9000});
         respawn_on_foot(environment_.spawn()-Vec3(0,.48f,0));
@@ -29,6 +41,28 @@ void Player::reset() {
     }
     Vec3 spawn = environment_.spawn();
     if (car_->design()) spawn.SetY(environment_.surface_height(spawn)+car_->ride_height());
+    if (play_mode_ == PlayMode::CarOnly) {
+        const auto clear = [&](Vec3 point) {
+            point.SetY(environment_.surface_height(point) + car_->ride_height());
+            if (environment_.submerged(point) || !car_->can_spawn_at(point)) return false;
+            for (const auto& wheel : car_->wheels()) {
+                const Vec3 sample = point + Vec3(wheel.mount.GetX(), 0, wheel.mount.GetZ());
+                GroundHit ground;
+                if (!world_.cast_ground(sample + Vec3(0, 2, 0), -Vec3::sAxisY(), 4, ground)
+                    || ground.normal.GetY() < .85f || ground.point.GetY() <= Environment::water_level + .1f
+                    || std::abs(ground.point.GetY() - (point.GetY() - car_->ride_height())) > .4f) return false;
+            }
+            spawn = point; return true;
+        };
+        bool found = clear(spawn);
+        for (int ring = 1; !found && ring <= City::width; ++ring) for (int t = -ring; !found && t < ring; ++t) {
+            for (const auto offset : {Vec3(float(t),0,float(-ring)), Vec3(float(ring),0,float(t)),
+                    Vec3(float(-t),0,float(ring)), Vec3(float(-ring),0,float(-t))}) {
+                if (clear(environment_.spawn() + offset * City::block)) { found = true; break; }
+            }
+        }
+        if (!found) throw std::runtime_error("No clear, level ground for this car. Move the map spawn or choose a smaller car.");
+    }
     // A stolen car must not recover on top of the starter or another car
     // still parked downtown. Search along the paved main avenue.
     const auto occupied = [&](Vec3 position) {
@@ -41,7 +75,7 @@ void Player::reset() {
         if (traffic_) for (const auto& vehicle : traffic_->cars()) if (overlaps(*vehicle.car)) return true;
         return false;
     };
-    for (int i = 0; i < 30 && occupied(spawn); ++i) {
+    for (int i = 0; play_mode_ == PlayMode::FreeRoam && i < 30 && occupied(spawn); ++i) {
         if (const auto* city = environment_.city()) {
             const auto origin = City::cell(city->spawn->GetX(),city->spawn->GetZ());
             const CityCell candidate{origin.x+i%5-2,origin.z+i/5-3};
@@ -67,6 +101,7 @@ void Player::reset() {
 }
 
 void Player::respawn_on_foot(Vec3 feet, float yaw) {
+    if (play_mode_ != PlayMode::FreeRoam) { reset(); return; }
     world_.take_player_kill();
     driving_ = flying_ = coasting_ = false;
     character_.reset(feet, yaw);
@@ -75,6 +110,7 @@ void Player::respawn_on_foot(Vec3 feet, float yaw) {
 }
 
 void Player::respawn_near(Vec3 origin) {
+    if (play_mode_ != PlayMode::FreeRoam) { reset(); return; }
     if (!std::isfinite(origin.GetX()) || !std::isfinite(origin.GetY()) || !std::isfinite(origin.GetZ())) origin = environment_.spawn();
     const auto try_ground = [&](Vec3 point) {
         if (std::abs(point.GetX()) > Environment::extent - 40 || std::abs(point.GetZ()) > Environment::extent - 40) return false;
@@ -174,6 +210,7 @@ bool Player::can_steal() const { return traffic_ && traffic_->is_npc(entry_car()
 bool Player::can_enter() const { return entry_vehicle() != EntryVehicle::None; }
 
 Interaction Player::interact() {
+    if (play_mode_ != PlayMode::FreeRoam) return Interaction::Blocked;
     if (police_ && police_->arrested()) return Interaction::Blocked;
     if (!character_.alive() || (on_foot() && character_.ragdolling())) return Interaction::Blocked;
     if (on_foot()) {
@@ -267,7 +304,14 @@ void Player::step(Input driving, FootInput walking, float dt, FlightInput flight
         if (on_foot()) for (const auto& unit : police_->units()) if (unit.active) character_.hit_by(*unit.car, dt);
     }
     world_.step(dt);
-    if (driving_ && car_->destroyed()) {
+    if (play_mode_ == PlayMode::CarOnly) {
+        if (environment_.submerged(car_->position())) car_->take_damage(100);
+        if (car_->destroyed() || !character_.alive()) {
+            if (respawn_remaining_ == 0) respawn_remaining_ = 3;
+            respawn_remaining_ = std::max(0.f, respawn_remaining_ - dt);
+            if (respawn_remaining_ == 0) reset();
+        }
+    } else if (play_mode_ != PlayMode::Race && driving_ && car_->destroyed()) {
         if (!character_.pull_from(*car_)) character_.reset(car_->position() + Vec3(0, 2, 0));
         driving_ = coasting_ = false;
         character_.take_damage(100);

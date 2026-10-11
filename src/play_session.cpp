@@ -34,17 +34,22 @@ bool read_vector(std::istream& file, Vec3& v) {
 
 PlaySession PlaySession::capture(const Player& player, const DayNight& time) {
     PlaySession saved;
+    saved.play_mode = player.play_mode_;
     if (const auto* city = player.environment_.city()) saved.city_id = city->id;
     saved.minutes = time.minutes_of_day(); saved.position = player.position();
     saved.yaw = player.character_.yaw(); saved.health = player.character_.health();
     saved.weapon = player.weapons_.selected_; saved.ammo = player.weapons_.ammo_; saved.reserve = player.weapons_.reserve_;
-    if (!player.character_.alive()) {
+    if (saved.play_mode == PlayMode::CarOnly && (player.car().destroyed() || !player.character_.alive())) {
+        saved.mode = EntryVehicle::Car; saved.car_design = player.car().design(); saved.health = 100;
+        saved.position = player.environment_.spawn();
+        saved.position.SetY(player.environment_.surface_height(saved.position) + player.car().ride_height());
+    } else if (!player.character_.alive()) {
         saved.position = player.environment_.spawn() - Vec3(0, .48f, 0); saved.health = 100;
     } else if (player.driving() && !player.car().destroyed()) {
         const auto& car = player.car();
         saved.mode = EntryVehicle::Car; saved.rotation = car.rotation(); saved.velocity = car.velocity();
         saved.vehicle_health = car.health(); saved.car_design = car.design();
-        if (player.traffic_) for (const auto& placed : player.traffic_->cars())
+        if (saved.play_mode == PlayMode::FreeRoam && player.traffic_) for (const auto& placed : player.traffic_->cars())
             if (placed.car.get() == &car) saved.placement = placed.placement;
     } else if (player.flying() && !player.plane().destroyed()) {
         const auto& plane = player.plane();
@@ -72,6 +77,10 @@ bool PlaySession::validate(std::string& error) const {
         return fail(error, "Invalid progress position, time or health.");
     if (mode != EntryVehicle::None && mode != EntryVehicle::Car && mode != EntryVehicle::Plane)
         return fail(error, "Invalid progress vehicle.");
+    if (play_mode != PlayMode::FreeRoam && play_mode != PlayMode::CarOnly)
+        return fail(error, "Invalid progress play mode.");
+    if (play_mode == PlayMode::CarOnly && (mode != EntryVehicle::Car || !car_design || placement))
+        return fail(error, "Car only progress needs its selected car.");
     if (plane_type < PlaneType::Trainer || plane_type > PlaneType::Boeing747 || !rotation.IsNormalized())
         return fail(error, "Invalid progress vehicle orientation.");
     if (car_design && !car_design->validate(error)) return false;
@@ -91,7 +100,7 @@ bool PlaySession::save(const std::filesystem::path& directory, std::string& erro
     const auto path = directory / (city_id + ".play"); auto temporary = path; temporary += ".tmp";
     std::ofstream file(temporary);
     if (!file) return fail(error, "Cannot write progress; previous save retained.");
-    file << "AMBARETTO_PLAY 1\n" << city_id << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10)
+    file << "AMBARETTO_PLAY 2\n" << city_id << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10)
         << minutes << ' ' << int(mode) << ' ' << yaw << ' ' << health << ' ' << vehicle_health << ' ' << throttle << ' ' << int(plane_type) << '\n';
     write_vector(file, position); write_vector(file, velocity);
     file << rotation.GetX() << ' ' << rotation.GetY() << ' ' << rotation.GetZ() << ' ' << rotation.GetW() << '\n'
@@ -101,6 +110,7 @@ bool PlaySession::save(const std::filesystem::path& directory, std::string& erro
     if (car_design) car_design->write(file);
     file << int(weapon) << '\n';
     for (int i = 0; i < int(WeaponType::Count); ++i) file << ammo[i] << ' ' << reserve[i] << '\n';
+    file << int(play_mode) << '\n';
     file.close();
     if (!file) return fail(error, "Cannot finish saving progress; previous save retained.");
 #ifdef _WIN32
@@ -119,7 +129,7 @@ bool PlaySession::load(const std::filesystem::path& path, PlaySession& session, 
     int version, mode, type, has_placement, has_car, weapon;
     float x, y, z, w;
     if (!(file >> magic >> version >> next.city_id >> next.minutes >> mode >> next.yaw >> next.health >> next.vehicle_health >> next.throttle >> type)
-        || magic != "AMBARETTO_PLAY" || version != 1 || !read_vector(file, next.position) || !read_vector(file, next.velocity)
+        || magic != "AMBARETTO_PLAY" || (version != 1 && version != 2) || !read_vector(file, next.position) || !read_vector(file, next.velocity)
         || !(file >> x >> y >> z >> w >> has_placement) || (has_placement != 0 && has_placement != 1))
         return fail(error, "Invalid progress save.");
     next.mode = EntryVehicle(mode); next.plane_type = PlaneType(type); next.rotation = Quat(x, y, z, w);
@@ -130,6 +140,11 @@ bool PlaySession::load(const std::filesystem::path& path, PlaySession& session, 
     next.weapon = WeaponType(weapon);
     for (int i = 0; i < int(WeaponType::Count); ++i)
         if (!(file >> next.ammo[i] >> next.reserve[i])) return fail(error, "Invalid progress ammunition.");
+    if (version == 2) {
+        int play_mode;
+        if (!(file >> play_mode)) return fail(error, "Invalid progress play mode.");
+        next.play_mode = PlayMode(play_mode);
+    }
     if (!next.validate(error)) return false;
     if (file >> extra) return fail(error, "Unexpected progress data.");
     session = std::move(next); error.clear(); return true;
@@ -139,6 +154,8 @@ void PlaySession::restore(Player& player, DayNight& time, std::string& notice) c
     std::string error;
     if (!validate(error)) { notice = "Cannot continue: " + error; return; }
     if (!player.environment_.city() || player.environment_.city()->id != city_id) { notice = "Cannot continue progress from another map."; return; }
+    player.play_mode_ = PlayMode::FreeRoam;
+    player.respawn_remaining_ = 0;
     time = DayNight(); time.advance(minutes - 480 + 1440);
     Vec3 feet = position;
     const float surface = player.environment_.surface_height(feet);
@@ -181,6 +198,11 @@ void PlaySession::restore(Player& player, DayNight& time, std::string& notice) c
     if (entered) player.character_.set_enabled(false);
     player.character_.health_ = health;
     player.weapons_.selected_ = weapon; player.weapons_.ammo_ = ammo; player.weapons_.reserve_ = reserve;
+    player.play_mode_ = play_mode;
+    if (play_mode == PlayMode::CarOnly && (player.environment_.submerged(player.position())
+        || !player.car().can_spawn_at(player.position(), player.car().rotation()))) {
+        player.reset(); notice = "Saved car position blocked; respawned in your selected car."; return;
+    }
     notice = mode != EntryVehicle::None && !entered ? "Saved vehicle was removed; continued on foot." : "Continued saved progress.";
     // shortcut: traffic and pedestrians restart with the map; snapshot them if full world persistence is needed.
 }

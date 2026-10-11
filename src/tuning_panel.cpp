@@ -6,7 +6,7 @@
 
 namespace ambaretto {
 namespace {
-constexpr Color muted = ui::disabled, selected_color = ui::title_blue, ink = ui::ink;
+constexpr Color muted = ui::disabled, ink = ui::ink;
 constexpr std::array<int, 3> tab_starts{{0, suspension_controls, suspension_controls + handling_controls}};
 constexpr std::array<int, 3> tab_counts{{suspension_controls, handling_controls,
     int(tuning_controls.size()) - suspension_controls - handling_controls}};
@@ -26,11 +26,11 @@ struct Layout {
 void button(Rectangle r, const char* text, bool selected = false) {
     const bool hover = CheckCollisionPointRec(GetMousePosition(), r);
     const bool pressed = hover && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
-    ui::draw_button(r, pressed || selected, selected);
+    ui::draw_button(r, pressed, selected);
     int size = 16;
     while (size > 10 && ambaretto::ui::measure_text(text, size) > r.width - 12) --size;
-    ambaretto::ui::draw_text(text, int(r.x + (r.width - ambaretto::ui::measure_text(text, size)) / 2),
-        int(r.y + (r.height - size) / 2), size, ink);
+    ambaretto::ui::draw_text(text, int(r.x + (r.width - ambaretto::ui::measure_text(text, size)) / 2) + pressed,
+        int(r.y + (r.height - size) / 2) + pressed, size, ink);
 }
 } // namespace
 
@@ -110,11 +110,12 @@ void TuningPanel::draw(const Car& car, int width, int height) const {
         const float value = car.tuning().*(control.value);
         const float upper = control.value == &CarTuning::travel ? std::min(control.max, car.tuning().rest_length - .05f) : control.max;
         const float fraction = std::clamp((value - control.min) / (upper - control.min), 0.0f, 1.0f);
-        if (selected_ == id) DrawRectangleRec({row.x - 6, row.y - 3, row.width + 12, 22}, selected_color);
-        const Color color = selected_ == id ? ui::highlight : ink;
-        ambaretto::ui::draw_text(control.label, int(row.x), int(row.y), 16, color);
+        const Rectangle label{row.x - 6, row.y - 3, row.width + 12, 22};
+        const bool pressed = CheckCollisionPointRec(GetMousePosition(), label) && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+        ui::draw_button(label, pressed, selected_ == id);
+        ambaretto::ui::draw_text(control.label, int(row.x) + pressed, int(row.y) + pressed, 16, ink);
         const std::string text = TextFormat(control.format, double(value * control.display_scale));
-        ambaretto::ui::draw_text(text.c_str(), int(row.x + row.width - ambaretto::ui::measure_text(text.c_str(), 15)), int(row.y), 15, color);
+        ambaretto::ui::draw_text(text.c_str(), int(row.x + row.width - ambaretto::ui::measure_text(text.c_str(), 15)) + pressed, int(row.y) + pressed, 15, ink);
         ui::draw_slider(slider, fraction);
     }
     ambaretto::ui::draw_text("WHEEL CONTACT / compression / load", int(r.x + 18), int(r.y + r.height - 141), 13, muted);
