@@ -62,7 +62,7 @@ std::string terrain_pixels() {
     const auto image=LoadImageFromScreen(); std::string pixels;
     for (int z=0;z<ambaretto::City::width;++z) for (int x=0;x<ambaretto::City::width;++x) {
         const auto c=GetImageColor(image,int(672+(x+.5f)*296/ambaretto::City::width),int(120+(z+.5f)*296/ambaretto::City::width));
-        pixels+=c.r==84 && c.g==129 && c.b==74 ? '1' : c.r==28 && c.g==66 && c.b==108 ? '0' : '?';
+        pixels+=c.r>=84 && c.r<=172 && c.g>=129 && c.g<=169 && c.b>=74 && c.b<=122 ? '1' : c.r==28 && c.g==66 && c.b==108 ? '0' : '?';
     }
     UnloadImage(image); return pixels;
 }
@@ -379,7 +379,7 @@ int main() {
         stage="terrain preview / regenerate / create"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=unavailable;
             const auto directory=root/"preview-cities"; City expected=City::create("Expected preview");
-            require(expected.generate_terrain(48,32,1234,error),"Preview fixture failed");
+            require(expected.generate_terrain(48,32,1234,error,{4,35}),"Preview fixture failed");
             std::string first,regenerated;
             idle(); click(760,220); click(410,276); replace_text("32"); click(300,336); replace_text("1234");
             steps.push_back([&]{require_terrain_preview(expected); first=terrain_pixels(); capture("terrain-preview.png");});
@@ -401,6 +401,31 @@ int main() {
             City loaded;
             require(City::load(directory/(selected.id+".city"),loaded,error) && loaded.tiles==expected.tiles && loaded.elevation==expected.elevation,
                 "Saved terrain differs from the preview");
+        } CloseWindow();
+        stage="terrain elevation / water / river / islands"; window(); {
+            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=unavailable;
+            const auto directory=root/"terrain-settings";
+            City flat=City::create("Flat"),hills=flat,river=flat,islands=flat;
+            require(flat.generate_terrain(48,48,1234,error,{0,20}) && hills.generate_terrain(48,48,1234,error,{8,60})
+                && river.generate_terrain(48,48,1234,error,{8,60,true}) && islands.generate_terrain(48,48,1234,error,{8,60,true,true}),"Terrain settings fixtures failed");
+            idle(); click(760,220); click(300,336); replace_text("1234"); click(300,378); replace_text("0"); click(300,418); replace_text("20");
+            steps.push_back([&]{require_terrain_preview(flat); capture("terrain-settings-flat.png");});
+            click(300,378); replace_text("8"); click(300,418); replace_text("60");
+            steps.push_back([&]{require_terrain_preview(hills); capture("terrain-settings-hills.png");});
+            click(160,462); steps.push_back([&]{require_terrain_preview(river);});
+            key(KEY_SPACE); steps.push_back([&]{require_terrain_preview(hills);});
+            key(KEY_SPACE); key(KEY_TAB); key(KEY_SPACE);
+            steps.push_back([&]{require_terrain_preview(islands); capture("terrain-settings-two-islands.png");});
+            click(300,378); replace_text("9"); key(KEY_ENTER);
+            steps.push_back([&]{require(selected.id==unavailable.id && !std::filesystem::exists(directory),"Invalid elevation saved a map");});
+            click(300,378); replace_text("8"); click(300,418); replace_text("101"); key(KEY_ENTER);
+            steps.push_back([&]{require(selected.id==unavailable.id && !std::filesystem::exists(directory),"Invalid water coverage saved a map");});
+            click(300,418); replace_text("60"); click(300,514);
+            steps.push_back([&]{require(title=="Ambaretto - City editor" && selected.tiles==islands.tiles && selected.elevation==islands.elevation,"Create ignored terrain settings"); capture("generated-hills-editor.png");});
+            key(KEY_ESCAPE); click(760,485);
+            require(!city_menu(selected,directory,controls,graphics),"Terrain settings editor started Play");
+            City loaded; require(City::load(directory/(selected.id+".city"),loaded,error)
+                && loaded.tiles==islands.tiles && loaded.elevation==islands.elevation,"Generated elevations did not save");
         } CloseWindow();
         // Each creation menu duplicates to disk, selects the copy, and leaves the source alone.
         for (auto kind:{DesignKind::Building,DesignKind::Car,DesignKind::Character}) {

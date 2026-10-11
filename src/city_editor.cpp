@@ -1918,7 +1918,8 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
     }
     bool open_editor=edit_selected || preview_editor;
     if (preview_editor && selected.id.empty()) selected=City::create("New city");
-    std::string status,name,terrain_x="48",terrain_z="48",terrain_seed;
+    std::string status,name,terrain_x="48",terrain_z="48",terrain_seed,terrain_elevation="4",terrain_water="35";
+    bool terrain_river=false,terrain_two_islands=false;
     std::vector<City> cities;
     int selection=-1,scroll=0,frames=0,new_field=0;
     bool accept_input=false,creating=false,generated_terrain=true;
@@ -1936,6 +1937,7 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
     const auto new_city=[&]() {
         creating=true; name="New city"; new_field=0; generated_terrain=true; status.clear();
         terrain_x=terrain_z="48"; terrain_seed=std::to_string(GetRandomValue(1,2147483647));
+        terrain_elevation="4"; terrain_water="35"; terrain_river=terrain_two_islands=false;
         terrain_draft=City::create("New city"); terrain_key.clear();
     };
     refresh();
@@ -1984,7 +1986,7 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
             ui::draw_desktop();
             const Rectangle r{(GetScreenWidth()-960)/2.f,(GetScreenHeight()-520)/2.f,960,520};
             ui::draw_window(r,"Create a city"); ui::draw_window_close(r);
-            if (modal_input && IsKeyPressed(KEY_TAB)) new_field = (new_field+(IsKeyDown(KEY_LEFT_SHIFT)||IsKeyDown(KEY_RIGHT_SHIFT) ? 3 : 1))%(generated_terrain ? 4 : 1);
+            if (modal_input && IsKeyPressed(KEY_TAB)) new_field = (new_field+(IsKeyDown(KEY_LEFT_SHIFT)||IsKeyDown(KEY_RIGHT_SHIFT) ? 7 : 1))%(generated_terrain ? 8 : 1);
             const auto entry = [&](std::string& value,Rectangle box,int id,bool enabled = true) {
                 if (enabled && modal_input && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && hit(box)) new_field = id;
                 if (enabled && new_field==id && modal_input) input(value,box);
@@ -1993,37 +1995,59 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
             text("Name",r.x+24,r.y+48,16); entry(name,{r.x+24,r.y+72,572,44},0);
             if (button({r.x+24,r.y+132,278,30},"Perlin terrain",generated_terrain,true,modal_input,16)) generated_terrain = true;
             if (button({r.x+318,r.y+132,278,30},"Empty water",!generated_terrain,true,modal_input,16)) { generated_terrain = false; new_field = 0; }
-            const auto dimension = [&](const char* label,std::string& value,float x,int id) {
-                text(label,x,r.y+190,16); entry(value,{x,r.y+218,170,36},id,generated_terrain);
-                for (int direction : {-1,1}) if (button({x+(direction<0 ? 180.f : 220.f),r.y+218,32,36},direction<0 ? "-" : "+",false,generated_terrain,modal_input,16)) {
-                    int count = 48; try { count = std::stoi(value); } catch (const std::exception&) {}
-                    value = std::to_string(std::clamp(std::clamp(count,1,City::width)+direction,1,City::width)); new_field = id;
+            const auto number = [&](std::string& value,Rectangle box,int id,int lo,int hi) {
+                entry(value,box,id,generated_terrain);
+                for (int direction : {-1,1}) if (button({box.x+box.width+(direction<0 ? 10.f : 50.f),box.y,32,box.height},direction<0 ? "-" : "+",false,generated_terrain,modal_input,16)) {
+                    int count=lo; try { count=std::stoi(value); } catch (const std::exception&) {}
+                    value=std::to_string(std::clamp(std::clamp(count,lo,hi)+direction,lo,hi)); new_field=id;
                 }
             };
-            dimension("Starter tiles X",terrain_x,r.x+24,1); dimension("Starter tiles Z",terrain_z,r.x+318,2);
+            text("Starter tiles X",r.x+24,r.y+190,16); number(terrain_x,{r.x+24,r.y+218,170,36},1,1,City::width);
+            text("Starter tiles Z",r.x+318,r.y+190,16); number(terrain_z,{r.x+318,r.y+218,170,36},2,1,City::width);
             text("Seed",r.x+24,r.y+286,17); entry(terrain_seed,{r.x+120,r.y+278,322,36},3,generated_terrain);
             if (button({r.x+452,r.y+278,144,36},"Regenerate",false,generated_terrain,modal_input,16)
                 || (modal_input && generated_terrain && (IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_R)))
                 terrain_seed = std::to_string(GetRandomValue(1,2147483647));
-            const auto key=std::to_string(generated_terrain)+"|"+terrain_x+"|"+terrain_z+"|"+terrain_seed;
+            text("Elevation variation",r.x+24,r.y+330,15);
+            number(terrain_elevation,{r.x+228,r.y+322,110,32},4,0,City::max_elevation);
+            text("0 = flat / 2 m per step",r.x+432,r.y+332,12);
+            text("Water coverage (%)",r.x+24,r.y+370,15);
+            number(terrain_water,{r.x+228,r.y+362,110,32},5,0,100);
+            text("0 = land / 100 = sea",r.x+432,r.y+372,12);
+            if (button({r.x+24,r.y+408,278,30},terrain_river ? "Central river: On" : "Central river: Off",terrain_river || new_field==6,generated_terrain,modal_input,16)) {
+                terrain_river=!terrain_river; new_field=6;
+            }
+            if (button({r.x+318,r.y+408,278,30},terrain_two_islands ? "Two islands" : "One island",terrain_two_islands || new_field==7,generated_terrain,modal_input,16)) {
+                terrain_two_islands=!terrain_two_islands; new_field=7;
+            }
+            if (modal_input && generated_terrain && IsKeyPressed(KEY_SPACE)) {
+                if (new_field==6) terrain_river=!terrain_river;
+                if (new_field==7) terrain_two_islands=!terrain_two_islands;
+            }
+            const auto key=std::to_string(generated_terrain)+"|"+terrain_x+"|"+terrain_z+"|"+terrain_seed+"|"+terrain_elevation+"|"+terrain_water+"|"+std::to_string(terrain_river)+std::to_string(terrain_two_islands);
             if (key!=terrain_key) {
                 terrain_key=key; terrain_error.clear(); status.clear(); terrain_ready=true;
                 City next; next.id=terrain_draft.id;
                 if (generated_terrain) {
                     try {
-                        for (const auto& value : {terrain_x,terrain_z,terrain_seed})
+                        for (const auto& value : {terrain_x,terrain_z,terrain_seed,terrain_elevation,terrain_water})
                             if (value.empty() || value.find_first_not_of("0123456789")!=std::string::npos) throw std::out_of_range("terrain");
                         const auto seed=std::stoull(terrain_seed);
                         if (seed>std::numeric_limits<std::uint32_t>::max()) throw std::out_of_range("seed");
                         preview_x=std::stoi(terrain_x); preview_z=std::stoi(terrain_z);
-                        terrain_ready=next.generate_terrain(preview_x,preview_z,std::uint32_t(seed),terrain_error);
-                    } catch (const std::exception&) {terrain_ready=false; terrain_error="Use 1-128 tiles and a seed from 0 to 4294967295.";}
+                        const TerrainSettings settings{std::stoi(terrain_elevation),std::stoi(terrain_water),terrain_river,terrain_two_islands};
+                        terrain_ready=next.generate_terrain(preview_x,preview_z,std::uint32_t(seed),terrain_error,settings);
+                    } catch (const std::exception&) {terrain_ready=false; terrain_error="Use whole numbers: tiles 1-128, elevation 0-8, water 0-100, seed 0-4294967295.";}
                 }
                 if (terrain_ready) {
                     terrain_draft=std::move(next);
                     auto image=GenImageColor(City::width,City::width,{28,66,108,255});
                     auto* pixels=static_cast<Color*>(image.data);
-                    for (int i=0;i<City::width*City::width;++i) if (terrain_draft.tiles[i]==CityTile::Land) pixels[i]={84,129,74,255};
+                    for (int i=0;i<City::width*City::width;++i) if (terrain_draft.tiles[i]==CityTile::Land) {
+                        const auto corners=terrain_draft.ground_patch({i%City::width,i/City::width});
+                        float height=0; for (auto p : corners) height+=(p.GetY()-City::level)/City::elevation_step/4;
+                        pixels[i]={static_cast<unsigned char>(84+height*11),static_cast<unsigned char>(129+height*5),static_cast<unsigned char>(74+height*6),255};
+                    }
                     if (terrain_preview.id) UpdateTexture(terrain_preview,image.data);
                     else {terrain_preview=LoadTextureFromImage(image); SetTextureFilter(terrain_preview,TEXTURE_FILTER_POINT);}
                     UnloadImage(image);
@@ -2041,12 +2065,13 @@ bool city_menu(City& selected,const std::filesystem::path& directory,ControllerM
             } else text("Fix terrain values to preview",view.x+12,view.y+138,13,accent);
             ui::draw_frame(view,true);
             DrawRectangleRec({view.x,r.y+390,14,14},{84,129,74,255}); text("Land",view.x+22,r.y+389,14);
-            DrawRectangleRec({view.x+134,r.y+390,14,14},{28,66,108,255}); text("Water",view.x+156,r.y+389,14);
-            text(terrain_ready ? "Land: "+std::to_string(terrain_draft.land_count())+" tiles" : "Preview unavailable",view.x,r.y+417,14);
-            text("128 x 128 map / box: starter area",view.x,r.y+444,12);
-            text(generated_terrain ? "1-128 tiles per axis / centered in the 128 x 128 map" : "Start with the original empty water map",r.x+24,r.y+334,15);
-            text(fit(terrain_error.empty() ? status : terrain_error,14,572),r.x+24,r.y+360,14,accent);
-            text("Ctrl+R: regenerate / Enter: create / Esc: cancel",r.x+24,r.y+410,14);
+            DrawRectangleRec({view.x+96,r.y+390,14,14},{172,169,122,255}); text("High",view.x+118,r.y+389,14);
+            DrawRectangleRec({view.x+200,r.y+390,14,14},{28,66,108,255}); text("Water",view.x+222,r.y+389,14);
+            const int land=terrain_draft.land_count();
+            text(terrain_ready ? "Land: "+std::to_string(land)+(generated_terrain ? " / water: "+std::to_string(int(std::round(100.f*(1-land/float(preview_x*preview_z)))))+"%" : " tiles") : "Preview unavailable",view.x,r.y+417,13);
+            const int peak=*std::max_element(terrain_draft.elevation.begin(),terrain_draft.elevation.end());
+            text("Height: 0-"+std::to_string(peak*2)+" m / box: starter area",view.x,r.y+444,12);
+            text(fit(terrain_error.empty() ? status.empty() ? "Ctrl+R: regenerate / Enter: create / Esc: cancel" : status : terrain_error,13,572),r.x+24,r.y+171,13,accent);
             const bool accept=button({r.x+24,r.y+452,278,44},"Create city",true,terrain_ready,modal_input) || (modal_input && terrain_ready && IsKeyPressed(KEY_ENTER));
             if (close_clicked(r,modal_input) || button({r.x+318,r.y+452,278,44},"Cancel",false,true,modal_input) || (modal_input && IsKeyPressed(KEY_ESCAPE))) {
                 creating=false; accept_input=false;

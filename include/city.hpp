@@ -21,6 +21,10 @@ struct CityCell {
 };
 enum class CityTile : unsigned char { Water, Land, Road, Bridge };
 enum class CityGround : unsigned char { Soil, Grass, Sand, Asphalt };
+struct TerrainSettings {
+    int elevation = 0, water_percent = 35;
+    bool river = false, two_islands = false;
+};
 struct CityBuilding {
     CityCell cell; int size = 1, height = 12;
     std::optional<BuildingMesh> mesh{};
@@ -148,7 +152,7 @@ struct City {
     bool save(const std::filesystem::path& directory, std::string& error) const;
     static bool load(const std::filesystem::path& path, City& city, std::string& error);
     static City create(std::string name);
-    bool generate_terrain(int tiles_x, int tiles_z, std::uint32_t seed, std::string& error);
+    bool generate_terrain(int tiles_x, int tiles_z, std::uint32_t seed, std::string& error, TerrainSettings settings = {});
 };
 enum class DesignKind { Building, Car, Character };
 bool edit_current_city(City& city, const std::filesystem::path& directory);

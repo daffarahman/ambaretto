@@ -13,6 +13,7 @@
 #include <set>
 #include <limits>
 #include <iomanip>
+#include <queue>
 
 namespace {
 using namespace ambaretto;
@@ -330,6 +331,58 @@ void generated_terrain(const std::filesystem::path& directory) {
     for (CityCell size : {CityCell{0,32},{32,0},{129,1},{1,129},{-1,1}})
         require(!fresh.generate_terrain(size.x,size.z,0,error) && fresh.land_count()==0
             && *std::max_element(fresh.elevation.begin(),fresh.elevation.end())==0,"invalid dimensions mutated terrain");
+    const auto components=[](const City& map) {
+        std::array<bool,City::width*City::width> seen{}; int count=0;
+        for (int i=0;i<City::width*City::width;++i) if (map.tiles[i]==CityTile::Land && !seen[i]) {
+            ++count; std::queue<CityCell> pending; pending.push({i%City::width,i/City::width}); seen[i]=true;
+            while (!pending.empty()) {
+                const auto p=pending.front(); pending.pop();
+                for (auto d : {CityCell{1,0},{-1,0},{0,1},{0,-1}}) {
+                    CityCell q{p.x+d.x,p.z+d.z};
+                    if (City::contains(q) && map.land(q) && !seen[City::index(q)]) {seen[City::index(q)]=true; pending.push(q);}
+                }
+            }
+        }
+        return count;
+    };
+    for (std::uint32_t seed : {0u,1234u,std::numeric_limits<std::uint32_t>::max()}) {
+        City hills=City::create("Rolling hills"),gentle=hills,flat=hills,wet=hills,river=hills,islands=hills,repeat=hills,sea=hills,land=hills;
+        require(hills.generate_terrain(64,48,seed,error,{8,20}) && gentle.generate_terrain(64,48,seed,error,{2,20})
+            && flat.generate_terrain(64,48,seed,error,{0,20}) && wet.generate_terrain(64,48,seed,error,{8,75})
+            && river.generate_terrain(64,48,seed,error,{8,35,true}) && islands.generate_terrain(64,48,seed,error,{8,35,false,true})
+            && repeat.generate_terrain(64,48,seed,error,{8,35,false,true}) && sea.generate_terrain(64,48,seed,error,{8,100,true,true})
+            && land.generate_terrain(64,48,seed,error,{8,0}),error.c_str());
+        require(hills.tiles==flat.tiles && hills.tiles==gentle.tiles && flat.elevation==fresh.elevation,"Elevation settings changed the coast or zero was not flat");
+        const int peak=*std::max_element(hills.elevation.begin(),hills.elevation.end());
+        require(peak>2 && peak<=8 && *std::max_element(gentle.elevation.begin(),gentle.elevation.end())<=2,"Elevation variation did not scale the hills");
+        require(hills.land_count()==int(std::round(64*48*.8f)) && wet.land_count()==64*48/4 && wet.land_count()<hills.land_count(),"Water coverage did not control the land/sea ratio");
+        require(sea.land_count()==0 && *std::max_element(sea.elevation.begin(),sea.elevation.end())==0 && land.land_count()==64*48,"Water coverage endpoints did not produce sea or land");
+        require(components(hills)==1 && components(islands)==2 && components(river)==2,"Island or river generation created fragmented land");
+        require(repeat.tiles==islands.tiles && repeat.elevation==islands.elevation,"Settings and seed did not reproduce the same terrain");
+        int plains=0,slopes=0;
+        for (int z=0;z<City::width;++z) for (int x=0;x<City::width;++x) if (hills.land({x,z})) {
+            if (hills.ramp_axis({x,z})==0) ++plains; else ++slopes;
+        }
+        require(plains>hills.land_count()/4 && slopes>50,"Generated hills did not retain buildable flats and slopes");
+        std::array<bool,City::width*City::width> reached{}; std::queue<CityCell> water;
+        for (int x=52;x<76;++x) if (!river.land({x,40})) {water.push({x,40}); reached[City::index({x,40})]=true;}
+        bool crossed=false;
+        while (!water.empty()) {
+            const auto p=water.front(); water.pop(); crossed |= p.z==87;
+            for (auto d : {CityCell{1,0},{-1,0},{0,1},{0,-1}}) {
+                const CityCell q{p.x+d.x,p.z+d.z};
+                if (q.x>=52 && q.x<76 && q.z>=40 && q.z<88 && !river.land(q) && !reached[City::index(q)]) {reached[City::index(q)]=true; water.push(q);}
+            }
+        }
+        require(crossed,"Central river did not make a continuous north-south water channel");
+        require(hills.validate(error) && river.validate(error) && islands.validate(error),error.c_str());
+        require(hills.save(directory,error) && City::load(directory/(hills.id+".city"),loaded,error)
+            && loaded.elevation==hills.elevation && loaded.tiles==hills.tiles,"Generated hills did not survive saving");
+        std::filesystem::remove(directory/(hills.id+".city"));
+    }
+    for (TerrainSettings invalid : {TerrainSettings{-1,35}, {9,35}, {4,-1}, {4,101}})
+        require(!fresh.generate_terrain(48,48,0,error,invalid) && fresh.land_count()==0 && fresh.elevation==heights,"Invalid terrain settings mutated the draft");
+    require(!fresh.generate_terrain(4,48,0,error,{4,35,true}) && !fresh.generate_terrain(4,48,0,error,{4,35,false,true}),"A channel accepted a map too narrow for both banks");
     std::filesystem::remove(path);
 }
 void data_and_saves(const std::filesystem::path& directory) {

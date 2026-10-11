@@ -977,22 +977,63 @@ City City::create(std::string name) {
     std::mt19937_64 random(std::random_device{}()); std::ostringstream id;
     id << std::hex << std::setw(16) << std::setfill('0') << random(); city.id = id.str(); return city;
 }
-bool City::generate_terrain(int tiles_x,int tiles_z,std::uint32_t seed,std::string& error) {
+bool City::generate_terrain(int tiles_x,int tiles_z,std::uint32_t seed,std::string& error,TerrainSettings settings) {
     if (tiles_x<1 || tiles_z<1 || tiles_x>width || tiles_z>width) return fail(error,"Starter dimensions must be 1-128 tiles per axis.");
+    if (settings.elevation<0 || settings.elevation>max_elevation || settings.water_percent<0 || settings.water_percent>100)
+        return fail(error,"Elevation must be 0-8 steps and water coverage 0-100 percent.");
+    if ((settings.river || settings.two_islands) && tiles_x<5) return fail(error,"A river or two islands needs at least 5 starter tiles across.");
     if (std::any_of(tiles.begin(),tiles.end(),[](auto t){return t!=CityTile::Water;}) || !buildings.empty()
         || !vehicles.empty() || !trees.empty() || spawn) return fail(error,"Generate starter terrain only in an empty city.");
     City next = *this; next.elevation.fill(0);
     const int x0 = (width-tiles_x)/2, z0 = (width-tiles_z)/2;
     const float frequency = 4.f/std::max(8,std::min(tiles_x,tiles_z));
-    const auto field = [&](float x,float z) {
-        const float edge = std::max(std::abs(x*2/tiles_x-1),std::abs(z*2/tiles_z-1));
-        x = x*frequency+11.37f; z = z*frequency+23.61f;
-        const float noise = .65f*perlin(x,z,seed)+.25f*perlin(x*2,z*2,seed+1)+.1f*perlin(x*4,z*4,seed+2);
-        return .22f+noise*.85f-.55f*edge*edge*edge*edge;
+    const auto noise = [&](float x,float z,std::uint32_t key) {
+        return .65f*perlin(x,z,key)+.25f*perlin(x*2,z*2,key+1)+.1f*perlin(x*4,z*4,key+2);
     };
-    for (int z = 0; z<tiles_z; ++z) for (int x = 0; x<tiles_x; ++x)
-        if (field(x+.5f,z+.5f)>0) next.tiles[index({x0+x,z0+z})] = CityTile::Land;
-    if (!next.land_count()) next.tiles[index({x0+tiles_x/2,z0+tiles_z/2})] = CityTile::Land;
+    std::array<float,width*width> scores{};
+    std::array<int,width*width> regions; regions.fill(-1);
+    std::array<int,2> capacity{}, peaks{{-1,-1}}, quota{};
+    const bool split = settings.river || settings.two_islands;
+    for (int z = 0; z<tiles_z; ++z) for (int x = 0; x<tiles_x; ++x) {
+        const float px=x+.5f,pz=z+.5f;
+        const float channel = tiles_x*.5f+(settings.river ? perlin(pz*frequency*.4f+7.31f,19.73f,seed^0xa31f5e19u)*tiles_x*.15f : 0);
+        if (split && std::abs(px-channel)<std::max(1.f,tiles_x*(settings.two_islands ? .045f : .025f))) continue;
+        const int region = split && px>channel ? 1 : 0, i=index({x0+x,z0+z});
+        const float across = settings.two_islands ? std::abs((px-tiles_x*(region ? .75f : .25f))*4/tiles_x) : std::abs(px*2/tiles_x-1);
+        const float edge = std::max(across,std::abs(pz*2/tiles_z-1));
+        scores[i]=noise(px*frequency+11.37f,pz*frequency+23.61f,seed)*.85f-.55f*edge*edge*edge*edge;
+        regions[i]=region; ++capacity[region];
+        if (peaks[region]<0 || scores[i]>scores[peaks[region]]) peaks[region]=i;
+    }
+    const int available=capacity[0]+capacity[1];
+    const int target=settings.water_percent==100 ? 0 : std::min(available,std::max(split ? 2 : 1,int(std::round(tiles_x*tiles_z*(100-settings.water_percent)/100.f))));
+    quota[1]=split ? std::min(capacity[1],target/2) : 0;
+    quota[0]=std::min(capacity[0],target-quota[1]); quota[1]=std::min(capacity[1],target-quota[0]);
+    // Grow from each peak so water settings cannot fragment the two islands into an archipelago.
+    std::array<bool,width*width> seen{};
+    for (int region=0; region<(split ? 2 : 1); ++region) {
+        std::priority_queue<std::pair<float,int>> pending;
+        if (peaks[region]>=0) { pending.push({scores[peaks[region]],peaks[region]}); seen[peaks[region]]=true; }
+        while (quota[region]>0 && !pending.empty()) {
+            const int i=pending.top().second; pending.pop(); next.tiles[i]=CityTile::Land; --quota[region];
+            for (auto d : directions) {
+                const auto p=add({i%width,i/width},d);
+                if (!contains(p)) continue;
+                const int neighbor=index(p);
+                if (!seen[neighbor] && regions[neighbor]==region) { seen[neighbor]=true; pending.push({scores[neighbor],neighbor}); }
+            }
+        }
+    }
+    if (settings.elevation>0) {
+        for (int z=z0; z<=z0+tiles_z; ++z) for (int x=x0; x<=x0+tiles_x; ++x) {
+            bool inland=true;
+            for (int dz : {-1,0}) for (int dx : {-1,0}) inland &= next.land({x+dx,z+dz});
+            if (!inland) continue;
+            const float hill=std::clamp((noise((x-x0)*frequency*.45f+41.83f,(z-z0)*frequency*.45f+67.19f,seed^0xb5297a4du)-.025f)*3.5f,0.f,1.f);
+            next.elevation[corner_index({x,z})]=static_cast<unsigned char>(std::round(hill*settings.elevation));
+        }
+        constrain_elevation(next,-1);
+    }
     if (!next.validate(error)) return false;
     *this = std::move(next); return true;
 }
