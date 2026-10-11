@@ -247,6 +247,7 @@ Saved Regular designs supply civilian traffic; each police patrol or wanted rein
 - `include/plane.hpp`, plane implementation in `src/vehicle.cpp`: aircraft rigid body, aerodynamics, flight controls, landing gear, damage, and reset.
 - `include/city.hpp`, `src/city.cpp`, `src/city_editor.cpp`: grid editing, persistence, road graph routes, city management, and the editor.
 - `include/day_night.hpp`: 24-minute clock, sky palette, sun direction and shared lighting.
+- `src/sky_renderer.cpp`: full-resolution sky and a bounded volumetric cloud pass.
 - `src/main.cpp`: rendering, keyboard input, fixed step loop, chase camera, and a bounded skid mark buffer.
 - `src/car_renderer.cpp`: imported body/wheel loading, automatic wheel alignment, steering/spin animation, material lighting, and body scaling.
 - `include/car_tuning.hpp`, `src/tuning_panel.cpp`: runtime tuning defaults/limits, sliders, precision input, and wheel telemetry.
@@ -299,7 +300,11 @@ Open directly in tuning mode, or capture the panel:
 
 All source, build configuration, and checks use C++; no Go toolchain is needed.
 
-The 24-minute day/night cycle uses clear blue skies, pale cyan distance fog, fresh green daylight, golden dawn/sunset horizons, white cloud wisps and cool blue nights for a late-90s game feel. Sky, water reflections and scene lighting share the same palette.
+The 24-minute day/night cycle uses clear blue skies, pale cyan distance fog, fresh green daylight, golden dawn/sunset horizons, white volumetric clouds and cool blue nights for a late-90s game feel. Sky, water reflections and scene lighting share the same palette.
+
+Clouds occupy a world-space layer 400–700 m above sea level, drift with the wind, and use volume density plus sun/moon self-shading. Density sampling supports cameras below, inside or above the layer. The custom shader traces at most 16 samples per pixel, skips empty density and ends rays once opaque. A cached 128 x 128 noise texture supplies filtered 3D noise; the cloud pass runs at half resolution, capped at 640 x 360, and is blended over the full-resolution sun, moon and stars. One color/depth target plus noise uses about 1.8 MiB with 32-bit depth, excluding driver overhead. No history buffers, additional assets or dependencies are needed. If the cloud shader is unsupported, the clear sky remains available. Clouds render as a sky backdrop; they do not fog foreground geometry or cast shadows on terrain.
+
+`volumetric_clouds` checks visible puffs and shading, clear gaps, wind, world-space parallax, night coloring, scene brightness, aircraft views and window resizing. It also reports synchronized sky/cloud rendering time without a frame cap. The Intel Iris Xe check measured about 1.9 ms at 960 x 540 and 3.5 ms at 1920 x 1080; these are sky-only measurements with MSAA off, not full-game frame rates or a guarantee for older GPUs.
 
 `day_night_cycle` checks the cycle length, pause, midnight rollover, 24-hour time validation, fractional frame timing and the blue/gold sky and lighting palette.
 

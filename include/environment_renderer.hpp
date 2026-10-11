@@ -4,6 +4,7 @@
 #include "world_map.hpp"
 #include "scene_lighting.hpp"
 #include "building_renderer.hpp"
+#include "sky_renderer.hpp"
 #include <raylib.h>
 #include <map>
 
@@ -40,8 +41,9 @@ private:
     Model terrain_{}, grass_{}, sand_{}, roads_{}, ocean_{}, trees_{}, signs_{}, lights_{}, glows_{}, map_{};
     Texture2D soil_texture_{}, grass_texture_{}, sand_texture_{}, asphalt_texture_{}, tree_texture_{}, sign_texture_{}, water_depth_{};
     BuildingRenderer custom_buildings_;
+    SkyRenderer sky_;
     std::map<std::string,Texture2D> ground_textures_;
-    Shader land_shader_{}, water_shader_{}, tree_shader_{}, sky_shader_{}, light_shader_{};
+    Shader land_shader_{}, water_shader_{}, tree_shader_{}, light_shader_{};
     int land_camera_ = -1, water_camera_ = -1, water_time_ = -1, water_zenith_ = -1, tree_camera_ = -1, sign_emission_ = -1;
     bool trees_ready_ = false;
 };

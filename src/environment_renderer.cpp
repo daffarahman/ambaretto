@@ -355,42 +355,6 @@ void main() {
     float visibility = 1.0 - smoothstep(viewDistance * 0.75, viewDistance, distance(position.xz, cameraPosition.xz));
     finalColor = vec4(color.rgb * brightness, color.a * night * visibility);
 })GLSL";
-const char* sky_fragment = R"GLSL(#version 330
-uniform vec2 screenSize;
-uniform vec3 cameraForward;
-uniform vec3 cameraRight;
-uniform vec3 cameraUp;
-uniform float tanFov;
-uniform vec3 horizonColor;
-uniform vec3 zenithColor;
-uniform vec3 sunDirection;
-uniform float night;
-uniform vec3 sunColor;
-uniform float time;
-uniform float brightness;
-out vec4 finalColor;
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-void main() {
-    vec2 uv = gl_FragCoord.xy / screenSize * 2.0 - 1.0;
-    vec3 ray = normalize(cameraForward + cameraRight * uv.x * tanFov * screenSize.x / screenSize.y + cameraUp * uv.y * tanFov);
-    float height = max(ray.y, 0.0);
-    vec3 sky = mix(horizonColor, zenithColor, pow(clamp(height / 0.65, 0.0, 1.0), 0.55));
-    float sun = max(dot(ray, sunDirection), 0.0);
-    float above = smoothstep(-0.035, 0.035, sunDirection.y);
-    sky += sunColor * pow(sun, 20.0) * 0.18 * above;
-    sky = mix(sky, mix(sunColor, vec3(1.0), 0.45), smoothstep(cos(0.020), cos(0.016), sun) * above);
-    float moon = smoothstep(cos(0.013), cos(0.009), dot(ray, -sunDirection));
-    sky = mix(sky, vec3(0.79, 0.86, 1.0), moon * night);
-    vec2 stars = vec2(atan(ray.z, ray.x) / 6.2831853 + 0.5, asin(clamp(ray.y, -1.0, 1.0)) / 3.1415927 + 0.5) * vec2(600, 300);
-    float seed = hash(floor(stars));
-    float star = (1.0 - smoothstep(0.03, 0.14, length(fract(stars) - 0.5))) * step(0.994, seed);
-    sky += vec3(0.74, 0.82, 1.0) * star * night * smoothstep(0.03, 0.18, ray.y) * (0.70 + 0.30 * sin(time * 1.2 + seed * 31));
-    // White wisps take on a little of the horizon's gold at twilight.
-    float cloud = sin(ray.x * 19 + ray.z * 12 + time * 0.002) + sin(ray.x * 41 - ray.z * 27);
-    cloud = smoothstep(1.20, 1.90, cloud) * exp(-pow((ray.y - 0.23) * 5.0, 2.0));
-    sky = mix(sky, mix(horizonColor, vec3(1.0), 0.75), cloud * (1.0 - night) * 0.18);
-    finalColor = vec4(sky * brightness, 1.0);
-})GLSL";
 }
 
 Texture2D load_building_texture(const std::string& filename) {
@@ -863,7 +827,6 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     lights_ = lights.upload(); glows_ = glows.upload();
     land_shader_ = LoadShaderFromMemory(land_vertex, land_fragment.c_str());
     load_water(env);
-    sky_shader_ = LoadShaderFromMemory(nullptr, sky_fragment);
     light_shader_ = LoadShaderFromMemory(land_vertex, light_fragment);
     if (lights_.materials) lights_.materials[0].shader = light_shader_;
     if (glows_.materials) glows_.materials[0].shader = light_shader_;
@@ -1020,7 +983,6 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     for (Model model : markings.upload_chunks()) city_chunks_.push_back(chunk(model));
     land_shader_ = LoadShaderFromMemory(land_vertex,land_fragment.c_str());
     load_water(env);
-    sky_shader_ = LoadShaderFromMemory(nullptr,sky_fragment);
     light_shader_ = LoadShaderFromMemory(land_vertex,light_fragment);
     for (Model* model : {&terrain_,&grass_,&sand_,&roads_}) if (model->materials) model->materials[0].shader = land_shader_;
     for (const auto& batch : painted) for (auto model : batch.second.upload_chunks()) {
@@ -1231,29 +1193,11 @@ EnvironmentRenderer::~EnvironmentRenderer() {
     for (const auto& texture : ground_textures_) if (texture.second.id) UnloadTexture(texture.second);
     UnloadModel(map_);
     UnloadShader(land_shader_); UnloadShader(water_shader_);
-    UnloadShader(sky_shader_); UnloadShader(light_shader_);
+    UnloadShader(light_shader_);
     if (tree_shader_.id != 0) UnloadShader(tree_shader_);
 }
 void EnvironmentRenderer::draw_sky(const Camera3D& camera, const Daylight& light, float time, const GraphicsSettings& settings) {
-    const Vector2 screen{float(GetScreenWidth()), float(GetScreenHeight())};
-    const Vector3 forward = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
-    const Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, camera.up));
-    const Vector3 up = Vector3CrossProduct(right, forward);
-    const float tan_fov = std::tan(camera.fovy * pi / 360);
-    const auto vec3 = [&](const char* name, const Vector3& value) {
-        SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, name), &value, SHADER_UNIFORM_VEC3);
-    };
-    SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "screenSize"), &screen, SHADER_UNIFORM_VEC2);
-    SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "tanFov"), &tan_fov, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "night"), &light.night, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "time"), &time, SHADER_UNIFORM_FLOAT);
-    SetShaderValue(sky_shader_, GetShaderLocation(sky_shader_, "brightness"), &settings.brightness, SHADER_UNIFORM_FLOAT);
-    vec3("cameraForward", forward); vec3("cameraRight", right); vec3("cameraUp", up);
-    vec3("horizonColor", light.horizon); vec3("zenithColor", light.zenith); vec3("sunDirection", light.sun_direction);
-    vec3("sunColor", light.sun_color);
-    BeginShaderMode(sky_shader_);
-    DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
-    EndShaderMode();
+    sky_.draw(camera, light, time, settings);
 }
 void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Daylight& light, const SceneLighting& lighting, const GraphicsSettings& settings) {
     for (Shader shader : {land_shader_, water_shader_, tree_shader_}) lighting.apply(shader, camera, light, settings);
