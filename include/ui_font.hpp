@@ -27,7 +27,7 @@ private:
     Font previous_{};
     bool owned_ = false;
 };
-void draw_text(const char* text, int x, int y, int size, Color color);
-int measure_text(const char* text, int size);
+void draw_text(const char* text, int x, int y, int size, Color color, float spacing_scale = .04f);
+int measure_text(const char* text, int size, float spacing_scale = .04f);
 void draw_image_text(Image* image, const char* text, int x, int y, int size, Color color);
 } // namespace ambaretto::ui

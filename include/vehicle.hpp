@@ -60,7 +60,7 @@ struct GroundHit {
     Plane* plane = nullptr;
     JPH::BodyID body;
 };
-enum class SoundEffect { Pistol, SMG, AK47, Explosion, Count };
+enum class SoundEffect { Pistol, SMG, AK47, Explosion, Countdown, RaceStart, Count };
 struct SoundEvent { SoundEffect effect; Vec3 position; };
 
 class PhysicsWorld {

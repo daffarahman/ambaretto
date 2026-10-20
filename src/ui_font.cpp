@@ -27,11 +27,11 @@ FontResource::~FontResource() {
     active = previous_;
     if (owned_) UnloadFont(font_);
 }
-void draw_text(const char* text, int x, int y, int size, Color color) {
-    DrawTextEx(current(), text, {float(x), float(y)}, float(size), spacing(size), color);
+void draw_text(const char* text, int x, int y, int size, Color color, float spacing_scale) {
+    DrawTextEx(current(), text, {float(x), float(y)}, float(size), size * spacing_scale, color);
 }
-int measure_text(const char* text, int size) {
-    return int(std::ceil(MeasureTextEx(current(), text, float(size), spacing(size)).x));
+int measure_text(const char* text, int size, float spacing_scale) {
+    return int(std::ceil(MeasureTextEx(current(), text, float(size), size * spacing_scale).x));
 }
 void draw_desktop() {
     ClearBackground(desktop);

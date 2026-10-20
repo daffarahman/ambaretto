@@ -10,6 +10,7 @@
 
 namespace ambaretto {
 class Police;
+class Race;
 Texture2D load_building_texture(const std::string& filename);
 class EnvironmentRenderer {
 public:
@@ -25,8 +26,8 @@ public:
     const BuildingRenderStats& building_stats() const { return custom_buildings_.stats(); }
     const std::string& building_warning() const { return custom_buildings_.warning(); }
     const std::string& road_warning() const { return road_warning_; }
-    void minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police = nullptr, bool in_vehicle = false) const;
-    void world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police = nullptr) const;
+    void minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police = nullptr, bool in_vehicle = false, const Race* race = nullptr) const;
+    void world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police = nullptr, const Race* race = nullptr) const;
 private:
     void load_city(const Environment& environment);
     void load_water(const Environment& environment);

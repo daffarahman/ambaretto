@@ -76,6 +76,8 @@ void grid_progress_and_modes() {
     require(!Race::start(world,map,traffic,car,invalid,designs,error),"Grid accepted a checkpoint before its front row");
     require(traffic.cars().empty() && (car.position()-original).Length()<.01f,"Failed start mutated cars");
     auto race=Race::start(world,map,traffic,car,city.races[0],designs,error); require(bool(race),error);
+    auto sounds=world.take_sound_events();
+    require(sounds.size()==1 && sounds[0].effect==SoundEffect::Countdown,"Race start did not sound the 3 beat");
     require(!Race::start(world,map,traffic,car,city.races[0],designs,error) && traffic.cars().size()==4,"A second race removed active opponents");
     player.set_play_mode(PlayMode::Race); require(player.interact()==Interaction::Blocked,"Race allowed exiting the car");
     std::vector<RaceLeg> legs; require(build_race_route(city,city.races[0],legs,error),error);
@@ -86,6 +88,10 @@ void grid_progress_and_modes() {
     for (int i = 0; i < 120; ++i) { race->step(); player.step({0,0,false,true},{}); race->finish(); }
     require(race->countdown()>1.9f && race->progress().next==1,"Countdown advanced checkpoints");
     for (int i = 0; i < 241; ++i) race->step();
+    sounds=world.take_sound_events();
+    require(sounds.size()==3 && sounds[0].effect==SoundEffect::Countdown && sounds[1].effect==SoundEffect::Countdown
+        && sounds[2].effect==SoundEffect::RaceStart,"Countdown did not play exactly 2, 1, then GO");
+    race->step(); require(world.take_sound_events().empty(),"GO sound repeated after the countdown");
     for (int i = 1; i < 5; ++i) race->cars()[i]->set_simulated(false);
     const auto move=[&](Vec3 point) { point.SetY(map.surface_height(point)+car.ride_height()); car.reset(point); race->finish(); };
     move(city.races[0].checkpoints[2]); require(race->progress().next==1,"Skipped checkpoint advanced the lap");
@@ -105,6 +111,33 @@ void grid_progress_and_modes() {
     for (auto cell : {CityCell{77,50},CityCell{78,65},CityCell{65,78},CityCell{50,65}}) { Vec3 point; require(snap_race_point(city,City::center(cell),point),"Bend checkpoint failed"); bend.checkpoints.push_back(point); }
     race=Race::start(world,map,traffic,car,bend,designs,error); require(bool(race),error);
     require(std::abs(race->cars()[1]->forward().Dot(car.forward()))<.95f,"Grid did not follow a turn's direction");
+}
+void checkpoint_contact() {
+    auto city=fixture(); Environment map(city); PhysicsWorld world(map);
+    CarDesign design; design.body="body.glb"; design.wheel="wheel.glb"; const std::vector<CarDesign> designs{design};
+    Car car(world,design); Traffic traffic(world,map,&designs); std::string error;
+    auto race=Race::start(world,map,traffic,car,city.races[0],designs,error); require(bool(race),error);
+    for (int tick=0; tick<362; ++tick) race->step();
+    for (int i=1; i<5; ++i) race->cars()[i]->set_simulated(false);
+    std::vector<RaceLeg> legs; require(build_race_route(city,city.races[0],legs,error),error);
+    const auto move=[&](Vec3 p,float height=0.f) { p.SetY(map.surface_height(p)+car.ride_height()+height); car.reset(p); race->finish(); };
+    const auto approach=[&](const RaceLeg& leg) { for (float d=0; d<leg.length()-10; d+=2) move(leg.point(d)); };
+    const auto& leg=legs[0]; approach(leg);
+    const Vec3 gate=leg.points.back(), direction=leg.direction(leg.length()), across=direction.Cross(Vec3::sAxisY());
+    const float radius=Race::checkpoint_radius+1+std::hypot(car.body_size().GetX(),car.body_size().GetZ())/2;
+    move(gate+across*(radius+1)-direction*20);
+    move(gate+across*(radius+1)-direction);
+    require(race->progress().next==1,"A car outside the contact radius counted");
+    const Vec3 edge=gate+across*(radius-.2f)-direction;
+    move(edge,10); require(race->progress().next==1,"Checkpoint counted a car above the road");
+    move(edge); require(race->progress().next==2 && race->progress().lap==0,"Touching the invisible outer edge before the gate did not count");
+    for (int tick=0; tick<5; ++tick) race->finish();
+    require(race->progress().next==2,"Lingering at a checkpoint advanced another checkpoint");
+    approach(legs[1]);
+    move(legs[1].point(legs[1].length())-legs[1].direction(legs[1].length())*10);
+    require(race->progress().next==2,"Approaching outside the checkpoint counted");
+    move(legs[1].point(legs[1].length())+legs[1].direction(legs[1].length())*10);
+    require(race->progress().next==3,"Fast movement through the entire checkpoint skipped contact");
 }
 void ai_driving() {
     auto city=fixture(); Environment map(city); PhysicsWorld world(map);
@@ -154,8 +187,27 @@ void turnaround() {
     for (int tick = 0; tick < 120*120 && !race->progress(1).finished; ++tick) { race->step(); world.step(); race->finish(); }
     require(race->progress(1).finished && race->cars()[1]->health()>90,"Racer could not turn around on the road");
 }
+void pushing_blocker() {
+    auto city=fixture(); Environment map(city); PhysicsWorld world(map);
+    CarDesign design; design.body="body.glb"; design.wheel="wheel.glb"; const std::vector<CarDesign> designs{design};
+    Car player(world,design); Traffic traffic(world,map,&designs); std::string error;
+    auto race=Race::start(world,map,traffic,player,city.races[0],designs,error); require(bool(race),error);
+    for (int i=2; i<5; ++i) race->cars()[i]->set_simulated(false);
+    for (int tick=0; tick<362; ++tick) race->step();
+    auto wide=design; wide.width=4; player.set_design(wide);
+    const Vec3 direction=race->cars()[1]->forward();
+    std::vector<RaceLeg> legs; require(build_race_route(city,city.races[0],legs,error),error);
+    Vec3 position=legs[0].point(race->progress(1).distance+14);
+    position.SetY(map.surface_height(position)+player.ride_height()); player.reset(position,std::atan2(-direction.GetX(),-direction.GetZ()));
+    for (int tick=0; tick<120*4; ++tick) {
+        race->step(); player.step({}); world.step(); race->finish();
+    }
+    std::cout << "Blocked car pushed " << (player.position()-position).Dot(direction) << " m\n";
+    require((player.position()-position).Dot(direction)>.7f,"Racer waited behind a car blocking both passing lanes instead of pushing it");
+    require(!race->cars()[1]->destroyed(),"Pushing one blocker destroyed the racer");
+}
 }
 int main() {
-    try { routes_and_saves(); grid_progress_and_modes(); ai_driving(); turnaround(); std::cout << "Race checks passed\n"; return 0; }
+    try { routes_and_saves(); grid_progress_and_modes(); checkpoint_contact(); ai_driving(); turnaround(); pushing_blocker(); std::cout << "Race checks passed\n"; return 0; }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

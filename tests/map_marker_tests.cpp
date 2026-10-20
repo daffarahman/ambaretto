@@ -1,5 +1,7 @@
 #include "environment_renderer.hpp"
 #include "police.hpp"
+#include "race.hpp"
+#include "traffic.hpp"
 #include "ui_font.hpp"
 #include <algorithm>
 #include <iostream>
@@ -24,6 +26,48 @@ bool equal(Image a, Image b) {
 Camera3D city_camera(ambaretto::Vec3 focus) {
     return {{focus.GetX(), ambaretto::City::level + 200, focus.GetZ()},
         {focus.GetX(), ambaretto::City::level, focus.GetZ()}, {0, 0, -1}, 100, CAMERA_ORTHOGRAPHIC};
+}
+void race_opponent_markers(RenderTexture2D texture) {
+    using namespace ambaretto;
+    City city = City::create("Race marker test"); std::string error;
+    require(city.add_land({50,60},{78,68},error),error.c_str());
+    require(city.add_road(City::road_stroke({51,64},{77,64}),error),error.c_str());
+    RaceMap course; course.checkpoints = {City::center({54,64}),City::center({74,64})};
+    Environment environment(city); PhysicsWorld world(environment);
+    CarDesign design; design.body="body.glb"; design.wheel="wheel.glb"; const std::vector<CarDesign> designs{design};
+    Car player(world,design); Traffic traffic(world,environment,&designs);
+    auto race = Race::start(world,environment,traffic,player,course,designs,error); require(bool(race),error.c_str());
+    EnvironmentRenderer scenery(environment);
+    const Vec3 position=player.position(), heading=player.forward(); const auto camera=city_camera(position);
+    const Vec3 offsets[] = {Vec3(-30,0,-20),Vec3(30,0,-20),Vec3(-30,0,20),Vec3(30,0,20)};
+    for (int i=1; i<5; ++i) race->cars()[i]->reset(position+offsets[i-1]);
+    const Rectangle viewport{0,0,640,480}; WorldMapView view; view.center={position.GetX(),position.GetZ()}; view.scale=2;
+    for (int mode : {0,1,2}) {
+        const bool full=mode==2, in_vehicle=mode==1;
+        const MinimapView mini(480,position,heading,camera,in_vehicle);
+        const auto project=[&](Vec3 point) { return full ? view.project(point,viewport) : mini.project(point); };
+        const auto render=[&](const Race* active) {
+            BeginTextureMode(texture); ClearBackground(BLACK);
+            if (full) scenery.world_map(view,viewport,position,heading,nullptr,active);
+            else scenery.minimap(position,heading,camera,nullptr,in_vehicle,active);
+            EndTextureMode(); Image image=LoadImageFromTexture(texture.texture); ImageFlipVertical(&image); return image;
+        };
+        Image baseline=render(nullptr), marked=render(race.get());
+        for (int i=1; i<5; ++i) {
+            const auto p=project(race->cars()[i]->position());
+            require(!marker_pixels(baseline,p,BLUE),"Opponent marker appeared without an active race");
+            require(marker_pixels(marked,p,BLUE)>20,"Race opponent did not have a blue map marker");
+        }
+        require(marker_pixels(marked,project(position),RAYWHITE)>5,"Opponent markers hid the player arrow");
+        ExportImage(marked,full ? "race-markers-world.png" : in_vehicle ? "race-markers-driving.png" : "race-markers-minimap.png");
+        race->cars()[1]->take_damage(100); race->cars()[2]->set_simulated(false);
+        Image hidden=render(race.get());
+        require(!marker_pixels(hidden,project(race->cars()[1]->position()),BLUE)
+            && !marker_pixels(hidden,project(race->cars()[2]->position()),BLUE),"Destroyed or inactive opponents kept their markers");
+        require(marker_pixels(hidden,project(race->cars()[3]->position()),BLUE)>20,"Hiding one opponent removed another opponent's marker");
+        race->cars()[1]->repair(); race->cars()[2]->set_simulated(true);
+        for (Image image : {baseline,marked,hidden}) UnloadImage(image);
+    }
 }
 Image render_city(ambaretto::EnvironmentRenderer& scenery, RenderTexture2D texture, Camera3D camera, const char* time = "12:00") {
     ambaretto::DayNight clock; clock.set_time(time);
@@ -440,6 +484,7 @@ int main(int argc, char** argv) {
         auto& unit = const_cast<PoliceUnit&>(police.units()[0]);
         const Vec3 car_position = player + Vec3(35, 0, -25), foot_position = player + Vec3(-30, 0, -25);
         const auto texture = LoadRenderTexture(640, 480);
+        race_opponent_markers(texture);
         custom_ground_pixels(texture);
         coastal_water_pixels(texture);
         custom_building_pixels(texture);

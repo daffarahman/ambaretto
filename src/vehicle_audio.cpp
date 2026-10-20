@@ -109,7 +109,7 @@ VehicleAudio::VehicleAudio() {
     SetAudioStreamBufferSizeDefault(8192);
     siren_ = LoadMusicStream(sound_path("siren.wav").c_str());
     if (IsMusicValid(siren_)) { siren_.looping = true; SetMusicVolume(siren_, 0); }
-    const char* files[] = {"9mm.wav", "smg.wav", "ak47.wav", "explosion.wav"};
+    const char* files[] = {"9mm.wav", "smg.wav", "ak47.wav", "explosion.wav", "race-countdown.wav", "race-start.wav"};
     for (std::size_t i = 0; i < effects_.size(); ++i) {
         effects_[i] = LoadSound(sound_path(files[i]).c_str());
         if (!IsSoundValid(effects_[i])) { TraceLog(LOG_WARNING, "AUDIO: %s unavailable", files[i]); continue; }

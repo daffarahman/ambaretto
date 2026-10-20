@@ -24,6 +24,7 @@ struct RaceProgress {
 };
 class Race {
 public:
+    static constexpr float checkpoint_radius = 4, checkpoint_height = 40;
     static std::unique_ptr<Race> start(PhysicsWorld& world, const Environment& environment, Traffic& traffic,
         Car& player, const RaceMap& map, const std::vector<CarDesign>& designs, std::string& error);
     ~Race();

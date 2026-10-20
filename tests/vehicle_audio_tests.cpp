@@ -16,7 +16,7 @@ void require(bool condition, const char* message) {
 }
 void check_effect_clips(bool playback) {
     if (playback) { InitAudioDevice(); require(IsAudioDeviceReady(), "Audio device required for native effect check"); SetMasterVolume(0); }
-    for (const char* file : {"siren.wav", "9mm.wav", "smg.wav", "ak47.wav", "explosion.wav"}) {
+    for (const char* file : {"siren.wav", "9mm.wav", "smg.wav", "ak47.wav", "explosion.wav", "race-countdown.wav", "race-start.wav"}) {
         const auto path = std::string(VEHICLE_AUDIO_ASSETS) + file;
         Wave wave = LoadWave(path.c_str());
         require(IsWaveValid(wave) && wave.frameCount > 0, "The supplied siren/gunfire/explosion WAV must decode");
@@ -43,7 +43,7 @@ void check_effect_clips(bool playback) {
         {
             ambaretto::VehicleAudio audio;
             ambaretto::PhysicsWorld world(false);
-            for (const auto effect : {ambaretto::SoundEffect::Pistol, ambaretto::SoundEffect::SMG, ambaretto::SoundEffect::AK47, ambaretto::SoundEffect::Explosion})
+            for (const auto effect : {ambaretto::SoundEffect::Pistol, ambaretto::SoundEffect::SMG, ambaretto::SoundEffect::AK47, ambaretto::SoundEffect::Explosion, ambaretto::SoundEffect::Countdown, ambaretto::SoundEffect::RaceStart})
                 world.emit_sound(effect, ambaretto::Vec3::sZero());
             audio.update_effects(world, ambaretto::Vec3::sZero(), ambaretto::Vec3::sAxisX(), true);
             require(world.take_sound_events().empty(), "Audio update did not consume gameplay sounds");

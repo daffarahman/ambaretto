@@ -239,6 +239,7 @@ std::unique_ptr<Race> Race::start(PhysicsWorld& world, const Environment& enviro
         race->cars_[i]->set_simulated(true); race->cars_[i]->reset(positions[i],headings[i]); race->progress_[i].previous=positions[i];
         race->progress_[i].distance=leg.locate(positions[i],0);
     }
+    world.emit_sound(SoundEffect::Countdown,player.position());
     error.clear(); return race;
 }
 void Race::recover_player() {
@@ -250,7 +251,10 @@ void Race::recover_player() {
     }
 }
 void Race::step(float dt) {
-    countdown_=std::max(0.f,countdown_-dt); if (countdown_>0 || done() || failed_) {
+    const int beat=int(std::ceil(countdown_));
+    countdown_=std::max(0.f,countdown_-dt);
+    if (int(std::ceil(countdown_))!=beat) world_.emit_sound(countdown_>0 ? SoundEffect::Countdown : SoundEffect::RaceStart,cars_[0]->position());
+    if (countdown_>0 || done() || failed_) {
         for (int i = 1; i < 5; ++i) cars_[i]->step({0,0,false,true},dt);
         return;
     }
@@ -273,7 +277,7 @@ void Race::step(float dt) {
             const Vec3 delta=flat(target-position);
             float curvature=2*delta.Dot(-side(direction))/std::max(delta.LengthSq(),1.f);
             float desired=car.tuning().top_speed;
-            const float grip=std::min(2.8f,car.tuning().tire_grip*2.f);
+            const float grip=std::min(10.f,car.tuning().tire_grip*3.f);
             const float braking_distance=std::max(80.f,speed*speed/10+look+15);
             for (float ahead = 0; ahead <= braking_distance; ahead += 3) {
                 const Vec3 a=flat(sample(ahead+3)-sample(ahead)).NormalizedOr(direction), b=flat(sample(ahead+6)-sample(ahead+3)).NormalizedOr(a);
@@ -291,7 +295,6 @@ void Race::step(float dt) {
             };
             consider(*cars_[0]); for (const auto& other : traffic_.cars()) consider(*other.car);
             if (blocker) {
-                // shortcut: pass only within this road corridor; a fully blocked street needs detour planning.
                 const float limit=std::min(leg.width(p.distance),leg.width(p.distance+look))/2-car.body_size().GetX()/2-.5f;
                 const float blocker_side=flat(blocker->position()-leg.point(p.distance+nearest)).Dot(across);
                 const float clearance=(car.body_size().GetX()+blocker->body_size().GetX())/2+.8f;
@@ -318,16 +321,13 @@ void Race::step(float dt) {
                     target=pass; curvature=2*flat(target-position).Dot(-side(direction))/std::max(flat(target-position).LengthSq(),1.f);
                     pass_blockers_[i]=blocker; pass_offsets_[i]=offset; passing=true; break;
                 }
-                if (!passing) {
-                    const float other_speed=std::max(0.f,flat(blocker->velocity()).Dot(road_direction));
-                    const float gap=std::max(0.f,nearest-(car.body_size().GetZ()+blocker->body_size().GetZ())/2-3);
-                    desired=std::min(desired,std::min(std::sqrt(other_speed*other_speed+2*5.f*gap),other_speed+gap*1.2f));
-                }
+                // Keep pulling through contact without a race-ending impact at full speed.
+                if (!passing) desired=std::min(desired,std::max(0.f,flat(blocker->velocity()).Dot(road_direction))+8.f);
             }
             desired=std::min(desired,std::sqrt(grip/std::max(std::abs(curvature),.0001f)));
             const Vec3 approach=flat(target-position).NormalizedOr(direction)*(3+speed*1.2f);
             const float clear=world_.camera_fraction(position+Vec3(0,.7f,0),approach,car.body_id());
-            if (clear<.98f) desired=std::min(desired,std::sqrt(2*5.f*std::max(0.f,clear*approach.Length()-car.body_size().GetZ()/2-2)));
+            if (clear<.98f) desired=std::min(desired,std::sqrt(64.f+2*5.f*std::max(0.f,clear*approach.Length()-car.body_size().GetZ()/2-2)));
             const float steer_limit=std::min(car.tuning().max_steer,std::atan(car.tuning().wheelbase*16/std::max(speed*speed,1.f)));
             inputs_[i]={speed>desired+.5f ? 0.f : std::clamp((desired+(desired-speed)*.8f)/car.tuning().top_speed,0.f,1.f),
                 std::clamp(std::atan(car.tuning().wheelbase*curvature)/steer_limit,-1.f,1.f),false,speed>desired+.5f || desired<.1f};
@@ -361,15 +361,19 @@ void Race::finish(float dt) {
         auto& p=progress_[i]; if (cars_[i]->destroyed()) continue;
         const auto& leg=legs_[(p.next+legs_.size()-1)%legs_.size()]; const Vec3 current=cars_[i]->position();
         p.distance=leg.locate(current-Vec3(0,cars_[i]->ride_height(),0),p.distance);
-        const Vec3 gate=leg.points.back(), direction=leg.direction(leg.length());
-        const float before=flat(p.previous-gate).Dot(direction), after=flat(current-gate).Dot(direction);
-        if (before<=0 && after>=0 && after>before && std::abs(current.GetY()-gate.GetY())<3) {
-            const float t=-before/(after-before); const Vec3 crossing=p.previous+(current-p.previous)*t;
-            if (std::abs(flat(crossing-gate).Dot(side(direction)))<=leg.width(leg.length())/2 && p.distance>leg.length()-12) {
-                if (p.next==0 && !p.finished) ++p.lap;
-                p.next=(p.next+1)%int(legs_.size()); p.distance=0;
-                if (!p.finished && p.lap>=map_.laps) { p.finished=true; p.time=elapsed_-dt*(1-t); crossed.push_back(i); }
-            }
+        const Vec3 gate=leg.points.back(), motion=flat(current-p.previous);
+        const Vec3 from=flat(p.previous+cars_[i]->rotate(flat(cars_[i]->body_offset()))-gate);
+        // Include the car's footprint and a metre of invisible clearance around the marker.
+        const float radius=checkpoint_radius+1+flat(cars_[i]->body_size()).Length()/2;
+        const float motion_sq=motion.LengthSq(), along=from.Dot(motion), from_sq=from.LengthSq();
+        const float closest=std::clamp(-along/std::max(motion_sq,.000001f),0.f,1.f);
+        if ((from+motion*closest).LengthSq()<=radius*radius && p.distance>leg.length()-radius-2
+            && std::abs(current.GetY()-cars_[i]->ride_height()-gate.GetY())<3) {
+            const float entry=-along-std::sqrt(std::max(0.f,along*along-motion_sq*(from_sq-radius*radius)));
+            const float t=from_sq<=radius*radius ? 0.f : std::clamp(entry/std::max(motion_sq,.000001f),0.f,1.f);
+            if (p.next==0 && !p.finished) ++p.lap;
+            p.next=(p.next+1)%int(legs_.size()); p.distance=0;
+            if (!p.finished && p.lap>=map_.laps) { p.finished=true; p.time=elapsed_-dt*(1-t); crossed.push_back(i); }
         }
         p.previous=current;
     }

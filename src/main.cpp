@@ -37,6 +37,12 @@ Vector3 render_vector(const ambaretto::Vec3& value) {
 Vector3 lerp(Vector3 a, Vector3 b, float t) {
     return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
 }
+void draw_race_text(const char* text, int x, int y, int size, float spacing_scale = .04f) {
+    const int outline=std::max(2,size/30);
+    for (int dx : {-outline,0,outline}) for (int dy : {-outline,0,outline})
+        if (dx || dy) ambaretto::ui::draw_text(text,x+dx,y+dy,size,BLACK,spacing_scale);
+    ambaretto::ui::draw_text(text,x,y,size,WHITE,spacing_scale);
+}
 
 int choose_progress(const ambaretto::City& city, const std::string& error, const ambaretto::PlaySession& saved) {
     EnableCursor(); SetWindowTitle("Ambaretto - Continue or start again");
@@ -1273,7 +1279,7 @@ int main(int argc, char** argv) {
                     ambaretto::ui::draw_text(labels[i], int(button.x + (button.width - ambaretto::ui::measure_text(labels[i], 16)) / 2),
                         int(button.y + 7), 16, ambaretto::ui::ink);
                 }
-                scenery.world_map(world_map, map_viewport, scene->player.position(), scene->player.forward(), &scene->police);
+                scenery.world_map(world_map, map_viewport, scene->player.position(), scene->player.forward(), &scene->police, scene->race.get());
                 ambaretto::ui::draw_text("Esc: resume / File: Resume or End Game",int(map_layout.window.x+336),int(map_layout.window.y+53),16,ambaretto::ui::ink);
             } else {
                 const float nearby_distance = std::min(160.f, graphics.view_distance);
@@ -1320,11 +1326,6 @@ int main(int argc, char** argv) {
                     draw_weapon_model({pickup.position + ambaretto::Vec3(0, .08f, 0), ambaretto::Quat::sRotation(ambaretto::Vec3::sAxisZ(), 1.57079633f)}, pickup.weapon);
                 }
                 EndShaderMode();
-                if (scene->race) {
-                    const auto p=scene->race->checkpoint();
-                    DrawCylinderWires(render_vector(p),4,4,4,20,YELLOW);
-                    DrawLine3D(render_vector(p),render_vector(p+ambaretto::Vec3(0,12,0)),YELLOW);
-                }
                 draw_vehicle_damage(scene->car, car_renderer, view, nearby_distance);
                 for (const auto& vehicle : scene->traffic.cars()) if (vehicle.car->simulated())
                     draw_vehicle_damage(*vehicle.car, car_renderer, view, nearby_distance);
@@ -1336,11 +1337,18 @@ int main(int argc, char** argv) {
                 };
                 draw_plane_damage(scene->plane);
                 for (const auto& plane : scene->aircraft) draw_plane_damage(*plane);
+                if (scene->race) {
+                    const auto p=scene->race->checkpoint();
+                    rlDrawRenderBatchActive(); rlDisableDepthMask();
+                    DrawCylinderEx(render_vector(p),render_vector(p+ambaretto::Vec3(0,ambaretto::Race::checkpoint_height,0)),
+                        ambaretto::Race::checkpoint_radius,ambaretto::Race::checkpoint_radius,48,{255,203,0,128});
+                    rlDrawRenderBatchActive(); rlEnableDepthMask();
+                }
                 EndMode3D();
                 if (kill_flash > 0) DrawRectangle(0, ambaretto::menu_height, GetScreenWidth(), GetScreenHeight() - ambaretto::menu_height,
                     {150, 150, 150, static_cast<unsigned char>(110 * kill_flash / .18f)});
                 draw_resume_prompt(captured || tuning_open || !screenshot.empty());
-                if (!tuning_open) scenery.minimap(scene->player.position(), scene->player.forward(), view, &scene->police, !scene->player.on_foot());
+                if (!tuning_open) scenery.minimap(scene->player.position(), scene->player.forward(), view, &scene->police, !scene->player.on_foot(), scene->race.get());
                 if (scene->race && !tuning_open) {
                     const ambaretto::MinimapView minimap(GetScreenHeight(),scene->player.position(),scene->player.forward(),view,true);
                     auto marker=minimap.project(scene->race->checkpoint());
@@ -1421,16 +1429,23 @@ int main(int argc, char** argv) {
             if (weapon_wheel) draw_weapon_wheel(wheel_choice, wheel_cursor);
             if (scene->race && !map_open && !tuning_open) {
                 const auto& race=*scene->race; const auto& p=race.progress();
-                const Rectangle panel{float(GetScreenWidth()/2-240),44,480,68}; ambaretto::ui::draw_panel(panel);
-                const auto suffix=" / Lap "+std::to_string(p.lap+1)+"/"+std::to_string(race.map().laps)+" / #"+std::to_string(race.position())+" of 5";
-                auto name=race.map().name;
-                while (name.size()>1 && ambaretto::ui::measure_text((name+"..."+suffix).c_str(),18)>456) name.pop_back();
-                const auto info=name+(name.size()<race.map().name.size() ? "..." : "")+suffix;
-                ambaretto::ui::draw_text(info.c_str(),int(panel.x+12),int(panel.y+10),18,ambaretto::ui::ink);
-                const auto detail=race.countdown()>0 ? "Starting in "+std::to_string(int(std::ceil(race.countdown()))) : "Checkpoint "+(p.next ? std::to_string(p.next) : std::string("Start / finish"))+" / "+std::to_string(int(race.elapsed()))+" s";
-                ambaretto::ui::draw_text(detail.c_str(),int(panel.x+12),int(panel.y+38),17,ambaretto::ui::title_blue);
-                const auto target=GetWorldToScreen(render_vector(race.checkpoint()+ambaretto::Vec3(0,5,0)),camera);
-                if (target.x>0 && target.x<GetScreenWidth() && target.y>ambaretto::menu_height && target.y<GetScreenHeight()) ambaretto::ui::draw_text(p.next ? "CHECKPOINT" : "FINISH",int(target.x),int(target.y),18,YELLOW);
+                const int size=std::clamp(GetScreenHeight()/16,32,64), y=ambaretto::menu_height+16;
+                const auto stat=[&](const char* label,const std::string& value,int row_y) {
+                    const int label_size=size/2;
+                    const int x=GetScreenWidth()-24-ambaretto::ui::measure_text(value.c_str(),size,-.04f);
+                    draw_race_text(label,x-8-ambaretto::ui::measure_text(label,label_size,-.04f),row_y+size-label_size,label_size,-.04f);
+                    draw_race_text(value.c_str(),x,row_y,size,-.04f);
+                };
+                stat("LAP",std::to_string(p.lap+1)+"/"+std::to_string(race.map().laps),y);
+                stat("POS",std::to_string(race.position())+"/5",y+size+8);
+                const auto time=std::to_string(int(race.elapsed()))+" s";
+                draw_race_text(time.c_str(),GetScreenWidth()-24-ambaretto::ui::measure_text(time.c_str(),18),y+2*size+20,18);
+                if (race.countdown()>0 || race.elapsed()<.75f) {
+                    const auto count=race.countdown()>0 ? std::to_string(int(std::ceil(race.countdown()))) : std::string("GO!");
+                    const int count_size=std::clamp(GetScreenHeight()/3,120,320);
+                    draw_race_text(count.c_str(),(GetScreenWidth()-ambaretto::ui::measure_text(count.c_str(),count_size))/2,
+                        (GetScreenHeight()-count_size)/2,count_size);
+                }
             }
             ambaretto::MenuState menu_state; menu_state.race=scene->player.driving() && !scene->race;
             menu.draw(controls, mapping_path,menu_state);

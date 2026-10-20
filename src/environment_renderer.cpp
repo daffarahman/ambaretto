@@ -1,6 +1,7 @@
 #include "ui_font.hpp"
 #include "environment_renderer.hpp"
 #include "police.hpp"
+#include "race.hpp"
 #include "airport.hpp"
 #include "minimap.hpp"
 #include <rlgl.h>
@@ -1291,7 +1292,7 @@ void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
 }
-void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police, bool in_vehicle) const {
+void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, const Camera3D& camera, const Police* police, bool in_vehicle, const Race* race) const {
     const MinimapView map(GetScreenHeight(), player_position, player_forward, camera, in_vehicle);
     const auto bounds = map.bounds;
     ui::draw_panel({bounds.x - 6, bounds.y - 6, bounds.width + 12, bounds.height + 12});
@@ -1321,6 +1322,13 @@ void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, con
             if (map.contains(dot)) DrawCircleV(dot, 3.3f, {79, 142, 255, 255});
         }
     }
+    if (race) for (int i = 1; i < 5; ++i) {
+        const auto& car = *race->cars()[i];
+        const auto p = map.project(car.position());
+        if (car.simulated() && !car.destroyed() && map.contains(p)) {
+            DrawCircleV(p, 5, BLACK); DrawCircleV(p, 3.5f, BLUE);
+        }
+    }
     Vec3 heading(player_forward.GetX(), 0, player_forward.GetZ());
     heading = heading.LengthSq() > 1e-8f ? heading.Normalized() : map.forward;
     const auto direction = map.project(player_position + heading);
@@ -1333,7 +1341,7 @@ void EnvironmentRenderer::minimap(Vec3 player_position, Vec3 player_forward, con
     EndScissorMode();
     ui::draw_frame(bounds, true);
 }
-void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police) const {
+void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport, Vec3 player_position, Vec3 player_forward, const Police* police, const Race* race) const {
     ui::draw_panel({viewport.x - 6, viewport.y - 6, viewport.width + 12, viewport.height + 12});
     BeginScissorMode(int(viewport.x), int(viewport.y), int(viewport.width), int(viewport.height));
     DrawRectangleRec(viewport, map_water);
@@ -1370,6 +1378,13 @@ void EnvironmentRenderer::world_map(const WorldMapView& view, Rectangle viewport
     if (!environment_->city()) for (const auto& airport : airports) {
         const auto p = view.project(Vec3(airport.center_x, 0, airport.runway_z), viewport);
         if (inside(p)) DrawRectangle(int(p.x - 4), int(p.y - 4), 8, 8, YELLOW);
+    }
+    if (race) for (int i = 1; i < 5; ++i) {
+        const auto& car = *race->cars()[i];
+        const auto p = view.project(car.position(), viewport);
+        if (car.simulated() && !car.destroyed() && inside(p)) {
+            DrawCircleV(p, 5, BLACK); DrawCircleV(p, 3.5f, BLUE);
+        }
     }
     const auto player = view.project(player_position, viewport);
     if (inside(player)) {
