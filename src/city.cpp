@@ -41,6 +41,7 @@ float coast_height(const City& city,float x,float z) {
 Environment::Environment(const City& city) : city_(std::make_shared<City>(city)) {
     std::string error;
     if (!city.validate(error)) throw std::runtime_error(error);
+    if (city.freeform) { build_freeform_city(city); return; }
     const bool elevated = std::any_of(city.elevation.begin(),city.elevation.end(),[](auto h){return h!=0;});
     city_diagonal_bridge_owner_.fill(-1);
     const auto quad = [&](Vec3 a, Vec3 b, Vec3 c, Vec3 d, Surface surface) {
@@ -261,6 +262,7 @@ void sync_elevation(City& city) {
 CityCell City::cell(float x, float z) { return {int(std::floor(x / block)) + width / 2, int(std::floor(z / block)) + width / 2}; }
 Vec3 City::center(CityCell p, float y) { return {(p.x - width / 2 + .5f) * block, y, (p.z - width / 2 + .5f) * block}; }
 Vec3 CityBuilding::base(float ground) const {
+    if (position) return *position;
     const auto cells = footprint();
     return City::center(cell,ground)+Vec3((cells.x-1)*City::half_block,0,(cells.z-1)*City::half_block);
 }
@@ -276,12 +278,12 @@ Vec3 rotate_building_point(Vec3 p,int rotation) {
 }
 std::vector<Vec3> CityBuilding::points(float ground) const {
     auto result = shape().points(); const auto origin = base(ground);
-    for (auto& p : result) p = origin+rotate_building_point(p,rotation);
+    for (auto& p : result) p = origin+Quat::sRotation(Vec3::sAxisY(),yaw*JPH::JPH_PI/180)*rotate_building_point(p,rotation);
     return result;
 }
 std::vector<BuildingTriangle> CityBuilding::triangles(float ground) const {
     auto result = shape().baked().triangles(); const auto origin = base(ground);
-    for (auto& t : result) for (auto& p : t.points) p = origin+rotate_building_point(p,rotation);
+    for (auto& t : result) for (auto& p : t.points) p = origin+Quat::sRotation(Vec3::sAxisY(),yaw*JPH::JPH_PI/180)*rotate_building_point(p,rotation);
     return result;
 }
 std::array<Vec3,4> City::ground_patch(CityCell p) const {
@@ -309,10 +311,12 @@ unsigned City::ramp_axis(CityCell p) const {
     return 3;
 }
 float City::tile_height(CityCell p) const {
+    if (freeform) return height(center(p).GetX(),center(p).GetZ());
     const auto v = ground_triangles(p)[0];
     return triangle_height(v,center(p));
 }
 float City::height(float x, float z) const {
+    if (freeform) return road_at(Vec3(x,level,z),road_style.sidewalks ? 1.3f : 0) ? level : terrain_height(x,z);
     CityCell p = cell(x,z);
     // Land and bridge decks own their boundaries, including the outside coastline.
     const float u = x/block-std::floor(x/block), v = z/block-std::floor(z/block);
@@ -472,6 +476,7 @@ std::vector<std::array<Vec3,3>> CityRoadNode::sidewalk_triangles() const {
     return result;
 }
 int City::building_at(CityCell p) const {
+    if (freeform) return building_at(center(p));
     for (std::size_t i = 0; i < buildings.size(); ++i) if (covers(buildings[i], p)) return int(i);
     return -1;
 }
@@ -560,6 +565,13 @@ bool City::change_elevation(CityCell a, CityCell b, int direction, std::string& 
 }
 bool City::tree_clear(Vec3 p) const {
     if (!std::isfinite(p.GetX()) || !std::isfinite(p.GetZ()) || std::abs(p.GetX()) >= extent || std::abs(p.GetZ()) >= extent) return false;
+    if (freeform) {
+        for (float x : {-2.f,2.f}) for (float z : {-2.f,2.f}) {
+            const Vec3 point=p+Vec3(x,0,z);
+            if (!land_at(point) || road_at(point,road_style.sidewalks ? 1.3f : 0) || building_at(point)>=0) return false;
+        }
+        return true;
+    }
     // Keep trunks and foliage clear of streets and buildings.
     for (float x : {-2.f,2.f}) for (float z : {-2.f,2.f}) {
         const auto c = cell(p.GetX()+x,p.GetZ()+z);
@@ -618,6 +630,7 @@ unsigned City::road_axis(CityCell p) const {
 }
 
 std::vector<CityRoadNode> City::road_network() const {
+    if (freeform) return {};
     std::array<int,width*width> owner; owner.fill(-1);
     std::vector<CityRoadNode> nodes;
     for (int i = 0; i < width*width; ++i) {
@@ -681,7 +694,12 @@ std::vector<CityCell> City::neighbors(CityCell p) const {
     for (int d = 0; d < 4; ++d) if (mask&(1u<<d)) result.push_back(add(p,directions[d]));
     return result;
 }
-int City::land_count() const { return int(std::count_if(tiles.begin(), tiles.end(), [](auto t) { return t == CityTile::Land || t == CityTile::Road; })); }
+int City::land_count() const {
+    if (!freeform) return int(std::count_if(tiles.begin(), tiles.end(), [](auto t) { return t == CityTile::Land || t == CityTile::Road; }));
+    int count=0;
+    for(int z=0;z<width;++z)for(int x=0;x<width;++x)if(land_at(center({x,z})))++count;
+    return count;
+}
 bool City::connected() const {
     auto first = std::find_if(tiles.begin(), tiles.end(), [](auto t) { return t != CityTile::Water; });
     if (first == tiles.end()) return true;
@@ -748,6 +766,7 @@ bool City::add_road(const std::vector<CityCell>& cells, std::string& error) {
     return true;
 }
 bool City::add_building(CityBuilding b, std::string& error, int replace) {
+    if (freeform) return place_building(std::move(b),error,replace);
     error.clear();
     if (b.rotation<0 || b.rotation>3) return fail(error,"Building rotation must be 0, 90, 180 or 270 degrees.");
     if (b.mesh && !b.mesh->validate(error)) return false;
@@ -825,10 +844,11 @@ bool City::add_vehicle(CityVehicle v, std::string& error, int replace) {
     const Vec3 c = v.position, half = v.half_size(); const float rx = half.GetX(), rz = half.GetZ();
     auto a = cell(c.GetX()-rx, c.GetZ()-rz), b = cell(c.GetX()+rx, c.GetZ()+rz);
     for (int z = a.z; z <= b.z; ++z) for (int x = a.x; x <= b.x; ++x)
-        if (tile({x,z}) == CityTile::Water)
+        if (!freeform && tile({x,z}) == CityTile::Water)
             return fail(error, "The whole vehicle needs land or a road beneath it.");
     for (float x : {-rx,rx}) for (float z : {-rz,rz})
-        if (std::abs(height(c.GetX()+x,c.GetZ()+z)-c.GetY())>.05f) return fail(error,"Park vehicles on level ground.");
+        if (std::abs(c.GetX()+x)>=extent || std::abs(c.GetZ()+z)>=extent || std::abs(height(c.GetX()+x,c.GetZ()+z)-c.GetY())>.05f
+            || (freeform && !land_at(c+Vec3(x,0,z)) && !road_at(c+Vec3(x,0,z)))) return fail(error,"Park vehicles on level ground.");
     if (replace >= 0 && replace < int(vehicles.size())) vehicles[replace] = v;
     else if (vehicles.size() < 512) vehicles.push_back(v);
     else return fail(error, "Vehicle limit reached.");
@@ -843,7 +863,7 @@ bool City::set_spawn(CityCell p, std::string& error) {
 bool City::set_spawn(Vec3 p, std::string& error) {
     error.clear();
     if (!std::isfinite(p.GetX()) || !std::isfinite(p.GetY()) || !std::isfinite(p.GetZ())
-        || std::abs(p.GetX())>=extent || std::abs(p.GetZ())>=extent || tile(cell(p.GetX(),p.GetZ()))==CityTile::Water
+        || std::abs(p.GetX())>=extent || std::abs(p.GetZ())>=extent || (freeform ? !land_at(p) && !road_at(p) : tile(cell(p.GetX(),p.GetZ()))==CityTile::Water)
         || std::abs(p.GetY()-height(p.GetX(),p.GetZ()))>.001f)
         return fail(error, "Set the spawn on ground inside the map.");
     p.SetY(height(p.GetX(),p.GetZ())); spawn = p; clear_trees(); return true;
@@ -869,6 +889,21 @@ bool City::erase(Vec3 p, std::string& error) {
     const int selected = vehicle_at(p);
     if (selected>=0) { vehicles.erase(vehicles.begin()+selected); error.clear(); return true; }
     if (spawn && (p-*spawn).LengthSq()<1) {spawn.reset(); error.clear(); return true;}
+    if (freeform) {
+        City next=*this;
+        const int building=building_at(p);
+        if (building>=0) next.buildings.erase(next.buildings.begin()+building);
+        else {
+            int road=-1;
+            for (int r=int(paths.size())-1;r>=0 && road<0;--r) for (std::size_t i=1;i<paths[r].centerline.size();++i)
+                if (path_distance(p,paths[r].centerline[i-1],paths[r].centerline[i])<=paths[r].width/2) {road=r;break;}
+            if (road>=0) next.paths.erase(next.paths.begin()+road);
+            else for (int i=int(areas.size())-1;i>=0;--i) if (polygon_contains(areas[i].boundary,p)) {next.areas.erase(next.areas.begin()+i);break;}
+        }
+        next.rebuild_paths(); next.clear_trees();
+        if (!next.validate(error)) return false;
+        *this=std::move(next); return true;
+    }
     return erase(cell(p.GetX(),p.GetZ()),error);
 }
 bool City::validate(std::string& error) const {
@@ -880,6 +915,8 @@ bool City::validate(std::string& error) const {
     if (pedestrian_density<0 || pedestrian_density>100) return fail(error,"Pedestrian density must be between 0 and 100 percent.");
     if (!valid_texture_filename(road_style.road_texture) || !valid_texture_filename(road_style.sidewalk_texture))
         return fail(error,"Invalid road or sidewalk texture filename.");
+    if (freeform && !validate_paths(error)) return false;
+    if (!freeform) {
     for (const auto& texture : ground_textures)
         if (texture.first<0 || texture.first>=width*width || !land({texture.first%width,texture.first/width})
             || !valid_texture_filename(texture.second)) return fail(error,"Invalid ground texture filename or tile.");
@@ -899,6 +936,7 @@ bool City::validate(std::string& error) const {
             if (q.x>=0 && q.z>=0 && q.x<corner_width && q.z<corner_width
                 && std::abs(height-int(elevation[corner_index(q)]))>1) return fail(error,"Adjacent terrain corners must be at most one elevation step apart.");
         }
+    }
     }
     City check = *this; check.buildings.clear(); check.vehicles.clear(); check.trees.clear(); check.spawn.reset();
     for (auto b : buildings) if (!check.add_building(b,error)) return false;
@@ -922,6 +960,7 @@ bool City::validate(std::string& error) const {
     return true;
 }
 std::vector<std::vector<Vec3>> City::traffic_routes(float curb_inset) const {
+    if (freeform) return path_traffic_routes(curb_inset);
     const auto nodes = road_network();
     std::vector<std::vector<int>> exits(nodes.size());
     std::vector<std::vector<bool>> used(nodes.size());
@@ -1101,11 +1140,13 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
     if (!file) return fail(error,"Cannot write this city. Your previous save is intact.");
     const bool free_spawn=spawn && (spawn->GetX()!=center(cell(spawn->GetX(),spawn->GetZ())).GetX()
         || spawn->GetZ()!=center(cell(spawn->GetX(),spawn->GetZ())).GetZ());
-    const int version = !races.empty() ? 18 : road_style!=RoadStyle{} ? 17 : free_spawn ? 16 : pedestrian_density!=100 ? 15 : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh.has_value();}) ? 14
+    const int version = freeform ? 19 : !races.empty() ? 18 : road_style!=RoadStyle{} ? 17 : free_spawn ? 16 : pedestrian_density!=100 ? 15 : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh.has_value();}) ? 14
         : player_character ? 13 : !ground_textures.empty() ? 12 : std::any_of(vehicles.begin(),vehicles.end(),[](const auto& v){return v.car.has_value();}) ? 11
         : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.rotation!=0;}) ? 9
         : 6;
     file << "AMBARETTO_CITY " << version << '\n' << id << '\n' << std::quoted(name) << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10);
+    if (freeform) write_paths(file);
+    else {
     for (auto t : tiles) file << char('0'+int(t));
     file << '\n' << buildings.size() << '\n';
     for (const auto& b : buildings) {
@@ -1146,6 +1187,7 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
             for (auto p : race.checkpoints) file << p.GetX() << ' ' << p.GetZ() << '\n';
         }
     }
+    }
     file.close();
     if (!file) return fail(error,"Cannot finish saving. Your previous save is intact.");
     if (std::filesystem::file_size(temporary,ec)>64*1024*1024 || ec)
@@ -1162,8 +1204,17 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
     std::error_code ec;
     if (std::filesystem::file_size(path,ec) > 64*1024*1024 || ec) return fail(error,"City save is missing or too large.");
     std::ifstream file(path); City read; std::string magic, terrain; int version = 0;
-    if (!(file >> magic >> version >> read.id >> std::quoted(read.name) >> terrain) || magic != "AMBARETTO_CITY" || version<1 || version>18
-        || terrain.size() != read.tiles.size()) return fail(error,"Invalid or unsupported city save.");
+    if (!(file >> magic >> version >> read.id >> std::quoted(read.name)) || magic != "AMBARETTO_CITY" || version<1 || version>19)
+        return fail(error,"Invalid or unsupported city save.");
+    if (version==19) {
+        if (!read_paths(file,read,error)) return false;
+        std::string extra;
+        if (file>>extra) return fail(error,"Unexpected city data.");
+        if (path.stem().string()!=read.id) return fail(error,"City save identifier does not match its filename.");
+        if (!read.validate(error)) return false;
+        city=std::move(read); error.clear(); return true;
+    }
+    if (!(file>>terrain) || terrain.size()!=read.tiles.size()) return fail(error,"Invalid city terrain.");
     for (std::size_t i = 0; i < terrain.size(); ++i) {
         if (terrain[i] < '0' || terrain[i] > (version>=3 ? '3' : '2')) return fail(error,"Invalid city terrain.");
         read.tiles[i] = CityTile(terrain[i]-'0');

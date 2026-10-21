@@ -19,6 +19,19 @@ struct RoadGraph {
     std::vector<Vec3> points;
     std::vector<Edge> edges;
     explicit RoadGraph(const City& city) {
+        if (city.freeform) {
+            std::map<std::pair<int,int>,int> indices;
+            const auto add=[&](Vec3 p) {
+                const auto inserted=indices.emplace(std::make_pair(int(std::round(p.GetX()*1000)),int(std::round(p.GetZ()*1000))),int(points.size()));
+                if (inserted.second) points.push_back(p);
+                return inserted.first->second;
+            };
+            for (const auto& segment : city.path_road_segments()) {
+                const int a=add(segment.a),b=add(segment.b);
+                if (a!=b) edges.push_back({a,b,segment.width});
+            }
+            return;
+        }
         const auto nodes = city.road_network();
         std::vector<std::vector<int>> ends(nodes.size());
         std::map<std::pair<int,int>,int> indices;

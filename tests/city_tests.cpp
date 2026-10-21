@@ -659,7 +659,7 @@ void custom_ground_textures(const std::filesystem::path& directory) {
 }
 void beach_ground_textures(const std::filesystem::path& directory) {
     City city = City::create("Paintable beach"); std::string error;
-    require(City::level==.8f && city.add_land({64,64},{64,64},error),"flat island height is not 75 percent lower");
+    require(City::level==Environment::water_level && city.add_land({64,64},{64,64},error),"flat island height differs from the water");
     const Vec3 center = City::center({64,64}), beach = center+Vec3(City::half_block+2,0,0);
     const auto owner = city.shore_cell(beach);
     require(owner && *owner==CityCell{64,64} && city.shore_cell(center)==owner
@@ -676,7 +676,7 @@ void beach_ground_textures(const std::filesystem::path& directory) {
         const Environment map(city); int beach_triangles = 0;
         for (const auto& t : map.triangles()) {
             const Vec3 point = (map.vertices()[t.a]+map.vertices()[t.b]+map.vertices()[t.c])/3;
-            if (point.GetY()<=Environment::water_level) continue;
+            if (point.GetY()<=Environment::water_level-1) continue;
             if (t.surface!=surface) return false;
             if (!city.land(City::cell(point.GetX(),point.GetZ()))) ++beach_triangles;
         }
@@ -897,7 +897,7 @@ void sloping_shore() {
             && std::abs(hit.point.GetY()-height)<.002f,"shore rendering, height queries, and collision disagree");
         previous = height;
     }
-    require(map.height(edge+2,z)<City::level && map.height(edge+4,z)>0 && map.height(edge+6,z)<0
+    require(map.height(edge+2,z)<City::level && map.height(edge+4,z)>-1 && map.height(edge+6,z)<0
         && std::abs(map.height(edge+32,z)+8)<.1f,"beach does not taper through shallow water to the seabed");
     require(map.height(edge-8,z)==City::level,"shore changed flat building land");
     // A convex corner rounds outward; the submerged end joins the ocean floor.

@@ -14,6 +14,7 @@ std::vector<std::function<void()>> steps;
 std::size_t frame=0;
 unsigned physics_steps=0,window_count=0;
 unsigned model_loads=0,image_loads=0,shader_loads=0,mesh_uploads=0,render_targets=0,preview_draws=0;
+unsigned triangle_picks=0;
 int largest_preview=0;
 double frame_begin=0;
 bool measure_preview=false;
@@ -40,6 +41,11 @@ void city_click(ambaretto::Vec3 focus,ambaretto::Vec3 point) {
 void map_click(ambaretto::Vec3 point) {
     steps.push_back([=]{const auto p=GetWorldToScreen({point.GetX(),point.GetY(),point.GetZ()},scene_camera); event(7,int(p.x),int(p.y)); event(6,MOUSE_BUTTON_LEFT);});
     steps.push_back([]{event(5,MOUSE_BUTTON_LEFT);}); idle();
+}
+void map_drag(ambaretto::Vec3 from,ambaretto::Vec3 to) {
+    steps.push_back([=]{const auto p=GetWorldToScreen({from.GetX(),from.GetY(),from.GetZ()},scene_camera);event(7,int(p.x),int(p.y));event(6,MOUSE_BUTTON_LEFT);});
+    for(int i=1;i<=5;++i)steps.push_back([=]{const auto point=from+(to-from)*(i/5.f);const auto p=GetWorldToScreen({point.GetX(),point.GetY(),point.GetZ()},scene_camera);event(7,int(p.x),int(p.y));});
+    steps.push_back([]{event(5,MOUSE_BUTTON_LEFT);});idle();
 }
 void key(int code) {steps.push_back([=]{event(2,code);}); steps.push_back([=]{event(1,code);}); idle();}
 void wheel(int amount) {steps.push_back([=]{event(7,100,380); event(8,0,amount);}); idle();}
@@ -98,10 +104,18 @@ std::string terrain_pixels() {
 }
 void require_terrain_preview(const ambaretto::City& city) {
     const auto pixels=terrain_pixels(); int matched=0;
+    auto outline=city;outline.make_freeform(true);
     for (std::size_t i=0;i<pixels.size();++i) if (pixels[i]!='?') {
-        require(pixels[i]=='0'+int(city.tiles[i]),"Terrain image differs from the generated map"); ++matched;
+        // Filtering a curved shore changes boundary pixels; compare solid land and water.
+        if (outline.shore_distance(ambaretto::City::center({int(i%ambaretto::City::width),int(i/ambaretto::City::width)}))<ambaretto::City::block*.6f) continue;
+        require(pixels[i]=='0'+int(city.tiles[i]),("Terrain image differs from the generated map at "+std::to_string(i%ambaretto::City::width)+","+std::to_string(i/ambaretto::City::width)).c_str()); ++matched;
     }
     require(matched>15000,"Terrain preview is missing or obscured");
+}
+bool same_land(const ambaretto::City& a,const ambaretto::City& b) {
+    for(int z=0;z<ambaretto::City::width;++z)for(int x=0;x<ambaretto::City::width;++x)
+        if(a.land({x,z})!=b.land({x,z}))return false;
+    return true;
 }
 void duplicate_key() {steps.push_back([]{event(2,KEY_LEFT_CONTROL); event(2,KEY_D);}); steps.push_back([]{event(1,KEY_D); event(1,KEY_LEFT_CONTROL);}); idle();}
 void reset() {steps.clear(); frame=0; title.clear(); should_close=false; focused=true; frame_begin=0; measure_preview=false; preview_frames.clear(); active_world=nullptr;}
@@ -139,6 +153,8 @@ extern "C" void __real_BeginTextureMode(RenderTexture2D);
 extern "C" void __wrap_BeginTextureMode(RenderTexture2D target) {++preview_draws; __real_BeginTextureMode(target);}
 extern "C" void __real_BeginMode3D(Camera3D);
 extern "C" void __wrap_BeginMode3D(Camera3D camera) {scene_camera=camera; __real_BeginMode3D(camera);}
+extern "C" RayCollision __real_GetRayCollisionTriangle(Ray,Vector3,Vector3,Vector3);
+extern "C" RayCollision __wrap_GetRayCollisionTriangle(Ray ray,Vector3 a,Vector3 b,Vector3 c) {++triangle_picks;return __real_GetRayCollisionTriangle(ray,a,b,c);}
 extern "C" void __wrap_EndDrawing() {
     if (measure_preview && frame_begin>0) preview_frames.push_back((GetTime()-frame_begin)*1000);
     __real_EndDrawing();
@@ -346,7 +362,8 @@ int main() {
             const auto object=City::center({66,64}),empty=City::center({65,66});
             require(edited.add_land({56,56},{74,74},error) && edited.set_spawn(CityCell{64,64},error)
                 && edited.add_building({{66,64},1,12},error) && edited.add_building({{68,64},1,12},error)
-                && edited.save(directory,error),"Map controls fixture failed");
+                 ,"Map controls fixture failed");
+            edited.make_freeform();require(edited.save(directory,error),error.c_str());
             const auto original=contents(saved_path(edited,directory)); const auto terrain=edited.tiles;
             Camera3D initial{}; Vector3 before{};
             idle(); steps.push_back([&]{initial=scene_camera; require_button({16,56,40,40},true); require_button({60,56,40,40}); capture("city-controls.png");});
@@ -360,7 +377,7 @@ int main() {
             click(36,164); steps.push_back([]{require(std::abs(scene_camera.fovy-340)<.01f,"Zoom in icon did nothing");});
             click(80,164); steps.push_back([]{require(std::abs(scene_camera.fovy-400)<.01f,"Zoom out icon did not reverse zoom");});
             click(36,208); click(80,208);
-            steps.push_back([]{require(scene_camera.up.z==-1,"Top view icon did nothing"); require_button({60,188,40,40});});
+            steps.push_back([]{require(scene_camera.up.z==-1,"Top view icon did nothing"); require_button({60,188,40,40},true);});
             map_click(empty); click(80,76); map_click(empty);
             steps.push_back([&]{require(std::abs(scene_camera.target.x-empty.GetX())<1 && std::abs(scene_camera.target.z-empty.GetZ())<1,
                 "Hand click did not center the map");});
@@ -461,28 +478,79 @@ int main() {
             require(City::load(directory/(placed.id+".city"),loaded,error) && loaded.spawn==placed.spawn && loaded.vehicles.size()==1
                 && (loaded.vehicles[0].position-*loaded.spawn).Length()<.01f,"Overlapping player and vehicle did not persist");
         } CloseWindow();
-        stage="dry beach ground painting"; window(); {
-            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
-            City coast=City::create("Beach painting workflow"); const CityCell owner{64,64};
-            const auto directory=root/"beach-cities";
-            require(coast.add_land(owner,owner,error) && coast.set_spawn(owner,error) && coast.save(directory,error),"Beach painting fixture failed");
-            const Vec3 focus=*coast.spawn;
-            Vec3 beach=City::center(owner)+Vec3(City::half_block+2,0,0);
-            const Environment fixture(coast); beach.SetY(fixture.terrain_height(beach.GetX(),beach.GetZ()));
-            require(beach.GetY()>Environment::water_level && beach.GetY()<City::level
-                && !coast.land(City::cell(beach.GetX(),beach.GetZ())),"Fixture must click dry beach below the flat island");
-            idle(); key(KEY_V); key(KEY_NINE); key(KEY_ENTER); city_click(focus,beach);
-            steps.push_back([&]{require(coast.ground_textures.size()==1 && coast.ground_textures.at(City::index(owner))=="soil.png"
-                && coast.land_count()==1,"Ground tool did not paint the dry beach's owning land tile");});
-            shortcut(KEY_Z); steps.push_back([&]{require(coast.ground_textures.empty(),"Beach painting did not undo");});
-            shortcut(KEY_Y); steps.push_back([&]{require(coast.ground_textures.size()==1 && coast.ground_textures.at(City::index(owner))=="soil.png","Beach painting did not redo");});
-            city_click(focus,beach+Vec3(40,0,0));
-            steps.push_back([&]{require(coast.ground_textures.size()==1 && coast.land_count()==1,"Offshore Ground click changed the island"); capture("city-beach-painting.png");});
+        stage="freeform pen tools and continuous building rotation"; window(); {
+            ui::FontResource font;ControllerMapping controls;GraphicsSettings graphics;
+            City coast=City::create("Freeform pen workflow");coast.make_freeform();
+            const auto directory=root/"freeform-cities";
+            const auto point=[](float x,float z){return Vec3(x,City::level,z);};
+            idle();key(KEY_V);key(KEY_TWO);
+            for(auto p:{point(-120,-60),point(120,-60),point(120,100),point(-120,100),point(-120,-60)})map_click(p);
+            steps.push_back([&]{require(coast.areas.size()==1 && coast.land_at(point(0,0)),"Land pen did not close and fill");});
+            key(KEY_ZERO);
+            for(auto p:{point(-30,-30),point(0,-30),point(0,10),point(-30,10)})map_click(p);
+            key(KEY_ENTER);
+            steps.push_back([&]{require(coast.areas.size()==2 && !coast.land_at(point(-15,-10)),"Water pen did not create a lake");});
+            key(KEY_NINE);key(KEY_ENTER);
+            for(auto p:{point(-100,-45),point(-50,-45),point(-70,-5)})map_click(p);
+            key(KEY_ENTER);
+            steps.push_back([&]{require(coast.areas.size()==3 && coast.areas.back().kind==AreaKind::Texture,"Texture pen did not fill the outline");});
+            key(KEY_THREE);map_drag(point(-100,30),point(-70,70));map_drag(point(100,30),point(130,-10));key(KEY_ENTER);
+            steps.push_back([&]{require(coast.paths.size()==1 && coast.paths[0].path.nodes[0].tangent.Length()>30,"Road pen lost its Bezier handles");});
+            key(KEY_FOUR);map_click(point(65.25f,-20.75f));
+            steps.push_back([&]{require(coast.buildings.size()==1 && std::abs(coast.buildings[0].position->GetX()-City::center(coast.buildings[0].cell).GetX())>1,"Building placement snapped to the grid");});
+            key(KEY_ONE);map_click(point(65.25f,-20.75f));
+            unsigned rotation_uploads=0;
+            steps.push_back([&]{rotation_uploads=mesh_uploads;event(2,KEY_R);});idle(12);
+            steps.push_back([&]{require(mesh_uploads==rotation_uploads,"Rotating a selected building rebuilt GPU meshes");event(1,KEY_R);});idle();
+            steps.push_back([&]{require(coast.buildings[0].yaw>0 && coast.buildings[0].yaw<180,("Holding R did not rotate continuously: "+std::to_string(coast.buildings[0].yaw)).c_str());});
+            shortcut(KEY_Z);steps.push_back([&]{require(coast.buildings[0].yaw==0,"One Undo did not restore the whole rotation gesture");});
+            shortcut(KEY_Y);key(KEY_EIGHT);map_click(point(80,75));
+            steps.push_back([&]{require(!coast.trees.empty(),"Tree brush stopped painting");});
+            key(KEY_ONE);map_click(point(-100,30));map_drag(point(-100,30),point(-95,25));key(KEY_ENTER);
+            steps.push_back([&]{require(coast.paths.size()==1 && std::abs(coast.paths[0].path.nodes[0].position.GetX()+95)<1,"Existing road node could not be moved");capture("freeform-pen-editor.png");});
+            key(KEY_ONE);map_click(point(-95,25));map_click(point(125,90));key(KEY_ENTER);
+            key(KEY_ONE);map_click(point(-95,25));map_drag(point(-95,25),point(-90,20));
+            steps.push_back([&]{require(!coast.paths[0].path.closed,"Dragging the first road node unexpectedly closed it");});
+            map_click(point(-90,20));
+            steps.push_back([&]{require(coast.paths[0].path.closed && coast.paths[0].path.nodes.size()==3,"Existing road could not reconnect to its first node");});
+            shortcut(KEY_Z);steps.push_back([&]{require(!coast.paths[0].path.closed,"Closing a road did not undo");});
+            shortcut(KEY_Y);steps.push_back([&]{require(coast.paths[0].path.closed,"Closing a road did not redo");});
+            key(KEY_THREE);for(auto p:{point(15,-45),point(70,-45),point(70,0),point(15,-45)})map_click(p);
+            steps.push_back([&]{require(coast.paths.size()==2 && coast.paths[1].path.closed,"New road could not close into a loop");});
+            steps.push_back([]{triangle_picks=0;measure_preview=true;});idle(24);
+            steps.push_back([]{
+                measure_preview=false;require(triangle_picks==0,"Idle editor still scans the full terrain for picking");
+                std::sort(preview_frames.begin(),preview_frames.end());
+                std::cout<<"Warm city editor CPU frame median/p95: "<<preview_frames[preview_frames.size()/2]<<" / "<<preview_frames[(preview_frames.size()-1)*95/100]<<" ms; terrain triangle picks: "<<triangle_picks<<'\n';
+                capture("freeform-road-loops.png");
+            });
             shortcut(KEY_S);
-            steps.push_back([&]{City loaded; require(City::load(directory/(coast.id+".city"),loaded,error)
-                && loaded.ground_textures==coast.ground_textures,"Beach painting did not save");});
-            key(KEY_ESCAPE); click(760,485);
-            require(!city_menu(coast,directory,controls,graphics,true),"Beach painting editor started Play");
+            steps.push_back([&]{City loaded;require(City::load(directory/(coast.id+".city"),loaded,error) && loaded.freeform && loaded.areas.size()==3 && loaded.paths.size()==2 && loaded.paths[0].path.closed && loaded.paths[1].path.closed && loaded.buildings[0].yaw>0,"Freeform editor changes did not save");});
+            key(KEY_ESCAPE);click(760,485);
+            require(!city_menu(coast,directory,controls,graphics,true),"Pen tools started Play");
+        } CloseWindow();
+        stage="road draft history and node snapping"; window(); {
+            ui::FontResource font;ControllerMapping controls;GraphicsSettings graphics;
+            City roads=City::create("Junction workflow");roads.make_freeform();
+            const auto point=[](float x,float z){return Vec3(x,City::level,z);};
+            idle();key(KEY_V);key(KEY_THREE);
+            map_click(point(-100,30));map_click(point(0,30));map_click(point(100,30));shortcut(KEY_Z);key(KEY_ENTER);
+            steps.push_back([&]{require(roads.paths.size()==1 && roads.paths[0].path.nodes.size()==2,"Ctrl+Z did not remove the last draft node");});
+            shortcut(KEY_Z);steps.push_back([&]{require(roads.paths.empty(),"Finished road did not undo");});
+            shortcut(KEY_Y);steps.push_back([&]{require(roads.paths.size()==1,"Finished road did not redo");});
+            key(KEY_THREE);map_click(point(-40,-70));map_click(point(-40,31));shortcut(KEY_Z);shortcut(KEY_Y);key(KEY_ENTER);
+            steps.push_back([&]{require(roads.paths.size()==2 && std::abs(roads.paths[1].path.nodes.back().position.GetZ()-30)<.01f,"Draft redo lost the snapped T-junction");});
+            key(KEY_ONE);map_click(point(-40,-20));map_drag(point(-40,30),point(-98,31));shortcut(KEY_Z);key(KEY_ENTER);
+            steps.push_back([&]{require(std::abs(roads.paths[1].path.nodes.back().position.GetX()+40)<1,"Node drag did not undo as one gesture");});
+            key(KEY_ONE);map_click(point(-40,-20));map_drag(point(-40,30),point(-98,31));shortcut(KEY_Z);shortcut(KEY_Y);key(KEY_ENTER);
+            steps.push_back([&]{require(roads.paths[1].path.nodes.back().position==roads.paths[0].path.nodes.front().position,"Dragging a node did not snap exactly to another road node");capture("road-node-connections.png");});
+            shortcut(KEY_Z);steps.push_back([&]{require(std::abs(roads.paths[1].path.nodes.back().position.GetX()+40)<1,"Applied road edit did not undo");});
+            key(KEY_ONE);map_click(point(-40,-20));shortcut(KEY_Y);
+            steps.push_back([&]{require(roads.paths[1].path.nodes.back().position==roads.paths[0].path.nodes.front().position,"Selecting an unchanged road blocked city redo");});
+            key(KEY_THREE);map_drag(point(40,-50),point(60,-30));map_click(point(100,0));shortcut(KEY_Z);shortcut(KEY_Z);shortcut(KEY_Y);shortcut(KEY_Y);key(KEY_ENTER);
+            steps.push_back([&]{require(roads.paths.size()==3 && roads.paths[2].path.nodes.size()==2 && roads.paths[2].path.nodes.front().tangent.Length()>20,"Draft undo/redo did not preserve a curve gesture");});
+            key(KEY_ESCAPE);click(760,485);
+            require(!city_menu(roads,root/"junction-cities",controls,graphics,true),"Road editing started Play");
         } CloseWindow();
         stage="map building popup"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
@@ -546,6 +614,7 @@ int main() {
         const auto play_directory=root/"play/cities";
         auto playable=city; playable.id="0000000000000001"; playable.name="B playable city";
         auto unavailable=City::create("A unavailable city"); unavailable.id="0000000000000002";
+        unavailable.make_freeform();
         require(playable.save(play_directory,error) && unavailable.save(play_directory,error),"Play fixtures failed");
         const auto playable_path=play_directory/(playable.id+".city"),unavailable_path=play_directory/(unavailable.id+".city");
         const auto original_playable=contents(playable_path),original_unavailable=contents(unavailable_path);
@@ -596,7 +665,7 @@ int main() {
         stage="terrain preview / regenerate / create"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=unavailable;
             const auto directory=root/"preview-cities"; City expected=City::create("Expected preview");
-            require(expected.generate_terrain(48,32,1234,error,{4,35}),"Preview fixture failed");
+            require(expected.generate_terrain(48,32,1234,error,{0,35}),"Preview fixture failed");
             std::string first,regenerated;
             idle(); click(760,220); click(410,276); replace_text("32"); click(300,336); replace_text("1234");
             steps.push_back([&]{require_terrain_preview(expected); first=terrain_pixels(); capture("terrain-preview.png");});
@@ -612,37 +681,32 @@ int main() {
             steps.push_back([&]{require(selected.id==unavailable.id && !std::filesystem::exists(directory),"Preview or Cancel changed the existing city");});
             click(760,220); click(410,276); replace_text("32"); click(300,336); replace_text("1234");
             steps.push_back([&]{require_terrain_preview(expected);}); click(300,514);
-            steps.push_back([&]{require(title=="Ambaretto - City editor" && selected.tiles==expected.tiles,"Create did not use the displayed terrain");});
+            steps.push_back([&]{require(title=="Ambaretto - City editor" && selected.freeform && same_land(selected,expected),"Create did not use the displayed terrain");capture("smooth-terrain-editor.png");});
             key(KEY_ESCAPE); click(760,485);
             require(!city_menu(selected,directory,controls,graphics),"Terrain preview started Play");
             City loaded;
-            require(City::load(directory/(selected.id+".city"),loaded,error) && loaded.tiles==expected.tiles && loaded.elevation==expected.elevation,
+            require(City::load(directory/(selected.id+".city"),loaded,error) && loaded.freeform && same_land(loaded,expected),
                 "Saved terrain differs from the preview");
         } CloseWindow();
-        stage="terrain elevation / water / river / islands"; window(); {
-            ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics; City selected=unavailable;
+        stage="flat terrain / water / river / islands"; window(); {
+            ui::FontResource font;ControllerMapping controls;GraphicsSettings graphics;City selected=unavailable;
             const auto directory=root/"terrain-settings";
-            City flat=City::create("Flat"),hills=flat,river=flat,islands=flat;
-            require(flat.generate_terrain(48,48,1234,error,{0,20}) && hills.generate_terrain(48,48,1234,error,{8,60})
-                && river.generate_terrain(48,48,1234,error,{8,60,true}) && islands.generate_terrain(48,48,1234,error,{8,60,true,true}),"Terrain settings fixtures failed");
-            idle(); click(760,220); click(300,336); replace_text("1234"); click(300,378); replace_text("0"); click(300,418); replace_text("20");
-            steps.push_back([&]{require_terrain_preview(flat); capture("terrain-settings-flat.png");});
-            click(300,378); replace_text("8"); click(300,418); replace_text("60");
-            steps.push_back([&]{require_terrain_preview(hills); capture("terrain-settings-hills.png");});
-            click(160,462); steps.push_back([&]{require_terrain_preview(river);});
-            key(KEY_SPACE); steps.push_back([&]{require_terrain_preview(hills);});
-            key(KEY_SPACE); key(KEY_TAB); key(KEY_SPACE);
-            steps.push_back([&]{require_terrain_preview(islands); capture("terrain-settings-two-islands.png");});
-            click(300,378); replace_text("9"); key(KEY_ENTER);
-            steps.push_back([&]{require(selected.id==unavailable.id && !std::filesystem::exists(directory),"Invalid elevation saved a map");});
-            click(300,378); replace_text("8"); click(300,418); replace_text("101"); key(KEY_ENTER);
+            City flat=City::create("Flat"),water=flat,river=flat,islands=flat;
+            require(flat.generate_terrain(48,48,1234,error,{0,20}) && water.generate_terrain(48,48,1234,error,{0,60})
+                && river.generate_terrain(48,48,1234,error,{0,60,true}) && islands.generate_terrain(48,48,1234,error,{0,60,true,true}),"Terrain settings fixtures failed");
+            idle();click(760,220);click(300,336);replace_text("1234");click(300,418);replace_text("20");
+            steps.push_back([&]{require_terrain_preview(flat);});
+            click(300,418);replace_text("60");steps.push_back([&]{require_terrain_preview(water);});
+            click(160,462);steps.push_back([&]{require_terrain_preview(river);});
+            key(KEY_SPACE);steps.push_back([&]{require_terrain_preview(water);});key(KEY_SPACE);key(KEY_TAB);key(KEY_SPACE);
+            steps.push_back([&]{require_terrain_preview(islands);});
+            click(300,418);replace_text("101");key(KEY_ENTER);
             steps.push_back([&]{require(selected.id==unavailable.id && !std::filesystem::exists(directory),"Invalid water coverage saved a map");});
-            click(300,418); replace_text("60"); click(300,514);
-            steps.push_back([&]{require(title=="Ambaretto - City editor" && selected.tiles==islands.tiles && selected.elevation==islands.elevation,"Create ignored terrain settings"); capture("generated-hills-editor.png");});
-            key(KEY_ESCAPE); click(760,485);
+            click(300,418);replace_text("60");click(300,514);
+            steps.push_back([&]{require(title=="Ambaretto - City editor" && selected.freeform && same_land(selected,islands),"Create ignored flat terrain settings");});
+            key(KEY_ESCAPE);click(760,485);
             require(!city_menu(selected,directory,controls,graphics),"Terrain settings editor started Play");
-            City loaded; require(City::load(directory/(selected.id+".city"),loaded,error)
-                && loaded.tiles==islands.tiles && loaded.elevation==islands.elevation,"Generated elevations did not save");
+            City loaded;require(City::load(directory/(selected.id+".city"),loaded,error) && loaded.freeform && same_land(loaded,islands),"Generated freeform islands did not save");
         } CloseWindow();
         // Each creation menu duplicates to disk, selects the copy, and leaves the source alone.
         for (auto kind:{DesignKind::Building,DesignKind::Car,DesignKind::Character}) {
@@ -985,7 +1049,7 @@ int main() {
         require(ambaretto_main(3,args)==0,"Free roam race workflow failed");
         std::cout<<"Menus: creation, Save/Discard/Cancel, pause/resume, map editing, saved play modes and races passed\n";
     } catch (const WorkflowFailure& e) {
-        std::cerr<<e.message<<'\n'; if (IsWindowReady()) CloseWindow(); return 1;
+        std::cerr<<e.message<<'\n'; if (IsWindowReady()) {capture("menu-workflow-failure.png");CloseWindow();} return 1;
     } catch (const std::exception& e) {
         std::cerr<<e.what()<<'\n'; if (IsWindowReady()) CloseWindow(); return 1;
     }

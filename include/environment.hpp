@@ -104,6 +104,7 @@ private:
     static constexpr float city_mesh_spacing = City::block / 4, city_mesh_extent = City::extent + city_mesh_spacing * 12;
     static constexpr int city_mesh_width = City::width * 4 + 25;
     std::vector<float> city_heights_;
+    std::map<int,std::vector<int>> city_surface_cells_;
     static float elevation(float x, float z);
     static Surface surface(float x, float z, float y);
     std::vector<Vec3> vertices_;
@@ -112,5 +113,6 @@ private:
     std::vector<Tree> trees_;
     std::vector<Barrier> barriers_;
     std::vector<Port> ports_;
+    void build_freeform_city(const City& city);
 };
 } // namespace ambaretto

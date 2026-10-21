@@ -48,7 +48,7 @@ private:
     SkyRenderer sky_;
     std::map<std::string,Texture2D> ground_textures_;
     Shader land_shader_{}, water_shader_{}, tree_shader_{}, light_shader_{};
-    int land_camera_ = -1, water_camera_ = -1, water_time_ = -1, water_zenith_ = -1, tree_camera_ = -1, sign_emission_ = -1;
+    int land_camera_ = -1, land_shore_blend_ = -1, water_camera_ = -1, water_time_ = -1, water_zenith_ = -1, tree_camera_ = -1, sign_emission_ = -1;
     bool trees_ready_ = false;
 };
 } // namespace ambaretto

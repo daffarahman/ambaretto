@@ -123,7 +123,7 @@ void custom_ground_pixels(RenderTexture2D target) {
         const Environment map(city); EnvironmentRenderer scenery(map); Image image = render_city(scenery,target,camera);
         const auto a = pixel(image,{63,64}), b = pixel(image,{65,64});
         require(a.r>a.g*3 && a.r>a.b*3 && b.g>b.r*3 && b.g>b.b*3,"custom ground textures did not render on the correct ramp tiles");
-        const Vec3 coast = City::center({66,64})+Vec3(City::half_block+2,0,0);
+        const Vec3 coast = City::center({66,64})+Vec3(City::half_block-2,0,0);
         const auto shore_pixel = GetWorldToScreenEx({coast.GetX(),map.terrain_height(coast.GetX(),coast.GetZ()),coast.GetZ()},camera,image.width,image.height);
         const Color shore = GetImageColor(image,int(shore_pixel.x),int(shore_pixel.y));
         require(shore.g>shore.r*3 && shore.g>shore.b*3,"the visible beach did not inherit its adjoining land's custom texture");

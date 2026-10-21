@@ -84,6 +84,68 @@ Color at(Image image,Camera3D camera,Vec3 p) {
 bool red(Color c) { return c.r>c.g*3 && c.r>c.b*3; }
 bool green(Color c) { return c.g>c.r*3 && c.g>c.b*3; }
 bool blue(Color c) { return c.b>c.r*3 && c.b>c.g*3; }
+void freeform_rendering(const std::filesystem::path& root,const std::filesystem::path& output) {
+    const auto textures=root/"freeform/assets/textures";std::filesystem::create_directories(textures);
+    for(const auto& fixture:{std::pair<const char*,Color>{"soil.png",{0,0,255,255}},{"beach-sand.png",RED},{"grass.png",GREEN},{"asphalt.png",RED},{"brick08.png",GREEN}}) {
+        auto image=GenImageColor(16,16,fixture.second);const bool saved=ExportImage(image,(textures/fixture.first).string().c_str());UnloadImage(image);
+        require(saved,"Freeform texture fixture could not be written");
+    }
+    const auto previous=std::filesystem::current_path();std::filesystem::current_path(root/"freeform");
+    City city=City::create("Freeform render checks");city.make_freeform();std::string error;
+    CityArea island;island.path.closed=true;
+    for(auto p:{Vec3(-70,City::level,-70),Vec3(70,City::level,-70),Vec3(70,City::level,70),Vec3(-70,City::level,70)})island.path.nodes.push_back({p,Vec3::sZero()});
+    require(city.add_area(island,error),error.c_str());
+    CityArea paint;paint.kind=AreaKind::Texture;paint.texture="grass.png";paint.path.closed=true;
+    for(auto p:{Vec3(-45,City::level,-45),Vec3(45,City::level,-45),Vec3(45,City::level,-30),Vec3(-25,City::level,-30),Vec3(-25,City::level,10),Vec3(-45,City::level,10)})paint.path.nodes.push_back({p,Vec3::sZero()});
+    require(city.add_area(paint,error),error.c_str());
+    PathRoad road;road.path.nodes={{Vec3(-50,City::level,15),Vec3(30,0,30)},{Vec3(50,City::level,15),Vec3(30,0,-30)}};
+    require(city.add_path_road(road,error),error.c_str());
+    const Camera3D camera{{0,250,0},{0,0,0},{0,0,-1},160,CAMERA_ORTHOGRAPHIC};
+    const auto target=LoadRenderTexture(1200,800);auto image=render(city,target,camera);
+    require(ExportImage(image,(output/"freeform-textures-top.png").string().c_str()),"Could not export freeform texture preview");
+    require(blue(at(image,camera,Vec3(0,City::level,-20))),"Concave texture fill covered its notch");
+    require(green(at(image,camera,Vec3(-40,City::level,-20))),"Pen texture is missing inside its outline");
+    const auto beach=at(image,camera,Vec3(68,city.terrain_height(68,0),0));
+    require(beach.r>beach.b*2,"Default ground does not blend into the sand texture at the shore");
+    require(red(at(image,camera,Vec3(0,City::level,40))),"Bezier pavement is missing or faces down");
+    require(green(at(image,camera,Vec3(0,City::level,43))),"Bezier sidewalk is missing or faces down");
+    UnloadImage(image);
+    auto junction_camera=camera;junction_camera.fovy=80;
+    for (bool crossing:{false,true}) for (bool reverse:{false,true}) {
+        City junction=city;junction.paths.clear();junction.road_style={"asphalt.png","brick08.png",true};
+        PathRoad through,branch;through.path.nodes={{{-55,City::level,0},Vec3::sZero()},{{55,City::level,0},Vec3::sZero()}};
+        branch.path.nodes={{{0,City::level,-55},Vec3::sZero()},{{0,City::level,crossing ? 55.f : 0.f},Vec3::sZero()}};
+        require(junction.add_path_road(reverse ? branch : through,error) && junction.add_path_road(reverse ? through : branch,error),error.c_str());
+        image=render(junction,target,junction_camera);
+        require(ExportImage(image,(output/(crossing ? "freeform-cross-junction.png" : "freeform-t-junction.png")).string().c_str()),"Could not export junction preview");
+        for (float z=-14;z<=14;z+=.7f) for (float x=-14;x<=14;x+=.7f) {
+            const Vec3 point(x,City::level,z);
+            if (junction.road_at(point,-.35f)) require(!green(at(image,junction_camera,point)),"A sidewalk crosses a junction driving lane");
+        }
+        require(red(at(image,junction_camera,Vec3(0,City::level,0))),"Lane markings cross the middle of a junction");
+        const auto stripe=at(image,junction_camera,Vec3(20,City::level,0));
+        require(stripe.r>stripe.b*1.3f && stripe.g>stripe.b*1.3f,"Junction trimming removed the approaching center line");
+        require(red(at(image,junction_camera,Vec3(1.5f,City::level,-5.55f))),"A curb blocks the branch entrance");
+        require(crossing ? red(at(image,junction_camera,Vec3(1.5f,City::level,5.55f))) : green(at(image,junction_camera,Vec3(1.5f,City::level,5.55f))),"T-junction lost its opposite curb or crossing kept an internal curb");
+        require(green(at(image,junction_camera,Vec3(12,City::level,-5.55f))),"Junction trimming removed the approaching sidewalk");
+        UnloadImage(image);
+    }
+    {
+        Environment environment(city);EnvironmentRenderer renderer(environment);WorldMapView view;view.scale=2;
+        const Rectangle viewport{0,0,1200,800};
+        BeginTextureMode(target);ClearBackground(BLACK);
+        renderer.world_map(view,viewport,Vec3::sZero(),Vec3::sAxisZ());EndTextureMode();
+        image=LoadImageFromTexture(target.texture);ImageFlipVertical(&image);
+        const auto land=view.project(Vec3(55,0,-55),viewport),sea=view.project(Vec3(90,0,-55),viewport);
+        const auto land_color=GetImageColor(image,int(land.x),int(land.y)),sea_color=GetImageColor(image,int(sea.x),int(sea.y));
+        require(land_color.r==96 && land_color.g==96 && land_color.b==96,"Sea-level land disappeared from the map");
+        require(sea_color.r==24 && sea_color.g==44 && sea_color.b==70,"Map land mask covered the water");
+        UnloadImage(image);
+    }
+    UnloadRenderTexture(target);std::filesystem::current_path(previous);
+    for(const auto& name:{"soil.png","beach-sand.png","grass.png","asphalt.png","brick08.png"})std::filesystem::remove(textures/name);
+    std::filesystem::remove(textures);std::filesystem::remove(root/"freeform/assets");std::filesystem::remove(root/"freeform");
+}
 void rendering(const std::filesystem::path& root,const std::filesystem::path& output) {
     const auto textures=root/"assets/textures"; std::filesystem::create_directories(textures);
     for (const auto& fixture : {std::pair<const char*,Color>{"road red.png",{255,0,0,255}},{"walk green.png",{0,255,0,255}},{"asphalt.png",{0,0,255,255}},{"brick08.png",{0,255,0,255}}}) {
@@ -139,7 +201,7 @@ int main() {
     const auto root=std::filesystem::temp_directory_path()/("ambaretto-roads-"+ambaretto::City::create("Tests").id);
     std::filesystem::create_directories(root);
     try {
-        geometry(); persistence(root); rendering(root,std::filesystem::current_path());
+        geometry(); persistence(root); rendering(root,std::filesystem::current_path());freeform_rendering(root,std::filesystem::current_path());
         std::filesystem::remove(root); CloseWindow();
         std::cout<<"Global road styles, safe persistence, sidewalk seams, every road shape and texture fallbacks passed\n";
     } catch (const std::exception& e) { std::cerr<<e.what()<<'\n'; CloseWindow(); return 1; }

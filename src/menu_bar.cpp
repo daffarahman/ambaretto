@@ -18,10 +18,9 @@ constexpr Item editor_files[] = {{"Save city", MenuCommand::SaveCity, "Ctrl+S"},
 constexpr Item play_editor_files[] = {{"Save map", MenuCommand::SaveCity, "Ctrl+S"}, {"Start time...", MenuCommand::StartTime},
     {"Return to Play", MenuCommand::PlayCity, "Esc"}, {"End Game / Main menu", MenuCommand::Cities}, {"Refresh saved designs", MenuCommand::RefreshDesigns}};
 constexpr Item editor_edits[] = {{"Undo", MenuCommand::Undo, "Ctrl+Z"}, {"Redo", MenuCommand::Redo, "Ctrl+Y"}, {"Delete selection", MenuCommand::DeleteSelection, "Del"}, {"Select / edit", MenuCommand::SelectTool, "1"}, {"Bulldoze", MenuCommand::BulldozeTool, "7"}};
-constexpr Item tiles[] = {{"Island / expand",MenuCommand::LandTool,"2"}, {"Road: L-shaped",MenuCommand::RoadBend,"3"}, {"Road: diagonal",MenuCommand::RoadDiagonal},
-    {"Ground texture...",MenuCommand::GroundTool,"9"},
-    {"Raise ground +2 m",MenuCommand::RaiseGround,"0"}, {"Lower ground -2 m",MenuCommand::LowerGround}};
-constexpr Item buildings[] = {{"Place selected building",MenuCommand::BuildingTool,"4"}, {"Building Creator...",MenuCommand::BuildingCreator}, {"Edit selected building...",MenuCommand::EditBuilding}, {"Rotate building +90",MenuCommand::RotateBuilding,"R"}, {"Choose saved building...",MenuCommand::SavedBuildings}, {"Place plain block",MenuCommand::PlainBuilding}};
+constexpr Item tiles[] = {{"Land pen",MenuCommand::LandTool,"2"}, {"Bezier road pen",MenuCommand::RoadTool,"3"},
+    {"Texture pen...",MenuCommand::GroundTool,"9"}, {"Water pen",MenuCommand::WaterTool,"0"}};
+constexpr Item buildings[] = {{"Place selected building",MenuCommand::BuildingTool,"4"}, {"Building Creator...",MenuCommand::BuildingCreator}, {"Edit selected building...",MenuCommand::EditBuilding}, {"Rotate building (hold R)",MenuCommand::RotateBuilding,"R"}, {"Choose saved building...",MenuCommand::SavedBuildings}, {"Place plain block",MenuCommand::PlainBuilding}};
 constexpr Item trees[] = {{"Sparse",MenuCommand::TreesSparse,"8"}, {"Medium",MenuCommand::TreesMedium}, {"Dense",MenuCommand::TreesDense},
     {"Smaller brush",MenuCommand::BrushSmaller}, {"Larger brush",MenuCommand::BrushLarger}};
 constexpr Item player[] = {{"Player spawn",MenuCommand::SpawnTool,"5"}, {"Character creator...",MenuCommand::CharacterCreator},
@@ -70,8 +69,6 @@ bool checked(MenuCommand command, const MenuState& state) {
     if (command == MenuCommand::PanView) return state.tool==10;
     if (command == MenuCommand::TopView) return state.top;
     if (command == MenuCommand::Grid) return state.grid;
-    if (command==MenuCommand::RoadBend || command==MenuCommand::RoadDiagonal) return state.tool==2 && state.diagonal==(command==MenuCommand::RoadDiagonal);
-    if (command==MenuCommand::RaiseGround || command==MenuCommand::LowerGround) return state.tool==9 && state.elevation==(command==MenuCommand::RaiseGround ? 1 : -1);
     if (command>=MenuCommand::PlaceCar && command<=MenuCommand::PlaceBoeing) return state.tool==5 && state.vehicle==int(command)-int(MenuCommand::PlaceCar);
     if (command>=MenuCommand::TreesSparse && command<=MenuCommand::TreesDense) return state.tool==7 && state.density==int(command)-int(MenuCommand::TreesSparse)+1;
     return state.tool >= 0 && state.tool < 10 && int(command) == int(MenuCommand::SelectTool) + state.tool;

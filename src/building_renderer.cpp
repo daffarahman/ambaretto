@@ -60,6 +60,8 @@ in vec2 vertexTexCoord;
 in vec2 vertexTexCoord2;
 in vec4 vertexColor;
 uniform mat4 mvp;
+uniform mat4 matModel;
+uniform mat4 matNormal;
 out vec3 position;
 out vec3 normal;
 out vec2 texCoord;
@@ -67,8 +69,8 @@ out vec4 color;
 flat out float layer;
 flat out int repeatUV;
 void main() {
-    position = vertexPosition;
-    normal = vertexNormal;
+    position = (matModel * vec4(vertexPosition,1.0)).xyz;
+    normal = (matNormal * vec4(vertexNormal,0.0)).xyz;
     texCoord = vertexTexCoord;
     color = vertexColor;
     layer = vertexTexCoord2.x;
@@ -404,15 +406,17 @@ bool BuildingRenderer::build(const std::vector<BuildingTriangle>& triangles,std:
     next->stats.bake_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
     state_ = std::move(next); return true;
 }
-void BuildingRenderer::draw(const Camera3D& camera,const Daylight& daylight,const SceneLighting& lighting,const GraphicsSettings& settings) {
+void BuildingRenderer::draw(const Camera3D& camera,const Daylight& daylight,const SceneLighting& lighting,const GraphicsSettings& settings,const Matrix* transform) {
     state_->stats.color_draws = 0;
     if (!state_->textures) return;
     lighting.apply(state_->textures->shader,camera,daylight,settings);
     rlDrawRenderBatchActive();
     int bound = -1;
-    for (const auto& chunk : state_->chunks) if (nearby(chunk.center,chunk.radius,camera.position,settings.view_distance)) {
+    for (const auto& chunk : state_->chunks) if (nearby(transform ? Vector3Transform(chunk.center,*transform) : chunk.center,chunk.radius,camera.position,settings.view_distance)) {
         if (bound!=chunk.page) { state_->textures->bind(chunk.page); bound = chunk.page; }
-        DrawModel(chunk.model,{0,0,0},1,WHITE); ++state_->stats.color_draws;
+        auto model=chunk.model;
+        if(transform)model.transform=*transform;
+        DrawModel(model,{0,0,0},1,WHITE); ++state_->stats.color_draws;
     }
     state_->textures->unbind();
 }

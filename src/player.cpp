@@ -49,7 +49,7 @@ void Player::reset() {
                 const Vec3 sample = point + Vec3(wheel.mount.GetX(), 0, wheel.mount.GetZ());
                 GroundHit ground;
                 if (!world_.cast_ground(sample + Vec3(0, 2, 0), -Vec3::sAxisY(), 4, ground)
-                    || ground.normal.GetY() < .85f || ground.point.GetY() <= Environment::water_level + .1f
+                    || ground.normal.GetY() < .85f || ground.point.GetY() < Environment::water_level - .001f
                     || std::abs(ground.point.GetY() - (point.GetY() - car_->ride_height())) > .4f) return false;
             }
             spawn = point; return true;
@@ -115,10 +115,10 @@ void Player::respawn_near(Vec3 origin) {
     const auto try_ground = [&](Vec3 point) {
         if (std::abs(point.GetX()) > Environment::extent - 40 || std::abs(point.GetZ()) > Environment::extent - 40) return false;
         point.SetY(environment_.surface_height(point));
-        if (point.GetY() <= Environment::water_level + .1f) return false;
+        if (point.GetY() < Environment::water_level - .001f) return false;
         GroundHit ground;
         if (!world_.cast_ground(point + Vec3(0, 3, 0), Vec3(0, -1, 0), 6, ground)
-            || ground.normal.GetY() < .65f || ground.point.GetY() <= Environment::water_level + .1f) return false;
+            || ground.normal.GetY() < .65f || ground.point.GetY() < Environment::water_level - .001f) return false;
         const Vec3 feet = ground.point + Vec3(0, .08f, 0);
         if (!character_.can_stand_at(feet)) return false;
         respawn_on_foot(feet, character_.yaw());
@@ -257,7 +257,7 @@ Interaction Player::interact() {
         } else if (!bailout) {
             GroundHit hit;
             if (!world_.cast_ground(candidate + Vec3(0, 3, 0), Vec3(0, -1, 0), flying_ ? plane_->parking_height() + 4 : 7, hit)
-                || hit.normal.GetY() < 0.65f || hit.point.GetY() < Environment::water_level + 0.1f) continue;
+                || hit.normal.GetY() < 0.65f || hit.point.GetY() < Environment::water_level - .001f) continue;
             feet = hit.point + Vec3(0, 0.08f, 0);
         }
         if (!character_.can_stand_at(feet)) continue;

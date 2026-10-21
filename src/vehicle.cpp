@@ -190,10 +190,10 @@ PhysicsWorld::PhysicsWorld(const Environment& environment) {
     impl_->add_body(ground);
     for (std::size_t i = 0; i<environment.buildings().size(); ++i) {
         const auto& building = environment.buildings()[i];
-        if (environment.city() && environment.city()->buildings[i].mesh) {
+        if (environment.city() && (environment.city()->freeform || environment.city()->buildings[i].mesh)) {
             const auto& custom = environment.city()->buildings[i];
             JPH::TriangleList faces;
-            for (const auto& t : custom.triangles(environment.city()->tile_height(custom.cell))) {
+            for (const auto& t : custom.triangles(environment.city()->freeform ? City::level : environment.city()->tile_height(custom.cell))) {
                 if (t.decal) continue;
                 const auto point = [](Vec3 p){return JPH::Float3(p.GetX(),p.GetY(),p.GetZ());};
                 faces.emplace_back(point(t.points[0]),point(t.points[1]),point(t.points[2]));

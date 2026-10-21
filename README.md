@@ -1,6 +1,6 @@
 # Ambaretto
 
-A C++ city builder and sandbox game. Create islands, roads, buildings, characters, and vehicles, then explore on foot, by car, or by aircraft. Built with [raylib](https://www.raylib.com/) and [Jolt Physics](https://github.com/jrouwe/JoltPhysics).
+A C++ city builder and sandbox game. Draw islands and water with Bezier pens, build curved roads, place buildings freely, create characters and vehicles, then explore on foot, by car, or by aircraft. Built with [raylib](https://www.raylib.com/) and [Jolt Physics](https://github.com/jrouwe/JoltPhysics).
 
 See the [full guide](docs/GUIDE.md) for editor instructions, controls, save formats, architecture, and tests.
 

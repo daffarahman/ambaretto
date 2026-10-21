@@ -945,7 +945,20 @@ Environment::Environment() {
 }
 float Environment::terrain_height(float x, float z) const {
     if (city_) {
-        if (city_->land(City::cell(x,z))) return city_->height(x,z);
+        if (city_->freeform) {
+            if (!std::isfinite(x) || !std::isfinite(z) || std::abs(x)>=city_mesh_extent || std::abs(z)>=city_mesh_extent) return -8;
+            const int ix=int(std::floor((x+city_mesh_extent)/city_mesh_spacing)),iz=int(std::floor((z+city_mesh_extent)/city_mesh_spacing));
+            const auto found=city_surface_cells_.find(iz*city_mesh_width+ix);
+            if(found!=city_surface_cells_.end()) for(int index:found->second) {
+                const auto& t=triangles_[index];const Vec3 a=vertices_[t.a],b=vertices_[t.b],c=vertices_[t.c],p(x,0,z);
+                const float denominator=(b-a).Cross(c-a).GetY();
+                if(std::abs(denominator)<.000001f)continue;
+                const float u=(p-a).Cross(c-a).GetY()/denominator,v=(b-a).Cross(p-a).GetY()/denominator;
+                if(u>=-.0001f && v>=-.0001f && u+v<=1.0001f)return a.GetY()+u*(b.GetY()-a.GetY())+v*(c.GetY()-a.GetY());
+            }
+            return -8;
+        }
+        if (!city_->freeform && city_->land(City::cell(x,z))) return city_->height(x,z);
         if (city_heights_.empty() || std::abs(x)>=city_mesh_extent || std::abs(z)>=city_mesh_extent) return -8;
         const float gx = (x+city_mesh_extent)/city_mesh_spacing, gz = (z+city_mesh_extent)/city_mesh_spacing;
         const int ix = std::min(int(gx),city_mesh_width-2), iz = std::min(int(gz),city_mesh_width-2);
@@ -967,6 +980,7 @@ float Environment::terrain_height(float x, float z) const {
 }
 float Environment::height(float x, float z) const {
     if (city_) {
+        if (city_->freeform) return city_->road_at(Vec3(x,City::level,z),city_->road_style.sidewalks ? 1.3f : 0) ? City::level : terrain_height(x,z);
         const auto cell = City::cell(x,z);
         if (city_->tile(cell)!=CityTile::Bridge) return terrain_height(x,z);
         const int owner = city_diagonal_bridge_owner_[City::index(cell)];

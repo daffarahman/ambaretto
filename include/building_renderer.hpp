@@ -21,7 +21,7 @@ public:
     BuildingRenderer& operator=(const BuildingRenderer&) = delete;
     bool build(const std::vector<BuildingTriangle>& triangles, std::string& error,
                bool spatial_chunks = true, const std::vector<std::string>& thumbnail_textures = {});
-    void draw(const Camera3D& camera, const Daylight& daylight, const SceneLighting& lighting, const GraphicsSettings& settings);
+    void draw(const Camera3D& camera, const Daylight& daylight, const SceneLighting& lighting, const GraphicsSettings& settings, const Matrix* transform = nullptr);
     void draw_shadow(Vector3 focus, float distance);
     bool thumbnail(const std::string& filename, Rectangle destination);
     const BuildingRenderStats& stats() const;

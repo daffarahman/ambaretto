@@ -45,8 +45,7 @@ int main(int argc, char** argv) {
             require(editor.update(state,accept)==expected,"Editor category dispatched the wrong action");
         };
         dispatch(1,3,MenuCommand::SelectTool); dispatch(1,4,MenuCommand::BulldozeTool);
-        const MenuCommand tile_actions[] = {MenuCommand::LandTool,MenuCommand::RoadBend,MenuCommand::RoadDiagonal,
-            MenuCommand::GroundTool,MenuCommand::RaiseGround,MenuCommand::LowerGround};
+        const MenuCommand tile_actions[] = {MenuCommand::LandTool,MenuCommand::RoadTool,MenuCommand::GroundTool,MenuCommand::WaterTool};
         for (int i = 0; i<int(std::size(tile_actions)); ++i) dispatch(2,i,tile_actions[i]);
         dispatch(3,0,MenuCommand::BuildingTool); dispatch(3,1,MenuCommand::BuildingCreator);
         dispatch(3,4,MenuCommand::SavedBuildings);

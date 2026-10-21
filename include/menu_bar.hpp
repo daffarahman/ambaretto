@@ -7,10 +7,10 @@ constexpr int menu_height = 32;
 enum class MenuCommand {
     None, Resume, Pause, Quit, Cities, Recover, CarDefaults, Map, Tuning, Graphics, AimMode, Controllers, Controls, About,
     SaveCity, StartTime, PlayCity, Undo, Redo, DeleteSelection,
-    SelectTool, LandTool, RoadTool, BuildingTool, SpawnTool, VehicleTool, BulldozeTool, TreesTool, GroundTool, ElevationTool,
+    SelectTool, LandTool, RoadTool, BuildingTool, SpawnTool, VehicleTool, BulldozeTool, TreesTool, GroundTool, WaterTool,
     TopView, Grid, RotateLeft, RotateRight, ZoomIn, ZoomOut, NewCity, EditCity, RenameCity, DeleteCity,
-    BuildingCreator, EditBuilding, RoadBend, RoadDiagonal,
-    RaiseGround, LowerGround, PlaceCar, PlaceTrainer, PlaceF18, PlaceBoeing, RotateObject,
+    BuildingCreator, EditBuilding,
+    PlaceCar, PlaceTrainer, PlaceF18, PlaceBoeing, RotateObject,
     TreesSparse, TreesMedium, TreesDense, BrushSmaller, BrushLarger,
     NewBuilding, SaveBuilding, SavedBuildings, UseBuilding, CloseCreator, RotateBuilding,
     CarEditor, EditCar, NewCar, SaveCar, UseCar,
@@ -20,8 +20,8 @@ enum class MenuCommand {
 };
 enum class MenuMode { Game, Editor, Cities, Creator, CarCreator, CharacterCreator, Main, PlayEditor };
 struct MenuState {
-    bool undo = false, redo = false, play = true, selection = false, building_selection = false, top = false, grid = true, diagonal = false;
-    int tool = -1, vehicle = 0, density = 2, elevation = 1;
+    bool undo = false, redo = false, play = true, selection = false, building_selection = false, top = false, grid = true;
+    int tool = -1, vehicle = 0, density = 2;
     bool car_selection = false;
     bool choose_character = true;
     bool race = true;

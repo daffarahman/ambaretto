@@ -2,6 +2,7 @@
 #include "vehicle.hpp"
 #include "building_mesh.hpp"
 #include "character_design.hpp"
+#include "city_path.hpp"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -29,6 +30,8 @@ struct CityBuilding {
     CityCell cell; int size = 1, height = 12;
     std::optional<BuildingMesh> mesh{};
     int rotation = 0;
+    std::optional<Vec3> position;
+    float yaw = 0; // Degrees, continuous in the freeform editor.
     CityCell footprint() const { if (!mesh) return {size,size}; const auto tiles = mesh->footprint(); return rotation%2 ? CityCell{tiles[1],tiles[0]} : CityCell{tiles[0],tiles[1]}; }
     BuildingMesh shape() const { BuildingMesh result = mesh.value_or(BuildingMesh{}); if (!mesh) result.size = Vec3(size*11.2f,float(height),size*11.2f); return result; }
     Vec3 base(float ground) const;
@@ -91,7 +94,7 @@ struct RaceMap {
 struct City {
     static constexpr int width = 128;
     static constexpr int corner_width = width + 1;
-    static constexpr float block = 11.2f, level = .8f, half_block = block / 2, extent = width * block / 2;
+    static constexpr float block = 11.2f, level = 0, half_block = block / 2, extent = width * block / 2;
     static constexpr float elevation_step = 2.f;
     static constexpr int max_elevation = 8;
     std::string id, name = "New city";
@@ -105,6 +108,29 @@ struct City {
     std::vector<CityVehicle> vehicles;
     std::vector<Tree> trees;
     std::vector<RaceMap> races;
+    bool freeform = false;
+    std::vector<CityArea> areas;
+    std::vector<PathRoad> paths;
+    std::vector<PathRoadSegment> road_graph;
+    std::vector<std::array<Vec3,2>> shore_edges;
+    std::map<int,std::vector<int>> shore_bins;
+    void make_freeform(bool smooth_coast = false);
+    void rebuild_paths();
+    bool land_at(Vec3 p) const;
+    bool road_at(Vec3 p, float margin = 0) const;
+    std::optional<Vec3> snap_road_point(Vec3 point, float radius, int exclude = -1) const;
+    std::vector<std::vector<Vec3>> road_visible_parts(std::vector<Vec3> polygon, int exclude) const;
+    int building_at(Vec3 p) const;
+    float shore_distance(Vec3 p) const;
+    float terrain_height(float x, float z) const;
+    bool add_area(CityArea area, std::string& error, int replace = -1);
+    bool add_path_road(PathRoad road, std::string& error, int replace = -1);
+    bool place_building(CityBuilding building, std::string& error, int replace = -1);
+    bool validate_paths(std::string& error) const;
+    std::vector<PathRoadSegment> path_road_segments() const;
+    std::vector<std::vector<Vec3>> path_traffic_routes(float curb_inset) const;
+    bool write_paths(std::ostream& file) const;
+    static bool read_paths(std::istream& file, City& city, std::string& error);
     int start_minutes = 12 * 60;
     int pedestrian_density = 100;
     RoadStyle road_style;
@@ -117,7 +143,12 @@ struct City {
     static int corner_index(CityCell p) { return p.z * corner_width + p.x; }
     static CityCell cell(float x, float z);
     static Vec3 center(CityCell p, float y = level);
-    CityTile tile(CityCell p) const { return contains(p) ? tiles[index(p)] : CityTile::Water; }
+    CityTile tile(CityCell p) const {
+        if (!contains(p)) return CityTile::Water;
+        if (!freeform) return tiles[index(p)];
+        const Vec3 p3=center(p);
+        return road_at(p3) ? (land_at(p3) ? CityTile::Road : CityTile::Bridge) : land_at(p3) ? CityTile::Land : CityTile::Water;
+    }
     int building_at(CityCell p) const;
     int vehicle_at(Vec3 p) const;
     bool road(CityCell p) const { return tile(p) == CityTile::Road || tile(p) == CityTile::Bridge; }

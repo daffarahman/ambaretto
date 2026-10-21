@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <string_view>
 
 namespace ambaretto {
@@ -105,6 +106,17 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment,const std::
     if (environment.city()) {
         const City& city = *environment.city();
         routes_ = city.traffic_routes(city.road_style.sidewalks ? 3.f : 2.38f);
+        if (city.freeform) {
+            struct Junction {Vec3 point;float width=0;int links=0;};
+            std::map<std::pair<int,int>,Junction> junctions;
+            for(const auto& segment:city.road_graph)for(auto p:{segment.a,segment.b}) {
+                auto& junction=junctions[{int(std::round(p.GetX()*1000)),int(std::round(p.GetZ()*1000))}];
+                junction.point=p;junction.width=std::max(junction.width,segment.width);++junction.links;
+            }
+            for(const auto& entry:junctions)if(entry.second.links>=3) {
+                const auto& j=entry.second;intersections_.push_back({j.point,Vec3(j.width/2,0,j.width/2)});
+            }
+        }
         for (const auto& node : city.road_network()) if (node.edges.size()>=3) intersections_.push_back({node.center(),node.half_size()});
         // ponytail: at most 200 NPCs, with the existing 48-car physics pool; spatial route indexing can raise this later.
         int remaining = 200;
