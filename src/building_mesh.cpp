@@ -393,6 +393,7 @@ std::vector<BuildingTriangle> BuildingMesh::triangles(Vec3 base) const {
 }
 bool BuildingMesh::validate(std::string& error) const {
     error.clear();
+    if (type!=ObjectType::Building && type!=ObjectType::Object) return fail(error,"Choose Object or Building as the design type.");
     if (name.empty() || name.size()>48 || name.find_first_not_of(' ')==std::string::npos
         || name.back()==' ' || name.back()=='.' || name.find_first_of("<>:\"/\\|?*")!=std::string::npos
         || !std::all_of(name.begin(),name.end(),[](unsigned char c){return c>=32 && c<127;}))
@@ -843,9 +844,11 @@ BuildingMesh BuildingMesh::baked() const {
     }
     result.vertices = std::move(compact); return result;
 }
-void BuildingMesh::write(std::ostream& file) const {
+void BuildingMesh::write(std::ostream& file,int version) const {
     file << std::setprecision(std::numeric_limits<float>::max_digits10) << std::quoted(name) << ' ' << std::quoted(texture)
-        << ' ' << size.GetX() << ' ' << size.GetY() << ' ' << size.GetZ() << '\n';
+        << ' ' << size.GetX() << ' ' << size.GetY() << ' ' << size.GetZ();
+    if (version>=4) file << ' ' << int(type);
+    file << '\n';
     file << vertices.size() << ' ' << faces.size() << '\n';
     for (auto p : vertices) file << p.GetX() << ' ' << p.GetY() << ' ' << p.GetZ() << '\n';
     for (const auto& face : faces) {
@@ -865,6 +868,11 @@ void BuildingMesh::write(std::ostream& file) const {
 bool BuildingMesh::read(std::istream& file,BuildingMesh& mesh,std::string& error,int version) {
     BuildingMesh next; float x,y,z; int count, face_count;
     if (!(file>>std::quoted(next.name)>>std::quoted(next.texture)>>x>>y>>z)) return fail(error,"Invalid building header.");
+    if (version>=4) {
+        int type;
+        if (!(file>>type) || type<0 || type>1) return fail(error,"Invalid object type.");
+        next.type=ObjectType(type);
+    }
     next.size = Vec3(x,y,z);
     if (version>=2) {
         if (!(file>>count>>face_count) || count<3 || count>max_vertices || face_count<1 || face_count>max_faces)
@@ -924,7 +932,7 @@ bool BuildingMesh::save(const std::filesystem::path& directory,std::string& erro
     const auto path = directory/("building-"+name+".building"); auto temporary = path; temporary += ".tmp";
     std::ofstream file(temporary,std::ios::trunc);
     if (!file) return fail(error,"Cannot write building; previous save retained.");
-    file << "AMBARETTO_BUILDING 3\n"; write(file); file.close();
+    file << "AMBARETTO_BUILDING 4\n"; write(file); file.close();
     if (!file) return fail(error,"Cannot finish saving building; previous save retained.");
 #ifdef _WIN32
     const bool replaced = MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;
@@ -938,7 +946,7 @@ bool BuildingMesh::load(const std::filesystem::path& path,BuildingMesh& mesh,std
     std::error_code ec;
     if (std::filesystem::file_size(path,ec)>8*1024*1024 || ec) return fail(error,"Building save is missing or too large.");
     std::ifstream file(path); std::string magic, extra; int version; BuildingMesh next;
-    if (!(file>>magic>>version) || magic!="AMBARETTO_BUILDING" || version<1 || version>3) return fail(error,"Unsupported building save.");
+    if (!(file>>magic>>version) || magic!="AMBARETTO_BUILDING" || version<1 || version>4) return fail(error,"Unsupported object save.");
     if (!read(file,next,error,version)) return false;
     if (file>>extra) return fail(error,"Unexpected building data.");
     mesh = std::move(next); return true;

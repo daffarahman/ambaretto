@@ -10,6 +10,7 @@ namespace ambaretto {
 using BuildingUV = std::array<float,2>;
 enum class BuildingShape { Box, Wedge, Gable, Hip };
 enum class BuildingProjection { Manual, Planar, Box };
+enum class ObjectType { Building, Object };
 struct BuildingFace {
     std::vector<int> vertices;
     std::vector<BuildingUV> uv{{0,1},{0,0},{1,0},{1,1}};
@@ -42,6 +43,7 @@ struct BuildingTriangle {
 };
 struct BuildingMesh {
     std::string name = "New building", texture;
+    ObjectType type = ObjectType::Building;
     Vec3 size = Vec3(11.2f,12,11.2f);
     // Normalized coordinates retain the edited shape when resized.
     std::vector<Vec3> vertices{
@@ -88,8 +90,8 @@ struct BuildingMesh {
     int duplicate_decal(int decal,BuildingUV offset,std::string& error);
     bool repeat_decal(int decal,int count,float spacing_m,bool vertical,std::string& error);
     bool validate(std::string& error) const;
-    void write(std::ostream& stream) const;
-    static bool read(std::istream& stream, BuildingMesh& mesh, std::string& error,int version = 3);
+    void write(std::ostream& stream, int version = 4) const;
+    static bool read(std::istream& stream, BuildingMesh& mesh, std::string& error,int version = 4);
     bool save(const std::filesystem::path& directory, std::string& error) const;
     static bool load(const std::filesystem::path& path, BuildingMesh& mesh, std::string& error);
 };

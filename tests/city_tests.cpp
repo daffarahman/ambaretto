@@ -499,6 +499,55 @@ void free_placement(const std::filesystem::path& directory) {
     require(city.set_spawn(CityCell{67,67},error) && city.save(directory,error) && bytes().rfind("AMBARETTO_CITY 15\n",0)==0,
         "Centered spawns changed the existing save format");
 }
+void objects_and_single_trees(const std::filesystem::path& directory) {
+    std::string error;BuildingMesh object;object.name="Brush object";object.type=ObjectType::Object;object.size=Vec3(4,3,4);
+    BuildingMesh loaded_mesh;
+    require(object.save(directory,error) && BuildingMesh::load(directory/"building-Brush object.building",loaded_mesh,error)
+        && loaded_mesh.type==ObjectType::Object,"Saved object lost its type");
+    auto building=object;building.name="Brush building";building.type=ObjectType::Building;
+    City city=City::create("Typed objects");city.id="0011223344556677";
+    require(city.add_land({60,60},{75,75},error) && city.add_building({{61,61},1,12,object},error)
+        && city.add_building({{63,61},1,12,building},error),"Object fixture failed");
+    City loaded;
+    require(city.save(directory,error) && City::load(directory/(city.id+".city"),loaded,error) && !loaded.freeform
+        && loaded.buildings[0].mesh->type==ObjectType::Object && loaded.buildings[1].mesh->type==ObjectType::Building,"Grid city lost design types");
+    city.make_freeform();
+    PathRoad road;road.path.nodes={{Vec3(-35,0,40),Vec3::sZero()},{Vec3(120,0,40),Vec3::sZero()}};
+    require(city.add_path_road(road,error),"Object brush road fixture failed");
+    const Vec3 exact(-20.37f,0,80.53f);
+    require(city.place_tree(exact,error) && city.trees.size()==1 && city.trees[0].base==exact,"Single tree did not keep its exact position");
+    require(!city.place_tree(exact,error) && !city.place_tree(exact+Vec3(.1f,0,.1f),error) && city.trees.size()==1,"Single tree allowed duplicates");
+    require(!city.place_tree(Vec3(0,0,40),error) && !city.place_tree(Vec3(400,0,400),error)
+        && !city.place_tree(Vec3(std::numeric_limits<float>::quiet_NaN(),0,0),error),"Single tree accepted a road, water or NaN");
+    require(city.brush_trees(exact,24,3,false,error)>0,"Brushing around a single tree failed");
+    for (const auto& t : city.trees) if (t.base!=exact) require((t.base-exact).Length()>=2.5f,"Brush planted too close to a single tree");
+    const Vec3 point(50,0,70);
+    const int planted=city.brush_objects(object,point,24,3,false,error);
+    require(planted>3 && city.validate(error),"Object brush did not scatter valid objects");
+    const auto count=city.buildings.size();
+    require(city.brush_objects(object,point,24,3,false,error)==0 && city.buildings.size()==count,"Overlapping object brush duplicated objects");
+    for (std::size_t i=2;i<city.buildings.size();++i) {
+        const auto& b=city.buildings[i];
+        require(b.mesh->type==ObjectType::Object && b.position && b.yaw>=0 && b.yaw<360
+            && !city.road_at(*b.position,std::hypot(4.f,4.f)/2+1.3f),"Object brush lost its type or crossed a road");
+        for (std::size_t j=2;j<i;++j) require((*b.position-*city.buildings[j].position).Length()>=std::hypot(4.f,4.f)+1,"Object brush overlapped footprints");
+    }
+    require(city.save(directory,error) && City::load(directory/(city.id+".city"),loaded,error) && loaded.freeform
+        && loaded.buildings.size()==count && loaded.buildings.back().mesh->type==ObjectType::Object
+        && loaded.buildings[1].mesh->type==ObjectType::Building && loaded.trees[0].base==exact,"Freeform city lost types or exact tree placement");
+    require(city.brush_objects(building,point,24,3,false,error)==-1
+        && city.brush_objects(object,point,0,3,false,error)==-1 && city.buildings.size()==count,"Invalid object brush changed the map");
+    require(city.brush_objects(object,point,24,3,true,error)==planted && city.buildings.size()==2
+        && city.buildings[1].mesh->type==ObjectType::Building,"Clearing an object brush removed a building or distant object");
+    auto changed=object;changed.type=ObjectType::Building;
+    require(city.update_building_design(changed,error)==1 && city.buildings[0].mesh->type==ObjectType::Building,"Saved design refresh lost type edits");
+    City wide=City::create("Large brush objects");wide.id="ffeeddccbbaa9988";require(wide.add_land({20,20},{107,107},error),"Large object land failed");wide.make_freeform();
+    object.size=Vec3(64,12,64);
+    require(wide.brush_objects(object,Vec3::sZero(),96,3,false,error)>0 && wide.validate(error),"Large objects were rejected by the shore distance cache");
+    wide.buildings.clear();object.size=Vec3(4,3,4);
+    require(object.set_footprint(16,16,error,true) && wide.brush_objects(object,Vec3::sZero(),24,3,false,error)>3,
+        "Object brush used the editing room instead of the physical mesh footprint");
+}
 void trees_and_time(const std::filesystem::path& directory) {
     City city = City::create("Forest"); std::string error;
     require(city.add_land({55,55},{72,72},error),"forest island failed");
@@ -1576,7 +1625,7 @@ int main(int argc,char** argv) {
             std::cout << (std::filesystem::path(argv[2])/(city.id+".city")).string() << '\n'; return 0;
         }
         const auto directory = std::filesystem::temp_directory_path()/("ambaretto-city-test-"+City::create("test").id);
-        data_and_saves(directory); building_meshes(directory); building_mesh_editing(directory); building_design_updates(directory); building_rotation(directory); generated_terrain(directory); trees_and_time(directory); ground_paint(directory); custom_ground_textures(directory); beach_ground_textures(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay(); car_designs(directory);
+        data_and_saves(directory); building_meshes(directory); building_mesh_editing(directory); building_design_updates(directory); building_rotation(directory); generated_terrain(directory); objects_and_single_trees(directory); trees_and_time(directory); ground_paint(directory); custom_ground_textures(directory); beach_ground_textures(directory); terraced_ground(directory); sloping_shore(); rounded_roads(); single_road_turns(); road_ports_and_diagonals(); diagonal_road_drags(directory); diagonal_bridge_deck(); islands_and_bridges(directory); dead_ends(); gameplay(); car_designs(directory);
         through_road_routes(); saved_copies(directory); pedestrian_density_saves(directory); free_placement(directory);
         // Remove only files in this run's unique test directory; no recursive deletion.
         for (const auto& entry : std::filesystem::directory_iterator(directory)) std::filesystem::remove(entry.path());

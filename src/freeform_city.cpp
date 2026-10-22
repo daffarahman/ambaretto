@@ -390,13 +390,13 @@ void City::make_freeform(bool smooth_coast) {
     for(auto& t : trees) t.base.SetY(height(t.base.GetX(),t.base.GetZ()));
     clear_trees();
 }
-bool City::write_paths(std::ostream& file) const {
+bool City::write_paths(std::ostream& file,int mesh_version) const {
     file<<areas.size()<<'\n';
     for(const auto& a : areas) {file<<int(a.kind)<<' '<<std::quoted(a.texture)<<'\n';write_path(file,a.path);}
     file<<paths.size()<<'\n';
     for(const auto& r : paths) {file<<r.width<<'\n';write_path(file,r.path);}
     file<<buildings.size()<<'\n';
-    for(const auto& b : buildings) {file<<b.base(level).GetX()<<' '<<b.base(level).GetZ()<<' '<<b.yaw<<' '<<b.rotation<<' '<<b.size<<' '<<b.height<<' '<<bool(b.mesh)<<'\n';if(b.mesh)b.mesh->write(file);}
+    for(const auto& b : buildings) {file<<b.base(level).GetX()<<' '<<b.base(level).GetZ()<<' '<<b.yaw<<' '<<b.rotation<<' '<<b.size<<' '<<b.height<<' '<<bool(b.mesh)<<'\n';if(b.mesh)b.mesh->write(file,mesh_version);}
     file<<vehicles.size()<<'\n';
     for(const auto& v : vehicles) {file<<int(v.kind)<<' '<<v.position.GetX()<<' '<<v.position.GetZ()<<' '<<v.rotation<<' '<<bool(v.car)<<'\n';if(v.car)v.car->write(file);}
     file<<bool(spawn)<<' '<<(spawn ? spawn->GetX() : 0)<<' '<<(spawn ? spawn->GetZ() : 0)<<'\n';
@@ -406,7 +406,7 @@ bool City::write_paths(std::ostream& file) const {
     file<<races.size()<<'\n';for(const auto& r : races){file<<std::quoted(r.name)<<' '<<r.laps<<' '<<r.checkpoints.size()<<'\n';for(auto p:r.checkpoints)file<<p.GetX()<<' '<<p.GetZ()<<'\n';}
     return bool(file);
 }
-bool City::read_paths(std::istream& file,City& city,std::string& error) {
+bool City::read_paths(std::istream& file,City& city,std::string& error,int mesh_version) {
     city.freeform=true;
     int count;
     std::size_t total_nodes=0,total_samples=0;
@@ -438,7 +438,7 @@ bool City::read_paths(std::istream& file,City& city,std::string& error) {
         CityBuilding building; float x,z; int mesh;
         if(!(file>>x>>z>>building.yaw>>building.rotation>>building.size>>building.height>>mesh) || mesh<0 || mesh>1 || !position_valid(x,z))return fail(error,"Invalid building data.");
         building.position=Vec3(x,city.terrain_height(x,z),z); building.cell=cell(x,z);
-        if(mesh) {building.mesh.emplace(); if(!BuildingMesh::read(file,*building.mesh,error))return false;}
+        if(mesh) {building.mesh.emplace(); if(!BuildingMesh::read(file,*building.mesh,error,mesh_version))return false;}
         city.buildings.push_back(std::move(building));
     }
     if(!count_to(512))return fail(error,"Invalid vehicle count.");

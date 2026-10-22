@@ -129,8 +129,8 @@ struct City {
     bool validate_paths(std::string& error) const;
     std::vector<PathRoadSegment> path_road_segments() const;
     std::vector<std::vector<Vec3>> path_traffic_routes(float curb_inset) const;
-    bool write_paths(std::ostream& file) const;
-    static bool read_paths(std::istream& file, City& city, std::string& error);
+    bool write_paths(std::ostream& file, int mesh_version = 3) const;
+    static bool read_paths(std::istream& file, City& city, std::string& error, int mesh_version = 3);
     int start_minutes = 12 * 60;
     int pedestrian_density = 100;
     RoadStyle road_style;
@@ -187,7 +187,9 @@ struct City {
     bool change_elevation(CityCell a, CityCell b, int direction, std::string& error);
     bool tree_clear(Vec3 p) const;
     void clear_trees();
+    bool place_tree(Vec3 point, std::string& error);
     int brush_trees(Vec3 point, float radius, int density, bool remove, std::string& error);
+    int brush_objects(const BuildingMesh& mesh, Vec3 point, float radius, int density, bool remove, std::string& error);
     bool erase(CityCell p, std::string& error);
     bool erase(Vec3 p, std::string& error);
     bool validate(std::string& error) const;

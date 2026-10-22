@@ -582,6 +582,20 @@ bool City::tree_clear(Vec3 p) const {
 void City::clear_trees() {
     trees.erase(std::remove_if(trees.begin(),trees.end(),[&](const Tree& t){return !tree_clear(t.base);}),trees.end());
 }
+bool City::place_tree(Vec3 point,std::string& error) {
+    if (!tree_clear(point)) return fail(error,"Place trees on land clear of roads and objects.");
+    if (trees.size()>=8192) return fail(error,"Tree limit reached (8192).");
+    const auto plot=[](Vec3 p) {return int(std::floor((p.GetZ()+1024)/4))*512+int(std::floor((p.GetX()+1024)/4));};
+    for (const auto& tree : trees) {
+        const Vec3 d=tree.base-point;
+        if (plot(tree.base)==plot(point) || d.GetX()*d.GetX()+d.GetZ()*d.GetZ()<6.25f)
+            return fail(error,"Leave at least 2.5 m between trees and choose a free four-metre plot.");
+    }
+    const auto noise=hash32(std::uint32_t(plot(point)));
+    point.SetY(height(point.GetX(),point.GetZ()));
+    trees.push_back({point,4+float((noise>>24)&255)/255*4,float(noise&255)/255*6.2831853f});
+    error.clear(); return true;
+}
 int City::brush_trees(Vec3 point, float radius, int density, bool remove, std::string& error) {
     error.clear();
     if (!std::isfinite(point.GetX()) || !std::isfinite(point.GetZ()) || std::abs(point.GetX()) > extent || std::abs(point.GetZ()) > extent
@@ -596,8 +610,8 @@ int City::brush_trees(Vec3 point, float radius, int density, bool remove, std::s
     }
     // Four-meter plots keep real tree spacing independent of block size.
     const auto plot = [](Vec3 p) { return int(std::floor((p.GetZ()+1024)/4))*512+int(std::floor((p.GetX()+1024)/4)); };
-    std::set<int> occupied;
-    for (auto t : trees) occupied.insert(plot(t.base));
+    std::map<int,Vec3> occupied;
+    for (auto t : trees) occupied.emplace(plot(t.base),t.base);
     std::uint32_t seed = 0;
     for (unsigned char c : id) seed = seed*31+c;
     const int threshold[] = {0,25,55,90};
@@ -609,11 +623,60 @@ int City::brush_trees(Vec3 point, float radius, int density, bool remove, std::s
         const auto random = [&](int shift) { return float((noise>>shift)&255)/255; };
         Vec3 p(x*4-1022+(random(8)-.5f)*1.5f,level,z*4-1022+(random(16)-.5f)*1.5f);
         if (!inside(p) || !tree_clear(p)) continue;
+        bool crowded=false;
+        for (int dz=-1;dz<=1;++dz) for (int dx=-1;dx<=1;++dx) {
+            const auto neighbor=occupied.find((z+dz)*512+x+dx);
+            if (neighbor!=occupied.end()) {const Vec3 d=neighbor->second-p;crowded|=d.GetX()*d.GetX()+d.GetZ()*d.GetZ()<6.25f;}
+        }
+        if (crowded) continue;
         p.SetY(height(p.GetX(),p.GetZ()));
         if (trees.size() >= 8192) { error = "Tree limit reached (8192)."; return int(trees.size())-before; }
         trees.push_back({p,4+random(24)*4,random(0)*6.2831853f});
+        occupied.emplace(key,p);
     }
     return int(trees.size())-before;
+}
+int City::brush_objects(const BuildingMesh& mesh,Vec3 point,float radius,int density,bool remove,std::string& error) {
+    error.clear();
+    if (!freeform || mesh.type!=ObjectType::Object) {error="Choose an Object design to brush onto a freeform map.";return -1;}
+    if (!mesh.validate(error)) return -1;
+    if (!std::isfinite(point.GetX()) || !std::isfinite(point.GetZ()) || std::abs(point.GetX())>extent || std::abs(point.GetZ())>extent
+        || !std::isfinite(radius) || radius<4 || radius>96 || density<1 || density>3) {error="Keep the object brush inside the map.";return -1;}
+    const auto inside=[&](Vec3 p) {const Vec3 d=p-point;return d.GetX()*d.GetX()+d.GetZ()*d.GetZ()<=radius*radius;};
+    const int before=int(buildings.size());
+    if (remove) {
+        buildings.erase(std::remove_if(buildings.begin(),buildings.end(),[&](const auto& b){
+            return b.mesh && b.mesh->type==ObjectType::Object && b.mesh->name==mesh.name && inside(b.base(level));
+        }),buildings.end());
+        return before-int(buildings.size());
+    }
+    const auto footprint_radius=[](const BuildingMesh& design) {
+        float radius=0;
+        for (auto p : design.vertices) radius=std::max(radius,std::hypot(p.GetX()*design.size.GetX(),p.GetZ()*design.size.GetZ()));
+        return radius;
+    };
+    const float reach=footprint_radius(mesh),spacing=std::max(4.f,reach*2+2);
+    std::vector<std::pair<Vec3,float>> occupied;
+    for (const auto& b : buildings) occupied.push_back({b.base(level),b.mesh ? footprint_radius(*b.mesh) : b.size*block/std::sqrt(2.f)});
+    std::uint32_t seed=0;for (unsigned char c : id+mesh.name) seed=seed*31+c;
+    const int threshold[]={0,25,55,90},plots=int(std::ceil(extent*2/spacing));
+    const int x0=std::max(0,int(std::floor((point.GetX()-radius+extent)/spacing))),x1=std::min(plots-1,int(std::floor((point.GetX()+radius+extent)/spacing)));
+    const int z0=std::max(0,int(std::floor((point.GetZ()-radius+extent)/spacing))),z1=std::min(plots-1,int(std::floor((point.GetZ()+radius+extent)/spacing)));
+    for (int z=z0;z<=z1;++z) for (int x=x0;x<=x1;++x) {
+        const auto noise=hash32(seed+std::uint32_t(z*plots+x));
+        if (int(noise%100)>=threshold[density]) continue;
+        const auto random=[&](int shift){return float((noise>>shift)&255)/255;};
+        const Vec3 p((x+.5f+(random(8)-.5f)*.25f)*spacing-extent,level,(z+.5f+(random(16)-.5f)*.25f)*spacing-extent);
+        if (!inside(p) || !land_at(p) || road_at(p,reach+(road_style.sidewalks ? 1.3f : 0))) continue;
+        const bool shore_clear=reach<=32 ? shore_distance(p)>=reach
+            : std::none_of(shore_edges.begin(),shore_edges.end(),[&](const auto& edge){return path_distance(p,edge[0],edge[1])<reach;});
+        if (!shore_clear) continue;
+        if (std::any_of(occupied.begin(),occupied.end(),[&](const auto& other){return std::hypot(p.GetX()-other.first.GetX(),p.GetZ()-other.first.GetZ())<reach+other.second+1;})) continue;
+        if (buildings.size()>=4096) {error="Object/building limit reached (4096).";break;}
+        CityBuilding b;b.mesh=mesh;b.position=p;b.yaw=random(0)*359.99f;
+        if (add_building(std::move(b),error)) occupied.push_back({p,reach});
+    }
+    return int(buildings.size())-before;
 }
 unsigned City::road_mask(CityCell p) const {
     if (!road(p)) return 0;
@@ -1140,12 +1203,14 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
     if (!file) return fail(error,"Cannot write this city. Your previous save is intact.");
     const bool free_spawn=spawn && (spawn->GetX()!=center(cell(spawn->GetX(),spawn->GetZ())).GetX()
         || spawn->GetZ()!=center(cell(spawn->GetX(),spawn->GetZ())).GetZ());
-    const int version = freeform ? 19 : !races.empty() ? 18 : road_style!=RoadStyle{} ? 17 : free_spawn ? 16 : pedestrian_density!=100 ? 15 : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh.has_value();}) ? 14
+    const bool typed_objects=std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh && b.mesh->type==ObjectType::Object;});
+    const int version = typed_objects ? 20 : freeform ? 19 : !races.empty() ? 18 : road_style!=RoadStyle{} ? 17 : free_spawn ? 16 : pedestrian_density!=100 ? 15 : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh.has_value();}) ? 14
         : player_character ? 13 : !ground_textures.empty() ? 12 : std::any_of(vehicles.begin(),vehicles.end(),[](const auto& v){return v.car.has_value();}) ? 11
         : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.rotation!=0;}) ? 9
         : 6;
     file << "AMBARETTO_CITY " << version << '\n' << id << '\n' << std::quoted(name) << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10);
-    if (freeform) write_paths(file);
+    if (version>=20) file << int(freeform) << '\n';
+    if (freeform) write_paths(file,version>=20 ? 4 : 3);
     else {
     for (auto t : tiles) file << char('0'+int(t));
     file << '\n' << buildings.size() << '\n';
@@ -1154,7 +1219,7 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
         if (version>=7) file << ' ' << int(b.mesh.has_value());
         if (version>=9) file << ' ' << b.rotation;
         file << '\n';
-        if (b.mesh) b.mesh->write(file);
+        if (b.mesh) b.mesh->write(file,version>=20 ? 4 : 3);
     }
     file << vehicles.size() << '\n';
     for (const auto& v : vehicles) {
@@ -1204,10 +1269,15 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
     std::error_code ec;
     if (std::filesystem::file_size(path,ec) > 64*1024*1024 || ec) return fail(error,"City save is missing or too large.");
     std::ifstream file(path); City read; std::string magic, terrain; int version = 0;
-    if (!(file >> magic >> version >> read.id >> std::quoted(read.name)) || magic != "AMBARETTO_CITY" || version<1 || version>19)
+    if (!(file >> magic >> version >> read.id >> std::quoted(read.name)) || magic != "AMBARETTO_CITY" || version<1 || version>20)
         return fail(error,"Invalid or unsupported city save.");
-    if (version==19) {
-        if (!read_paths(file,read,error)) return false;
+    if (version>=20) {
+        int freeform;
+        if (!(file>>freeform) || freeform<0 || freeform>1) return fail(error,"Invalid city layout type.");
+        read.freeform=freeform!=0;
+    }
+    if (version==19 || read.freeform) {
+        if (!read_paths(file,read,error,version>=20 ? 4 : 3)) return false;
         std::string extra;
         if (file>>extra) return fail(error,"Unexpected city data.");
         if (path.stem().string()!=read.id) return fail(error,"City save identifier does not match its filename.");
@@ -1228,7 +1298,7 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
             int custom;
             if (!(file>>custom) || custom<0 || custom>1) return fail(error,"Invalid building mesh flag.");
             if (version>=9 && (!(file>>b.rotation) || b.rotation<0 || b.rotation>3)) return fail(error,"Invalid building rotation.");
-            if (custom) { b.mesh.emplace(); if (!BuildingMesh::read(file,*b.mesh,error,version>=14 ? 3 : version>=8 ? 2 : 1)) return false; }
+            if (custom) { b.mesh.emplace(); if (!BuildingMesh::read(file,*b.mesh,error,version>=20 ? 4 : version>=14 ? 3 : version>=8 ? 2 : 1)) return false; }
         }
         read.buildings.push_back(std::move(b));
     }

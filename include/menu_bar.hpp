@@ -16,7 +16,9 @@ enum class MenuCommand {
     CarEditor, EditCar, NewCar, SaveCar, UseCar,
     CharacterCreator, ChoosePlayerCharacter, NewCharacter, SaveCharacter, UseCharacter, RefreshDesigns,
     Editors, SavedCars, SavedCharacters, DuplicateCity, CitySettings, EditMap, Restart, PanView, PlainBuilding, RoadEditor,
-    Races, NewRace, StartRace
+    Races, NewRace, StartRace,
+    ObjectSingle, ObjectBrush, ObjectBrushSmaller, ObjectBrushLarger, ObjectSparse, ObjectMedium, ObjectDense,
+    TreesSingle, TreesBrush
 };
 enum class MenuMode { Game, Editor, Cities, Creator, CarCreator, CharacterCreator, Main, PlayEditor };
 struct MenuState {
@@ -25,6 +27,7 @@ struct MenuState {
     bool car_selection = false;
     bool choose_character = true;
     bool race = true;
+    bool object_design = false, object_brush = false, tree_brush = true;
 };
 struct MenuInput {
     Vector2 mouse{};

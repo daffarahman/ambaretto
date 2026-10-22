@@ -50,6 +50,11 @@ int main(int argc, char** argv) {
         dispatch(3,0,MenuCommand::BuildingTool); dispatch(3,1,MenuCommand::BuildingCreator);
         dispatch(3,4,MenuCommand::SavedBuildings);
         dispatch(3,5,MenuCommand::PlainBuilding);
+        dispatch(3,6,MenuCommand::ObjectSingle);dispatch(3,7,MenuCommand::None);
+        state.object_design=true;
+        const MenuCommand object_brush_actions[]={MenuCommand::ObjectBrush,MenuCommand::ObjectBrushSmaller,MenuCommand::ObjectBrushLarger,MenuCommand::ObjectSparse,MenuCommand::ObjectMedium,MenuCommand::ObjectDense};
+        for (int i=0;i<int(std::size(object_brush_actions));++i) dispatch(3,7+i,object_brush_actions[i]);
+        state.object_design=false;
         dispatch(5,6,MenuCommand::PanView);
         const auto dispatch_object = [&](int group,int item,MenuCommand expected) {
             editor.open(4); MenuInput move; move.vertical=group; editor.update(state,move);
@@ -78,7 +83,7 @@ int main(int argc, char** argv) {
         dispatch(3,3,MenuCommand::RotateBuilding);
         state.building_selection = false; state.tool = 3; dispatch(3,3,MenuCommand::RotateBuilding);
         state.tool = 0; dispatch(3,3,MenuCommand::None);
-        const MenuCommand tree_actions[] = {MenuCommand::TreesSparse,MenuCommand::TreesMedium,MenuCommand::TreesDense,MenuCommand::BrushSmaller,MenuCommand::BrushLarger};
+        const MenuCommand tree_actions[] = {MenuCommand::TreesSparse,MenuCommand::TreesMedium,MenuCommand::TreesDense,MenuCommand::BrushSmaller,MenuCommand::BrushLarger,MenuCommand::TreesSingle,MenuCommand::TreesBrush};
         for (int i = 0; i<int(std::size(tree_actions)); ++i) dispatch_object(0,i,tree_actions[i]);
         dispatch_object(1,0,MenuCommand::SpawnTool); dispatch_object(2,0,MenuCommand::PlaceCar);
         dispatch_object(2,3,MenuCommand::PlaceCar);
@@ -87,7 +92,7 @@ int main(int argc, char** argv) {
         dispatch(4,4,MenuCommand::RotateObject);
         editor.open(4); input={}; input.horizontal=1; editor.update(state,input);
         input={}; input.vertical=-1; editor.update(state,input); input={}; input.enter=true;
-        require(editor.update(state,input)==MenuCommand::BrushLarger,"Right arrow did not open Trees or Up did not wrap its children");
+        require(editor.update(state,input)==MenuCommand::TreesBrush,"Right arrow did not open Trees or Up did not wrap its children");
         editor.open(4); input={}; input.enter=true; editor.update(state,input);
         input={}; input.escape=true; editor.update(state,input);
         require(editor.blocking(),"Escape closed Objects instead of returning from its submenu");
@@ -97,7 +102,7 @@ int main(int argc, char** argv) {
         input={}; input.vertical=4; editor.update(state,input); input={}; input.enter=true;
         require(editor.update(state,input)==MenuCommand::RotateObject,"Left arrow did not return to Objects");
         float objects_x=0;
-        for (const auto title : {"File","Edit","Tiles","Buildings"}) objects_x+=ui::measure_text(title,19)+32;
+        for (const auto title : {"File","Edit","Tiles","Object Builder"}) objects_x+=ui::measure_text(title,19)+32;
         const float submenu_x=objects_x+716<=GetScreenWidth() ? objects_x+356 : objects_x-356;
         editor.open(4); input={}; input.mouse={objects_x+50,48}; input.moved=true; editor.update(state,input);
         input.mouse={submenu_x+50,84}; input.click=true;

@@ -29,7 +29,7 @@ constexpr Color background = ui::face, border = ui::shadow;
 constexpr Color ink = ui::ink, muted = ui::disabled, accent = ui::title_blue, scene_accent = YELLOW;
 constexpr int sidebar = 108;
 enum class Tool { Select, Land, Road, Building, Spawn, Vehicle, Bulldoze, Trees, Ground, Water, Pan, Race };
-const char* tools[] = {"Select / edit", "Land pen", "Bezier road", "Building", "Player spawn", "Vehicle", "Bulldoze", "Tree brush", "Texture pen", "Water pen", "Hand / pan", "Race checkpoints"};
+const char* tools[] = {"Select / edit", "Land pen", "Bezier road", "Object / building", "Player spawn", "Vehicle", "Bulldoze", "Trees", "Texture pen", "Water pen", "Hand / pan", "Race checkpoints"};
 const char* densities[] = {"Sparse", "Medium", "Dense"};
 const char* vehicle_names[] = {"Car", "Trainer plane", "F-18", "Boeing 747"};
 Vector3 vector(Vec3 p) { return {p.GetX(),p.GetY(),p.GetZ()}; }
@@ -253,7 +253,9 @@ void cycle_saved(int& selection,int count,bool active,Rectangle view) {
 }
 template<class Design> void draw_saved_carousel(SavedPreview& preview,const std::vector<Design>& library,int selection,Rectangle view,bool active) {
     preview.draw(view);
-    const auto label=fit(selection>=0 ? library[selection].name : "No saved items yet",18,view.width-20);
+    std::string name=selection>=0 ? library[selection].name : "No saved items yet";
+    if constexpr (std::is_same_v<Design,BuildingMesh>) if (selection>=0) name+=library[selection].type==ObjectType::Object ? " / Object" : " / Building";
+    const auto label=fit(name,18,view.width-20);
     text(label,view.x+(view.width-ui::measure_text(label.c_str(),18))/2,view.y+view.height+8,18);
     button({view.x,view.y+view.height+40,140,30},"< Previous",false,library.size()>1,active,16);
     button({view.x+view.width-140,view.y+view.height+40,140,30},"Next >",false,library.size()>1,active,16);
@@ -438,7 +440,11 @@ template<class Load, class Builder> void open_design_menu(Load load, const char*
             library.push_back(std::move(*copy)); selection=int(library.size())-1; preview.invalidate();
         }
         if (refresh) {library=load(); selection=library.empty() ? -1 : 0; preview.refresh();}
-        if (create) {builder(Design{}); break;}
+        if (create) {
+            Design design;
+            if constexpr (std::is_same_v<Design,BuildingMesh>) {design.name="New object";design.type=ObjectType::Object;}
+            builder(std::move(design)); break;
+        }
         if (open) {builder(library[selection]); break;}
     }
 }
@@ -484,7 +490,7 @@ void help_dialog(bool editing, bool about) {
                 editing ? "1-9 / 0: tools   Ctrl+S: save   Ctrl+Z/Y: undo/redo" : "Insert: new city   E: edit   Enter: play",
                 editing ? "H: hand / click to center / drag   Wheel: zoom   Q/E: orbit" : "Up/Down: select city   F2: rename   Delete: delete",
                 editing ? "V: top/dimetric view   G: grid   Delete: remove selection" : "Choose File or City in the menu bar for all commands.",
-                editing ? "Hold R: rotate building / Shift: clear trees" : "Play needs a spawn and a saved Player character.",
+                editing ? "Hold R: rotate design / Shift: clear brush" : "Play needs a spawn and a saved Player character.",
                 editing ? "Pen: click/drag points, Enter fills, Esc cancels" : "Esc: close menus and dialogs / return to Cities"
             };
             for (int i = 0; i < 6; ++i) text(lines[i],r.x+28,r.y+62+i*38,18);
@@ -868,7 +874,7 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
             const auto found=std::find_if(saved_designs->begin(),saved_designs->end(),[&](const auto& d){return d.name==mesh.name;});
             if (found==saved_designs->end()) saved_designs->push_back(mesh); else *found=mesh;
         }
-        original=snapshot(mesh); status="Building saved"; return true;
+        original=snapshot(mesh); status="Design saved"; return true;
     };
     const auto leave=[&]() {return leave_draft(mesh,original,save_design,status);};
     while (true) {
@@ -885,7 +891,7 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
         if (command==MenuCommand::CloseCreator || (can_edit && !grab && close_clicked(window))) { if (leave()) break; interactive=false; continue; }
         if (can_edit && IsKeyPressed(KEY_ESCAPE) && !grab) { if (slice) slice = false; else if (place_decal || move_decal) place_decal = move_decal = false; else if (field>=0) field = -1; else if (tab==2 && decal>=0) { decal = -1; selected[2].clear(); status = "Selection cleared"; } else {if (leave()) break; interactive=false; continue;} }
         if (command==MenuCommand::NewBuilding) {
-            if (leave()) { mesh={}; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={{{2},{},{4}}}; tab=0; slice=false; preview_dirty=true; }
+            if (leave()) { mesh={}; mesh.name="New object"; mesh.type=ObjectType::Object; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={{{2},{},{4}}}; tab=0; slice=false; preview_dirty=true; }
             interactive=false; continue;
         }
         if ((can_edit || command==MenuCommand::Undo || command==MenuCommand::Redo) && !grab && field<0) {
@@ -957,7 +963,8 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
                 }
             } else {
                 BuildingMesh next = *grab;
-                if (next.move_vertices(moving,mesh_drag_delta(Vector2Subtract(GetMousePosition(),grab_start),camera,view,handle),status) && next.vertices!=mesh.vertices) { mesh = std::move(next); preview_dirty=true; }
+                if (next.move_vertices(moving,mesh_drag_delta(Vector2Subtract(GetMousePosition(),grab_start),camera,view,handle),status)
+                    && (next.vertices!=mesh.vertices || next.size!=mesh.size)) { mesh = std::move(next); preview_dirty=true; }
             }
             const bool finish = keyboard_grab ? (click && in_view) || IsKeyPressed(KEY_ENTER) : IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
             if (!IsWindowFocused() || IsKeyPressed(KEY_ESCAPE) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) || (decal_grab && finish && !decal_move_valid)) {
@@ -1074,7 +1081,7 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
             rlEnableDepthMask(); rlEnableDepthTest();
         }
         EndMode3D(); EndTextureMode();
-        BeginDrawing(); ui::draw_desktop(); ui::draw_window(window,"Building Creator"); ui::draw_window_close(window);
+        BeginDrawing(); ui::draw_desktop(); ui::draw_window(window,"Object Builder"); ui::draw_window_close(window);
         DrawTextureRec(preview.texture,{0,0,float(preview.texture.width),-float(preview.texture.height)},{view.x,view.y},WHITE); ui::draw_frame(view,true);
         if ((tab==0 || tab==3) && !slice && !vertices.empty()) { BeginScissorMode(int(view.x),int(view.y),int(view.width),int(view.height)); mesh_gizmo(pivot,camera,view,GetMousePosition(),true,grab ? handle : -1); EndScissorMode(); }
         text(std::to_string(tiles[0])+" x "+std::to_string(tiles[1])+" tiles",view.x+10,view.y+10,16,ui::highlight);
@@ -1095,7 +1102,9 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
         if (!grab && click && hit(name_box)) field = 0;
         if (field==0) { input(mesh.name,name_box); if (IsKeyPressed(KEY_ENTER) || (click && !hit(name_box))) field = -1; }
         else { ui::draw_panel(name_box,true,ui::highlight); text(fit(mesh.name,18,286),96,93); }
-        text("FOOTPRINT",20,132,16,accent);
+        text("Type",20,135,16,accent);
+        if (control({84,130,145,24},"Object",mesh.type==ObjectType::Object) && mesh.type!=ObjectType::Object) {auto next=mesh;next.type=ObjectType::Object;commit(std::move(next));}
+        if (control({239,130,155,24},"Building",mesh.type==ObjectType::Building) && mesh.type!=ObjectType::Building) {auto next=mesh;next.type=ObjectType::Building;commit(std::move(next));}
         int width = tiles[0], depth = tiles[1]; bool resized = false;
         const auto stepper = [&](const char* label,int& value,float y,int id) {
             text(label,20,y+5,17); const Rectangle box{150,y,152,30};
@@ -1278,7 +1287,7 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
             EndScissorMode();
             text("Scroll for UV controls",20,height-147,13,accent);
         } else if (tab==1) {
-            if (control({20,288,180,30},"Whole building",!texture_selection,!decal_texture)) texture_selection = false;
+            if (control({20,288,180,30},"Whole design",!texture_selection,!decal_texture)) texture_selection = false;
             if (control({210,288,180,30},"Selected faces",texture_selection,!decal_texture && !selected[2].empty())) texture_selection = true;
             if (control({20,324,180,30},"Use default",false,!decal_texture)) {
                 if (texture_selection) changed = next.set_face_material(selected[2],-1,status);
@@ -1348,18 +1357,18 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
             text("Scroll for size, rotation and repeats",20,height-147,13,accent);
         }
         if (changed) commit(std::move(next));
-        if (control({20,height-122,180,36},"Save building",true) || command==MenuCommand::SaveBuilding || (can_edit && !grab && ctrl && IsKeyPressed(KEY_S))) {
+        if (control({20,height-122,180,36},"Save design",true) || command==MenuCommand::SaveBuilding || (can_edit && !grab && ctrl && IsKeyPressed(KEY_S))) {
             save_design();
         }
         const bool use = control({210,height-122,180,36},"Save and close",true) || command==MenuCommand::UseBuilding;
         const bool cancel = control({view.x+view.width-142,height-122,142,36},"Close");
         text(fit(status,17,GetScreenWidth()-40.f),20,height-49,17,accent); menu.draw(menu_state);
-        text("BUILDING CREATOR",GetScreenWidth()-212.f,8,16,ink); EndDrawing(); interactive = true;
+        text("OBJECT BUILDER",GetScreenWidth()-212.f,8,16,ink); EndDrawing(); interactive = true;
         if (!screenshot.empty() && ++frames>=3) { auto capture = LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break; }
         if (cancel) { if (leave()) break; interactive=false; }
         if (use && save_design()) { result = mesh; break; }
         if (command==MenuCommand::SavedBuildings) {
-            const auto loaded=saved_picker([&]{return saved_buildings(directory,status);},"Saved buildings","Open building",mesh.name,status,directory);
+            const auto loaded=saved_picker([&]{return saved_buildings(directory,status);},"Saved objects and buildings","Open design",mesh.name,status,directory);
             if (loaded && leave()) { mesh=*loaded; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={}; tab=0; slice=false; preview_dirty=true; }
             interactive=false; field=slider_drag=-1;
         }
@@ -1618,7 +1627,7 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
 bool main_menu(City& city,const std::filesystem::path& directory,ControllerMapping& controls,GraphicsSettings& graphics,const std::string& screenshot) {
     EnableCursor(); SetWindowTitle("Ambaretto - Main menu");
     const char* home[]={"Play", "Create / edit", "Settings", "Quit"};
-    const char* editors[]={"Cities", "Buildings", "Cars", "Characters", "Back"};
+    const char* editors[]={"Cities", "Object Builder", "Cars", "Characters", "Back"};
     int selection=0,frames=0; bool interactive=false,editing=false;
     MenuBar menu(MenuMode::Main);
     const auto mapping_path=directory.parent_path()/"controller-mappings.ini";
@@ -1671,10 +1680,10 @@ bool main_menu(City& city,const std::filesystem::path& directory,ControllerMappi
 void design_menu(DesignKind kind,const std::filesystem::path& root,const std::string& screenshot,bool create_new) {
     EnableCursor(); std::string error;
     if (kind==DesignKind::Building) {
-        SetWindowTitle("Ambaretto - Buildings"); BuildingMesh mesh;
+        SetWindowTitle("Ambaretto - Object Builder"); BuildingMesh mesh;mesh.name="New object";mesh.type=ObjectType::Object;
         const auto build=[&](BuildingMesh value){building_builder(std::move(value),root/"buildings",screenshot);};
         if (create_new) build(mesh);
-        else open_design_menu([&]{return saved_buildings(root/"buildings",error);},"Buildings / Create or open",root/"buildings",error,screenshot,build);
+        else open_design_menu([&]{return saved_buildings(root/"buildings",error);},"Object Builder / Create or open",root/"buildings",error,screenshot,build);
     } else if (kind==DesignKind::Car) {
         SetWindowTitle("Ambaretto - Cars"); CarDesign design;
         const auto build=[&](CarDesign value){car_builder(std::move(value),root/"cars",screenshot);};
@@ -1851,6 +1860,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
     const auto characters_directory=directory.parent_path()/"characters";
     bool dirty = converted, dragging = false, top = false, grid = false, close_failed = false;
     bool painting = false, stroke_saved = false, brush_remove = false, brush_sampled = false;
+    bool object_brush = false, tree_brush = true;
     bool panning = false, pan_moved = false;
     Vector2 pan_start{}; Vec3 pan_focus = Vec3::sZero();
     float save_time = 0, preview_time = 0, yaw = .78539816f;
@@ -1904,6 +1914,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         selected_building = selected_vehicle = -1;
     };
     const auto pen_tool=[&]() {return tool==Tool::Land || tool==Tool::Water || tool==Tool::Road || tool==Tool::Ground;};
+    const auto brush_tool=[&]() {return (tool==Tool::Trees && tree_brush) || (tool==Tool::Building && object_brush && building_mesh && building_mesh->type==ObjectType::Object);};
     const auto apply_pen=[&]() {
         if (pen.nodes.empty()) return true;
         if (editing_road>=0 && city.paths[editing_road].path==pen && city.paths[editing_road].width==road_width) {clear_pen();return true;}
@@ -1970,6 +1981,8 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         menu_state.building_selection = selected_building>=0;
         menu_state.car_selection = selected_vehicle>=0 && city.vehicles[selected_vehicle].kind==CityVehicleKind::Car;
         menu_state.vehicle = vehicle_kind; menu_state.density = density;
+        menu_state.object_design=building_mesh && building_mesh->type==ObjectType::Object;
+        menu_state.object_brush=object_brush;menu_state.tree_brush=tree_brush;
         menu_state.top = top; menu_state.grid = grid; menu_state.tool = int(tool);
         auto command = first_frame ? MenuCommand::None : menu.update(menu_state);
         if (create_race) { command=MenuCommand::NewRace; create_race=false; }
@@ -2093,8 +2106,14 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
                 if (next.add_vehicle(v,status,selected_vehicle)) commit(std::move(next));
             } else choose_tool(5);
         }
-        if (command>=MenuCommand::TreesSparse && command<=MenuCommand::TreesDense) { choose_tool(7); density = int(command)-int(MenuCommand::TreesSparse)+1; }
-        if (command==MenuCommand::BrushSmaller || command==MenuCommand::BrushLarger) { choose_tool(7); brush_size = std::clamp(brush_size+(command==MenuCommand::BrushLarger ? 1 : -1),1,12); }
+        if (command>=MenuCommand::TreesSparse && command<=MenuCommand::TreesDense) { choose_tool(7); tree_brush=true; density = int(command)-int(MenuCommand::TreesSparse)+1; }
+        if (command==MenuCommand::BrushSmaller || command==MenuCommand::BrushLarger) { choose_tool(7); tree_brush=true; brush_size = std::clamp(brush_size+(command==MenuCommand::BrushLarger ? 1 : -1),1,12); }
+        if (command==MenuCommand::TreesSingle || command==MenuCommand::TreesBrush) {choose_tool(7);tree_brush=command==MenuCommand::TreesBrush;}
+        if (command==MenuCommand::ObjectSingle || (command==MenuCommand::ObjectBrush && menu_state.object_design)) {choose_tool(3);object_brush=command==MenuCommand::ObjectBrush;}
+        if (menu_state.object_design && (command==MenuCommand::ObjectBrushSmaller || command==MenuCommand::ObjectBrushLarger)) {
+            choose_tool(3);object_brush=true;brush_size=std::clamp(brush_size+(command==MenuCommand::ObjectBrushLarger ? 1 : -1),1,12);
+        }
+        if (menu_state.object_design && command>=MenuCommand::ObjectSparse && command<=MenuCommand::ObjectDense) {choose_tool(3);object_brush=true;density=int(command)-int(MenuCommand::ObjectSparse)+1;}
         for (int i = 0; i<10; ++i) if (i!=8 && can_edit && !ctrl && IsKeyPressed(i==9 ? KEY_ZERO : KEY_ONE+i)) {
             choose_tool(i); if (i==5) vehicle_kind = 0; if (i==7) density = 1;
         }
@@ -2181,9 +2200,12 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
                     }
                     pen_dragging=pen_node>=0;pen_drag_start=mouse;
                 }
-            } else if (tool==Tool::Trees) {
+            } else if (brush_tool()) {
                 painting = true; stroke_saved = brush_sampled = false; last_brush = brush_point;
                 brush_remove = IsKeyDown(KEY_LEFT_SHIFT)||IsKeyDown(KEY_RIGHT_SHIFT);
+            } else if (tool==Tool::Trees) {
+                City next=city;
+                if (next.place_tree(brush_point,status)) {commit(std::move(next));status="Tree placed / Ctrl+Z to undo";}
             } else if (tool==Tool::Select) {
                 selected_building = pick_building(city,camera,mouse); selected_vehicle = city.vehicle_at(brush_point);
                 if (selected_vehicle>=0) selected_building = -1;
@@ -2238,12 +2260,17 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
             City next = city; int changed = 0; std::string brush_error;
             const Vec3 delta = brush_point-last_brush;
             const int steps = std::max(1,int(std::ceil(delta.Length()/(brush_size*4.f))));
-            for (int i = 1; i <= steps; ++i) changed += std::max(0,next.brush_trees(last_brush+delta*(float(i)/steps),brush_size*8.f,density,brush_remove,brush_error));
+            for (int i = 1; i <= steps; ++i) {
+                const Vec3 point=last_brush+delta*(float(i)/steps);
+                changed+=std::max(0,tool==Tool::Trees ? next.brush_trees(point,brush_size*8.f,density,brush_remove,brush_error)
+                    : next.brush_objects(*building_mesh,point,brush_size*8.f,density,brush_remove,brush_error));
+            }
             last_brush = brush_point; brush_sampled = true;
             if (changed) {
                 if (!stroke_saved) { commit(std::move(next)); stroke_saved = true; }
                 else { city = std::move(next); dirty = true; save_time = 0; ++revision; }
-                status = std::to_string(city.trees.size())+" trees / "+(brush_remove ? "Clearing trees" : "Planting trees");
+                status = tool==Tool::Trees ? std::to_string(city.trees.size())+" trees / "+(brush_remove ? "Clearing trees" : "Planting trees")
+                    : brush_remove ? "Clearing "+building_mesh->name : "Painting "+building_mesh->name;
             }
             if (!brush_error.empty()) status = brush_error;
         }
@@ -2287,7 +2314,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
                 live_building->position=brush_point+building_offset;
                 live_building->position->SetY(city.terrain_height(brush_point.GetX(),brush_point.GetZ()));
             }
-        } else if(picked && tool==Tool::Building)live_building=preview;
+        } else if(picked && tool==Tool::Building && !brush_tool())live_building=preview;
         bool placement_ready=false;
         if(live_building) {
             const auto signature=snapshot(live_building->shape());
@@ -2320,11 +2347,13 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
             for (int z = z0; z<=z1; ++z) DrawLine3D({(x0-64)*City::block,.025f,(z-64)*City::block},{(x1-64)*City::block,.025f,(z-64)*City::block},{53,103,126,255});
         }
         if (picked) {
-            if (tool==Tool::Trees) {
+            if (brush_tool()) {
                 for (int i = 0; i < 48; ++i) {
                     const float a = i*6.2831853f/48, b = (i+1)*6.2831853f/48, r = brush_size*8.f;
                     DrawLine3D(vector(brush_point+Vec3(std::cos(a)*r,.2f,std::sin(a)*r)),vector(brush_point+Vec3(std::cos(b)*r,.2f,std::sin(b)*r)),brush_remove ? ORANGE : scene_accent);
                 }
+            } else if (tool==Tool::Trees) {
+                DrawCylinderWires(vector(brush_point),.3f,.3f,6,8,city.tree_clear(brush_point) ? scene_accent : RED);
             } else if (tool==Tool::Building) {
                 City proposed = city; std::string error;
                 const bool valid = proposed.add_building(preview,error);
@@ -2405,11 +2434,12 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         ui::draw_frame(document);
         ui::draw_frame({document.x+4,document.y+35,document.width-8,document.height-39},true);
         std::string active = tools[int(tool)];
-        if (tool==Tool::Building) active+=" / "+(building_mesh ? building_mesh->name : "Plain block");
-        if (tool==Tool::Building || selected_building>=0) active += " / "+std::to_string(int(selected_building>=0 ? city.buildings[selected_building].yaw : building_rotation))+" deg";
+        if (tool==Tool::Building) active=std::string(building_mesh && building_mesh->type==ObjectType::Object ? object_brush ? "Object brush" : "Object / Single" : "Building / Single")+" / "+(building_mesh ? building_mesh->name : "Plain block");
+        if ((tool==Tool::Building && !brush_tool()) || selected_building>=0) active += " / "+std::to_string(int(selected_building>=0 ? city.buildings[selected_building].yaw : building_rotation))+" deg";
         if (tool==Tool::Road) active += std::string(editing_road>=0 ? " / editing / " : " / ")+TextFormat("%.1f m",road_width);
         if (tool==Tool::Ground) active += " / "+ground_texture;
-        if (tool==Tool::Trees) active += " / "+std::to_string(brush_size*8)+" m / "+densities[density-1];
+        if (tool==Tool::Trees || brush_tool())
+            active+=tool==Tool::Trees && !tree_brush ? " / Single placement" : " / "+std::to_string(brush_size*8)+" m / "+densities[density-1]+" / Shift: clear";
         if (tool==Tool::Vehicle) active += " / "+(vehicle_kind==0 && selected_car ? selected_car->name : std::string(vehicle_names[vehicle_kind]))+" / "+std::to_string(rotation*90);
         const auto title = fit(city.name+" / "+active+(dirty ? " *" : ""),18,document.width-100);
         ui::draw_window_title(document,title.c_str());
@@ -2466,7 +2496,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         menu.draw(menu_state);
         EndDrawing();
         if (choose_building) {
-            const auto chosen=saved_picker([&]{return saved_buildings(buildings_directory,status);},"Choose a saved building","Choose building",building_mesh ? building_mesh->name : "",status,buildings_directory);
+            const auto chosen=saved_picker([&]{return saved_buildings(buildings_directory,status);},"Choose an object or building","Choose design",building_mesh ? building_mesh->name : "",status,buildings_directory);
             if (chosen) {building_mesh=*chosen; choose_tool(3); status="Click the map to place "+chosen->name;}
             painting=dragging=false; first_frame=true; continue;
         }
@@ -2483,7 +2513,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
             preview_renderer.reset(); preview_revision = -1;
             if (edit_building) building_builder(city.buildings[selected_building].shape(),buildings_directory);
             else design_menu(DesignKind::Building,directory.parent_path());
-            status="Building editor closed / refresh saved designs to update the map";
+            status="Object Builder closed / refresh saved designs to update the map";
             painting=dragging=false; first_frame=true; continue;
         }
         first_frame = false;

@@ -10,6 +10,18 @@ namespace {
 using namespace ambaretto;
 void require(bool value,const char* message) { if (!value) throw std::runtime_error(message); }
 std::string encoded(const BuildingMesh& mesh) { std::ostringstream stream; mesh.write(stream); return stream.str(); }
+void object_types() {
+    std::string error; BuildingMesh mesh,loaded;
+    for (auto type : {ObjectType::Building,ObjectType::Object}) {
+        mesh.type=type;std::istringstream stream(encoded(mesh));
+        require(BuildingMesh::read(stream,loaded,error) && loaded.type==type && encoded(loaded)==encoded(mesh),"Design type did not round-trip");
+    }
+    std::ostringstream legacy;mesh.write(legacy,3);std::istringstream stream(legacy.str());
+    require(BuildingMesh::read(stream,loaded,error,3) && loaded.type==ObjectType::Building,"Legacy designs did not default to Building");
+    const auto stable=encoded(loaded);std::istringstream invalid("\"Invalid\" \"\" 4 4 4 2\n");
+    require(!BuildingMesh::read(invalid,loaded,error) && encoded(loaded)==stable,"Invalid type changed the loaded design");
+    mesh.type=ObjectType(2);require(!mesh.validate(error),"Unsupported design type was accepted");
+}
 void geometry() {
     std::string error; BuildingMesh mesh;
     require(mesh.set_footprint(4,4,error,true),error.c_str());
@@ -37,7 +49,7 @@ void geometry() {
     const auto baked = touching.baked();
     require(baked.faces.size()==10 && baked.vertices.size()==16 && baked.validate(error),"bake retained coincident internal faces or loose vertices");
     std::istringstream stream(encoded(mesh)); BuildingMesh loaded;
-    require(BuildingMesh::read(stream,loaded,error) && encoded(loaded)==encoded(mesh),"parts did not round-trip through v3");
+    require(BuildingMesh::read(stream,loaded,error) && encoded(loaded)==encoded(mesh),"parts did not round-trip");
     BuildingMesh legacy; std::ostringstream old;
     old << "\"Legacy building\" \"brick.png\" 11.2 12 11.2\n8 6\n";
     for (auto p : legacy.vertices) old << p.GetX() << ' ' << p.GetY() << ' ' << p.GetZ() << '\n';
@@ -166,6 +178,6 @@ void decal_editing() {
 }
 }
 int main() {
-    try { geometry(); textures(); uv_controls(); decal_editing(); std::cout << "Building editor checks passed\n"; return 0; }
+    try { object_types(); geometry(); textures(); uv_controls(); decal_editing(); std::cout << "Object/building editor checks passed\n"; return 0; }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

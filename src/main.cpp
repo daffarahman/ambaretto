@@ -510,7 +510,7 @@ int main(int argc, char** argv) {
         const std::string arg = argv[i];
         if (arg == "--city" && i + 1 < argc) city_path = argv[++i];
         if (arg == "--editor") preview_editor = true;
-        if (arg == "--building-builder") preview_building = true;
+        if (arg == "--object-builder" || arg == "--building-builder") preview_building = true;
         if (arg == "--car-editor") preview_car = true;
         if (arg == "--character-creator") preview_character = true;
         if (arg == "--cities") cities_list=true;

@@ -263,6 +263,29 @@ int main() {
         // Saved libraries open in popups, without replacing the component editing controls.
         BuildingMesh building; building.name="Menu test building";
         require(building.save(root/"buildings",error),"Building fixture save failed");
+        stage="object builder type selection"; window(); {
+            ui::FontResource font;auto object=building;object.name="Object type workflow";
+            idle();click(150,142);shortcut(KEY_Z);shortcut(KEY_Y);click(250,495);
+            const auto result=building_builder(object,root/"editor-workflows");BuildingMesh saved;
+            require(result && result->type==ObjectType::Object && BuildingMesh::load(root/"editor-workflows/building-Object type workflow.building",saved,error)
+                && saved.type==ObjectType::Object,"Object type selector, history or save failed");
+        } CloseWindow();
+        for (auto type : {ObjectType::Object,ObjectType::Building}) {
+            stage="lower top face"; window(); {
+                ui::FontResource font;auto edited=building;edited.type=type;
+                edited.name=type==ObjectType::Object ? "Lower object top" : "Lower building top";
+                idle();key(KEY_THREE);building_wall(edited.size,{-3,12,-3});
+                building_drag(edited.size,{0,16,0},{0,12,0});shortcut(KEY_Z);shortcut(KEY_Y);shortcut(KEY_S);
+                steps.push_back([&]{
+                    BuildingMesh saved;
+                    require(BuildingMesh::load(root/"editor-workflows"/("building-"+edited.name+".building"),saved,error)
+                        && std::abs(saved.size.GetY()-8)<.12f,"Lowering the top face was discarded or did not undo/redo and save");
+                    for (int vertex : saved.faces[4].vertices) require(std::abs(saved.points()[vertex].GetY()-8)<.12f,"Top-face move missed a roof vertex");
+                });
+                click(250,495);const auto result=building_builder(edited,root/"editor-workflows");
+                require(result && std::abs(result->size.GetY()-8)<.12f,"Top-face height was not kept when closing the builder");
+            } CloseWindow();
+        }
         stage="building shape composition"; window(); {
             ui::FontResource font; auto parts=building; parts.name="Parts workflow";
             require(parts.set_footprint(4,4,error,true),error.c_str());
@@ -551,6 +574,39 @@ int main() {
             steps.push_back([&]{require(roads.paths.size()==3 && roads.paths[2].path.nodes.size()==2 && roads.paths[2].path.nodes.front().tangent.Length()>20,"Draft undo/redo did not preserve a curve gesture");});
             key(KEY_ESCAPE);click(760,485);
             require(!city_menu(roads,root/"junction-cities",controls,graphics,true),"Road editing started Play");
+        } CloseWindow();
+        stage="object and tree placement modes"; window(); {
+            ui::FontResource font;ControllerMapping controls;GraphicsSettings graphics;
+            City placed=City::create("Placement modes");placed.id="aabbccddeeff0011";require(placed.add_land({48,48},{79,79},error),"Placement mode land failed");placed.make_freeform();
+            const auto directory=root/"placement-modes"/"cities";
+            auto object=building;object.name="Placement object";object.type=ObjectType::Object;object.size=Vec3(4,4,4);
+            require(object.save(directory.parent_path()/"buildings",error),"Object placement library fixture failed");
+            const auto menu_action=[](int category,int item,int child=-1) {
+                key(KEY_F10);for(int i=0;i<category;++i)key(KEY_RIGHT);
+                for(int i=0;i<item;++i)key(KEY_DOWN);key(KEY_ENTER);
+                if(child>=0){for(int i=0;i<child;++i)key(KEY_DOWN);key(KEY_ENTER);}
+            };
+            const auto point=[](float x,float z){return Vec3(x,City::level,z);};
+            idle();key(KEY_V);menu_action(4,0,5);map_drag(point(-40,70),point(-15,70));
+            steps.push_back([&]{require(placed.trees.size()==1 && std::abs(placed.trees[0].base.GetX()+40)<1,"Single tree mode painted a drag or snapped the click");});
+            shortcut(KEY_Z);steps.push_back([&]{require(placed.trees.empty(),"Single tree placement did not undo");});shortcut(KEY_Y);
+            menu_action(4,0,6);map_drag(point(-40,95),point(40,95));
+            steps.push_back([&]{require(placed.trees.size()>3,"Tree brush did not resume after single placement");});
+            shortcut(KEY_Z);steps.push_back([&]{require(placed.trees.size()==1,"One Undo did not remove the whole tree stroke");});shortcut(KEY_Y);
+            menu_action(3,4);key(KEY_ENTER);map_drag(point(30,60),point(45,60));
+            steps.push_back([&]{require(placed.buildings.size()==1 && placed.buildings[0].mesh->type==ObjectType::Object,"Single object placement did not place one typed design");});
+            menu_action(3,7);map_drag(point(30,-60),point(65,-60));
+            std::size_t object_count=0;
+            steps.push_back([&]{object_count=placed.buildings.size();require(object_count>4,"Object brush did not paint a cluster");capture("object-brush-workflow.png");});
+            shortcut(KEY_Z);steps.push_back([&]{require(placed.buildings.size()==1,"One Undo did not remove the whole object stroke");});
+            shortcut(KEY_Y);steps.push_back([&]{require(placed.buildings.size()==object_count,"Object stroke did not redo");});
+            steps.push_back([]{event(2,KEY_LEFT_SHIFT);});map_drag(point(30,-60),point(65,-60));steps.push_back([]{event(1,KEY_LEFT_SHIFT);});idle();
+            steps.push_back([&]{require(placed.buildings.size()==1,"Shift brush did not clear only the painted objects");});
+            shortcut(KEY_Z);shortcut(KEY_S);
+            steps.push_back([&]{City saved;require(City::load(directory/(placed.id+".city"),saved,error) && saved.buildings.size()==object_count
+                && saved.buildings.back().mesh->type==ObjectType::Object,"Object brush did not save its typed instances");});
+            key(KEY_ESCAPE);click(760,485);
+            require(!city_menu(placed,directory,controls,graphics,true),"Placement modes started Play");
         } CloseWindow();
         stage="map building popup"; window(); {
             ui::FontResource font; ControllerMapping controls; GraphicsSettings graphics;
