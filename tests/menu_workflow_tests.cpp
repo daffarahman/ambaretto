@@ -198,6 +198,76 @@ int main() {
             check_press({r.x+18,r.y+66,110,30},[&]{tuning.draw(car,1024,600);});
             check_press({r.x+12,r.y+108,360,22},[&]{tuning.draw(car,1024,600);});
         } CloseWindow();
+        stage="interior furniture creator"; window(); {
+            ui::FontResource font;
+            BuildingMesh furniture; furniture.type=ObjectType::Object; furniture.name="Interior chair"; furniture.size=Vec3(1,.8f,1);
+            require(furniture.save(root/"interior-objects",error),"Interior furniture fixture failed");
+            idle(5); click(510,495); idle(3);click(150,150); key(KEY_ENTER); idle(5);
+            map_click(Vec3(2,0,-2)); map_click(Vec3(4,0,-2)); key(KEY_ESCAPE);
+            map_click(Vec3(2,.8f,-2)); key(KEY_RIGHT); key(KEY_R); shortcut(KEY_Z); shortcut(KEY_Y);
+            unsigned uploads=0;
+            steps.push_back([&]{uploads=mesh_uploads;capture("interior-creator.png");});idle(15);
+            steps.push_back([&]{require(uploads==mesh_uploads,"Interior creator rebuilt unchanged geometry every frame");});
+            click(150,277);map_click(Vec3(-2,0,-2));shortcut(KEY_Z);shortcut(KEY_Y);
+            click(150,506);
+            idle(3);steps.push_back([]{capture("interior-shell-editor.png");});click(250,495);
+            const auto room=interior_builder({},root/"interior-objects");
+            require(room && room->objects.size()==2 && room->designs.size()==1,"Interior creator did not share furniture designs");
+            require(std::abs(room->objects[0].position.GetX()-2.25f)<.01f && room->objects[0].yaw==15,"Interior selection, move, rotate or history failed");
+            require(room->exit_point && std::abs(room->exit().GetX()+2)<.1f && std::abs(room->exit().GetZ()+2)<.1f,"Interior exit placement or history failed");
+        } CloseWindow();
+        stage="interior shell textures and decals";window();{
+            ui::FontResource font;Interior room;room.id="surface-test";room.name="Surface test";room.shell=room.surface_mesh();room.shell->texture="brick08.png";
+            idle(5);click(350,260);click(100,340);building_wall(room.size,{0,2,8});
+            steps.push_back([]{capture("interior-surface-editor.png");});click(250,495);
+            const auto edited=interior_builder(room,root/"interior-objects");
+            require(edited && edited->shell && edited->shell->decals.size()==1 && edited->shell->texture=="brick08.png","Interior surface tools did not save an inside-wall decal");
+        }CloseWindow();
+        stage="interior walking and return"; window(); {
+            ui::FontResource font; PhysicsWorld outside_world(false); Character outside(outside_world,nullptr,true);
+            outside.set_design(player); outside.take_damage(25); outside.reset(Vec3(100,0,100));
+            Interior room;room.id="walk";room.name="Shared house";
+            ControllerMapping controls; GraphicsSettings graphics;
+            idle(42);
+            const auto initial_steps=physics_steps;
+            steps.push_back([]{event(2,KEY_W);});idle(50);steps.push_back([]{event(1,KEY_W);});idle(5);
+            steps.push_back([&]{require(physics_steps>initial_steps,"Interior walking did not simulate");capture("interior-gameplay.png");});
+            key(KEY_ESCAPE);idle(40);
+            visit_interior(room,outside,controls,graphics);
+            require((outside.position()-Vec3(100,0,100)).Length()<.001f && outside.health()==75,"Interior visit changed the exterior player's return state");
+        } CloseWindow();
+        City indoor_city=City::create("Interior entrance workflow");
+        require(indoor_city.add_land({58,58},{72,72},error) && indoor_city.set_spawn({64,64},error),"Entrance city fixture failed");
+        indoor_city.player_character=player;
+        require(indoor_city.add_building({{62,62},1,10},error),"Entrance building fixture failed");
+        Interior shared_room;shared_room.id="shared";shared_room.name="Linked room";indoor_city.interiors.push_back(shared_room);
+        require(shared_room.save(root/"interiors",error),"Entrance template library fixture failed");
+        require(shared_room.save(root/"entrance-workflow/interiors",error),"Isolated entrance template fixture failed");
+        stage="building editor entrance linking";window(); {
+            ui::FontResource font;
+            auto design=indoor_city.buildings[0].shape();design.name="Interior entrance building";
+            idle(5);click(500,495);click(150,338);key(KEY_ENTER);idle(5);
+            wheel(-3);click(105,385);building_wall(design.size,{0,0,8});shortcut(KEY_Z);shortcut(KEY_Y);
+            steps.push_back([]{capture("interior-entrance-editor.png");});click(250,495);
+            const auto configured=building_builder(design,root/"entrance-workflow/buildings");
+            require(configured && configured->entrance && configured->entrance->interior==shared_room.id,"Building editor did not link entrance to template");
+            indoor_city.buildings[0].mesh=*configured;
+        }CloseWindow();
+        const auto doorway=entrance_position(indoor_city,indoor_city.buildings[0]);
+        auto doorway_ground=doorway;doorway_ground.SetY(indoor_city.height(doorway.GetX(),doorway.GetZ()));
+        const bool doorway_saved=indoor_city.set_spawn(doorway_ground,error) && indoor_city.save(root/"cities",error);
+        require(doorway_saved,error.c_str());
+        stage="entrance fade, automatic exit and saved return";reset();
+        idle(5);key(KEY_ENTER);idle(100);
+        steps.push_back([&]{require(title=="Ambaretto - Linked room","Walking into entrance did not load the linked interior");capture("interior-entry-gameplay.png");event(2,KEY_S);});
+        for (int i=0;i<180;++i)steps.push_back([&]{if(title=="Ambaretto - "+indoor_city.name)event(1,KEY_S);});
+        steps.push_back([&]{require(title=="Ambaretto - "+indoor_city.name,"Walking into exit did not return to exterior");});shortcut(KEY_S);
+        steps.push_back([&]{PlaySession saved;require(PlaySession::load(root/"cities"/(indoor_city.id+".play"),saved,error)
+            && std::hypot(saved.position.GetX()-doorway.GetX(),saved.position.GetZ()-doorway.GetZ())<.03f
+            && std::abs(saved.position.GetY()-doorway.GetY())<.15f,"Interior exit did not preserve the correct building return position");capture("interior-return-gameplay.png");should_close=true;});
+        std::string indoor_path=(root/"cities"/(indoor_city.id+".city")).string();
+        char indoor_exe[]="Ambaretto",indoor_flag[]="--city";char* indoor_args[]={indoor_exe,indoor_flag,indoor_path.data()};
+        require(ambaretto_main(3,indoor_args)==0,"Linked interior game workflow failed");
         // Open/edit, cancel the unsaved prompt, then save and close through that prompt.
         stage="character open / draft save"; window(); {
             ui::FontResource font;
@@ -229,6 +299,7 @@ int main() {
             steps.push_back([]{require(title=="Ambaretto - Cars","Menu click did not open Cars");});
             key(KEY_ESCAPE);
             steps.push_back([]{require(title=="Ambaretto - Create / edit","Cars did not return to the editor list");});
+            steps.push_back([]{capture("create-edit-with-interiors.png");});click(300,384);steps.push_back([]{require(title=="Ambaretto - Interiors","Create / edit did not expose the interior editor");capture("interior-library.png");});key(KEY_ESCAPE);
             key(KEY_ESCAPE);
             key(KEY_DOWN); key(KEY_DOWN); key(KEY_ENTER);
             steps.push_back([]{require(title=="Ambaretto - Settings","Menu list did not open Settings");});
@@ -1105,8 +1176,8 @@ int main() {
         require(ambaretto_main(3,args)==0,"Free roam race workflow failed");
         std::cout<<"Menus: creation, Save/Discard/Cancel, pause/resume, map editing, saved play modes and races passed\n";
     } catch (const WorkflowFailure& e) {
-        std::cerr<<e.message<<'\n'; if (IsWindowReady()) {capture("menu-workflow-failure.png");CloseWindow();} return 1;
+        std::cerr<<stage<<": "<<e.message<<'\n'; if (IsWindowReady()) {capture("menu-workflow-failure.png");CloseWindow();} return 1;
     } catch (const std::exception& e) {
-        std::cerr<<e.what()<<'\n'; if (IsWindowReady()) CloseWindow(); return 1;
+        std::cerr<<stage<<": "<<e.what()<<'\n'; if (IsWindowReady()) CloseWindow(); return 1;
     }
 }

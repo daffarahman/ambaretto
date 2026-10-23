@@ -314,7 +314,7 @@ bool BuildingMesh::repeat_decal(int index,int count,float spacing_m,bool vertica
     if (!next.validate(error)) return false;
     *this = std::move(next); return true;
 }
-std::vector<BuildingTriangle> BuildingMesh::triangles(Vec3 base) const {
+std::vector<BuildingTriangle> BuildingMesh::triangles(Vec3 base,bool inward) const {
     const auto p = points(); std::vector<BuildingTriangle> result; std::vector<std::array<BuildingUV,3>> surface_uv;
     for (std::size_t f = 0; f<faces.size(); ++f) {
         const auto& face = faces[f]; std::vector<Vec3> polygon;
@@ -372,7 +372,7 @@ std::vector<BuildingTriangle> BuildingMesh::triangles(Vec3 base) const {
             const Vec3 normal = (triangle.points[1]-triangle.points[0]).Cross(triangle.points[2]-triangle.points[0]).NormalizedOr(Vec3::sAxisY());
             const auto point = [&](BuildingUV q) {
                 const float b = uv_side(chart[0],q,chart[2])/area, c = uv_side(chart[0],chart[1],q)/area;
-                return triangle.points[0]*(1-b-c)+triangle.points[1]*b+triangle.points[2]*c+normal*.015f;
+                return triangle.points[0]*(1-b-c)+triangle.points[1]*b+triangle.points[2]*c+normal*(inward ? -.015f : .015f);
             };
             for (std::size_t k = 1; k+1<polygon.size(); ++k) {
                 const std::array<BuildingUV,3> q{{polygon[0],polygon[k],polygon[k+1]}};
@@ -389,10 +389,17 @@ std::vector<BuildingTriangle> BuildingMesh::triangles(Vec3 base) const {
             }
         }
     }
+    if (inward) for (auto& triangle:result) {
+        std::swap(triangle.points[1],triangle.points[2]); std::swap(triangle.uv[1],triangle.uv[2]);
+        for (auto& uv:triangle.uv) uv[0]=1-uv[0];
+    }
     return result;
 }
 bool BuildingMesh::validate(std::string& error) const {
     error.clear();
+    if (entrance && (type!=ObjectType::Building || entrance->interior.empty() || entrance->interior.size()>48
+        || entrance->interior.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos
+        || !finite(entrance->offset) || entrance->offset.Length()>4096)) return fail(error,"Invalid building entrance template or position.");
     if (type!=ObjectType::Building && type!=ObjectType::Object) return fail(error,"Choose Object or Building as the design type.");
     if (name.empty() || name.size()>48 || name.find_first_not_of(' ')==std::string::npos
         || name.back()==' ' || name.back()=='.' || name.find_first_of("<>:\"/\\|?*")!=std::string::npos
@@ -864,6 +871,10 @@ void BuildingMesh::write(std::ostream& file,int version) const {
     file << decals.size() << '\n';
     for (const auto& d : decals) file << d.face << ' ' << std::quoted(d.texture) << ' ' << d.u << ' ' << d.v << ' ' << d.width << ' ' << d.height
         << ' ' << d.rotation << ' ' << d.surface << ' ' << int(d.projected) << ' ' << d.meters[0] << ' ' << d.meters[1] << '\n';
+    if (version>=5) {
+        file<<(entrance ? 1 : entrance_configured ? 2 : 0)<<'\n';
+        if (entrance) file<<std::quoted(entrance->interior)<<' '<<entrance->offset.GetX()<<' '<<entrance->offset.GetY()<<' '<<entrance->offset.GetZ()<<'\n';
+    }
 }
 bool BuildingMesh::read(std::istream& file,BuildingMesh& mesh,std::string& error,int version) {
     BuildingMesh next; float x,y,z; int count, face_count;
@@ -921,6 +932,16 @@ bool BuildingMesh::read(std::istream& file,BuildingMesh& mesh,std::string& error
         }
         next.decals.push_back(std::move(d));
     }
+    if (version>=5) {
+        int present;
+        if (!(file>>present) || present<0 || present>2) return fail(error,"Invalid entrance flag.");
+        next.entrance_configured=present!=0;
+        if (present==1) {
+            BuildingEntrance entry;
+            if (!(file>>std::quoted(entry.interior)>>x>>y>>z)) return fail(error,"Invalid building entrance.");
+            entry.offset=Vec3(x,y,z); next.entrance=std::move(entry);
+        }
+    }
     if (!next.validate(error)) return false;
     mesh = std::move(next); return true;
 }
@@ -932,7 +953,8 @@ bool BuildingMesh::save(const std::filesystem::path& directory,std::string& erro
     const auto path = directory/("building-"+name+".building"); auto temporary = path; temporary += ".tmp";
     std::ofstream file(temporary,std::ios::trunc);
     if (!file) return fail(error,"Cannot write building; previous save retained.");
-    file << "AMBARETTO_BUILDING 4\n"; write(file); file.close();
+    const int version=entrance || entrance_configured ? 5 : 4;
+    file << "AMBARETTO_BUILDING "<<version<<'\n'; write(file,version); file.close();
     if (!file) return fail(error,"Cannot finish saving building; previous save retained.");
 #ifdef _WIN32
     const bool replaced = MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;
@@ -946,7 +968,7 @@ bool BuildingMesh::load(const std::filesystem::path& path,BuildingMesh& mesh,std
     std::error_code ec;
     if (std::filesystem::file_size(path,ec)>8*1024*1024 || ec) return fail(error,"Building save is missing or too large.");
     std::ifstream file(path); std::string magic, extra; int version; BuildingMesh next;
-    if (!(file>>magic>>version) || magic!="AMBARETTO_BUILDING" || version<1 || version>4) return fail(error,"Unsupported object save.");
+    if (!(file>>magic>>version) || magic!="AMBARETTO_BUILDING" || version<1 || version>5) return fail(error,"Unsupported object save.");
     if (!read(file,next,error,version)) return false;
     if (file>>extra) return fail(error,"Unexpected building data.");
     mesh = std::move(next); return true;

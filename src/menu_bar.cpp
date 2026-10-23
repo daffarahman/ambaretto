@@ -49,12 +49,15 @@ constexpr Menu play_editor_menus[] = {{"File", play_editor_files, int(std::size(
 constexpr Item creator_files[] = {{"New object",MenuCommand::NewBuilding}, {"Save design",MenuCommand::SaveBuilding,"Ctrl+S"}, {"Open saved object/building",MenuCommand::SavedBuildings},
     {"Save and close",MenuCommand::UseBuilding}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
 constexpr Menu creator_menus[] = {{"File",creator_files,int(std::size(creator_files))}, {"Edit",editor_edits,2}};
+constexpr Item interior_files[] = {{"New interior",MenuCommand::NewInterior}, {"Save interior",MenuCommand::SaveBuilding,"Ctrl+S"},
+    {"Open saved interior",MenuCommand::Interiors}, {"Save and close",MenuCommand::UseBuilding}, {"Close editor",MenuCommand::CloseCreator,"Esc"}};
+constexpr Menu interior_menus[] = {{"File",interior_files,int(std::size(interior_files))}, {"Edit",editor_edits,2}};
 constexpr Item car_files[] = {{"New car",MenuCommand::NewCar}, {"Save car",MenuCommand::SaveCar,"Ctrl+S"}, {"Open Saved Car",MenuCommand::SavedCars}, {"Save and close",MenuCommand::UseCar}, {"Close editor",MenuCommand::CloseCreator,"Esc"}};
 constexpr Menu car_menus[] = {{"File",car_files,int(std::size(car_files))}};
 constexpr Item character_files[] = {{"New character",MenuCommand::NewCharacter}, {"Save character",MenuCommand::SaveCharacter,"Ctrl+S"}, {"Open Saved Character",MenuCommand::SavedCharacters}, {"Save and close",MenuCommand::UseCharacter}, {"Close creator",MenuCommand::CloseCreator,"Esc"}};
 constexpr Menu character_menus[] = {{"File",character_files,int(std::size(character_files))}};
-const Menu* menus(MenuMode mode) { return mode==MenuMode::Main ? home_menus : mode==MenuMode::PlayEditor ? play_editor_menus : mode == MenuMode::Editor ? editor_menus : mode == MenuMode::Cities ? city_menus : mode==MenuMode::Creator ? creator_menus : mode==MenuMode::CarCreator ? car_menus : mode==MenuMode::CharacterCreator ? character_menus : game_menus; }
-int menu_count(MenuMode mode) { return mode==MenuMode::Main ? int(std::size(home_menus)) : mode == MenuMode::Editor || mode==MenuMode::PlayEditor ? int(std::size(editor_menus)) : mode==MenuMode::Creator ? int(std::size(creator_menus)) : mode==MenuMode::Cities || mode==MenuMode::CarCreator || mode==MenuMode::CharacterCreator ? 1 : 4; }
+const Menu* menus(MenuMode mode) { return mode==MenuMode::Main ? home_menus : mode==MenuMode::PlayEditor ? play_editor_menus : mode == MenuMode::Editor ? editor_menus : mode == MenuMode::Cities ? city_menus : mode==MenuMode::InteriorCreator ? interior_menus : mode==MenuMode::Creator ? creator_menus : mode==MenuMode::CarCreator ? car_menus : mode==MenuMode::CharacterCreator ? character_menus : game_menus; }
+int menu_count(MenuMode mode) { return mode==MenuMode::Main ? int(std::size(home_menus)) : mode == MenuMode::Editor || mode==MenuMode::PlayEditor ? int(std::size(editor_menus)) : mode==MenuMode::Creator || mode==MenuMode::InteriorCreator ? int(std::size(creator_menus)) : mode==MenuMode::Cities || mode==MenuMode::CarCreator || mode==MenuMode::CharacterCreator ? 1 : 4; }
 bool enabled(MenuCommand command, const MenuState& state) {
     switch (command) {
         case MenuCommand::Undo: return state.undo;

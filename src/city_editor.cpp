@@ -11,6 +11,7 @@
 #include "tuning_panel.hpp"
 #include "environment_renderer.hpp"
 #include "building_renderer.hpp"
+#include "interior_ui.hpp"
 #include <raylib.h>
 #include <raymath.h>
 #include <rlgl.h>
@@ -191,13 +192,13 @@ private:
         }
         bounds(points);
     }
-    void prepare(const BuildingMesh& design) {
+    void prepare(const BuildingMesh& design,bool inward=false) {
         auto found=std::find_if(building_cache_.begin(),building_cache_.end(),[&](const auto& entry){return entry.name==design.name;});
         if (found!=building_cache_.end()) {
             std::rotate(building_cache_.begin(),found,found+1);
         } else {
             CachedBuilding entry; entry.name=design.name; entry.renderer=std::make_unique<BuildingRenderer>();
-            entry.valid=entry.renderer->build(design.triangles(),entry.error,false);
+            entry.valid=entry.renderer->build(design.triangles(Vec3::sZero(),inward),entry.error,false);
             bounds(design.points()); entry.center=center_; entry.size=size_;
             building_cache_.insert(building_cache_.begin(),std::move(entry));
             std::size_t bytes=0;
@@ -223,6 +224,8 @@ private:
         DrawPlane({center_.GetX(),-.04f,center_.GetZ()},{size_.GetX()*1.2f,size_.GetZ()*1.2f},{38,52,68,255});
         buildings_->draw(camera,day_.lighting(),*lighting_,graphics_);
     }
+    void prepare(const Interior& room) { prepare(room.surface_mesh(),true); }
+    void scene(const Interior&,const Camera3D& camera) { buildings_->draw(camera,day_.lighting(),*lighting_,graphics_); }
     RenderTexture2D texture_{};
     const void* selected_=nullptr;
     bool valid_=false,dirty_=true;
@@ -370,7 +373,7 @@ template<class Load> auto saved_picker(Load load,const char* title,const char* a
         const bool copies=!directory.empty();
         const auto open_label=copies ? (std::string(action).find("Open")==0 ? "Open" : "Choose") : action;
         const bool open=button({r.x+24,r.y+r.height-62,copies ? 124.f : 208.f,38},open_label,true,available,active,15) || (active && IsKeyPressed(KEY_ENTER));
-        const bool create_new=create && button({r.x+472,r.y+48,224,30},std::is_same_v<Design,CarDesign> ? "Car editor" : "Character creator",false,true,active,15);
+        const bool create_new=create && button({r.x+472,r.y+48,224,30},std::is_same_v<Design,CarDesign> ? "Car editor" : std::is_same_v<Design,Interior> ? "Interior editor" : "Character creator",false,true,active,15);
         const bool duplicate=copies && (button({r.x+161,r.y+r.height-62,124,38},"Duplicate",false,selection>=0,active,15) || (active && selection>=0 && duplicate_pressed()));
         const bool deleting=copies && (button({r.x+298,r.y+r.height-62,124,38},"Delete",false,selection>=0,active,15) || (active && selection>=0 && IsKeyPressed(KEY_DELETE)));
         const bool refresh=button({r.x+(copies ? 435.f : 256.f),r.y+r.height-62,copies ? 124.f : 208.f,38},copies ? "Refresh" : "Refresh saved",false,true,active,15);
@@ -825,7 +828,177 @@ std::optional<int> city_settings(int density) {
 }
 }
 
-std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesystem::path& directory,const std::string& screenshot,int initial_tab,std::vector<BuildingMesh>* saved_designs) {
+static std::optional<Interior> furnish_interior(Interior room,const std::filesystem::path& objects_directory,const std::string& screenshot) {
+    if (room.id.empty()) room.id=City::create("Interior").id;
+    const auto original=snapshot(room);
+    std::optional<Interior> result;
+    std::vector<Interior> undo,redo;
+    int selection=-1, design=-1, frames=0;
+    bool interactive=false, placing=false, naming=false, rebuild=true, looking=false,render_ready=false,placing_exit=false;
+    float yaw=-.7f,pitch=-.24f,object_yaw=0,elevation=0;
+    Camera3D camera{{5,3.2f,6},{0,1,-4},{0,1,0},65,CAMERA_PERSPECTIVE};
+    BuildingRenderer renderer,ghost;
+    SceneLighting lighting; GraphicsSettings settings; settings.shadows=0;
+    Daylight light=DayNight{}.lighting(); light.ambient={.8f,.76f,.65f}; light.sun_color={.18f,.16f,.12f}; light.night=0;
+    std::string status="Choose saved Object designs to furnish this reusable room.",render_error;
+    const auto commit=[&](Interior next) {
+        undo.push_back(room); if (undo.size()>32) undo.erase(undo.begin()); redo.clear();
+        room=std::move(next); rebuild=true;
+    };
+    const auto save_room=[&]() {
+        if (!room.validate(status)) return false;
+        if (!render_ready) {status=render_error;return false;}
+        result=room; return true;
+    };
+    while (true) {
+        SetWindowTitle("Ambaretto - Interior creator");
+        const bool close=WindowShouldClose();
+        const bool active=interactive && IsWindowFocused() && screenshot.empty();
+        const bool ctrl=IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL);
+        const auto mouse=GetMousePosition();
+        const bool viewport=mouse.x>320 && mouse.y>40 && mouse.y<GetScreenHeight()-36;
+        const bool look=active && !naming && IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && (viewport || looking);
+        if (look!=looking) { if (look) DisableCursor(); else EnableCursor(); looking=look; }
+        const float dt=std::min(GetFrameTime(),.1f);
+        if (look) {
+            const auto delta=GetMouseDelta(); yaw+=delta.x*.003f; pitch=std::clamp(pitch-delta.y*.003f,-1.5f,1.5f);
+        }
+        const Vector3 forward{std::sin(yaw)*std::cos(pitch),std::sin(pitch),-std::cos(yaw)*std::cos(pitch)};
+        if (look) {
+            const float speed=(IsKeyDown(KEY_LEFT_SHIFT) ? 14.f : 5.f)*dt;
+            camera.position=Vector3Add(camera.position,Vector3Scale(forward,float(IsKeyDown(KEY_W)-IsKeyDown(KEY_S))*speed));
+            camera.position=Vector3Add(camera.position,Vector3Scale({std::cos(yaw),0,std::sin(yaw)},float(IsKeyDown(KEY_D)-IsKeyDown(KEY_A))*speed));
+            camera.position.y+=(IsKeyDown(KEY_E)-IsKeyDown(KEY_Q))*speed;
+        } else if (active && viewport && !naming) camera.position=Vector3Add(camera.position,Vector3Scale(forward,GetMouseWheelMove()));
+        camera.target=Vector3Add(camera.position,forward);
+        if (active && !naming && ctrl && IsKeyPressed(KEY_Z) && !undo.empty()) {
+            redo.push_back(room); room=std::move(undo.back()); undo.pop_back(); rebuild=true; selection=-1; placing=false;
+        }
+        if (active && !naming && ctrl && IsKeyPressed(KEY_Y) && !redo.empty()) {
+            undo.push_back(room); room=std::move(redo.back()); redo.pop_back(); rebuild=true; selection=-1; placing=false;
+        }
+        InteriorObject preview{design,Vec3::sZero(),object_yaw};
+        bool picked=false;
+        const Ray ray=GetScreenToWorldRay(mouse,camera);
+        if (std::abs(ray.direction.y)>.0001f) {
+            const float t=(elevation-ray.position.y)/ray.direction.y;
+            if (t>0) { const auto p=Vector3Add(ray.position,Vector3Scale(ray.direction,t)); preview.position=Vec3(std::round(p.x*4)/4,elevation,std::round(p.z*4)/4); picked=true; }
+        }
+        if (active && !naming && !look) {
+            if (IsKeyPressed(KEY_R)) object_yaw=std::fmod(object_yaw+15,360.f);
+            if (IsKeyPressed(KEY_PAGE_UP) || IsKeyPressed(KEY_PAGE_DOWN)) elevation=std::clamp(elevation+(IsKeyPressed(KEY_PAGE_UP) ? .25f : -.25f),0.f,room.size.GetY());
+            if (!placing && selection>=0) {
+                auto object=room.objects[selection];
+                object.position+=Vec3(float(IsKeyPressed(KEY_RIGHT)-IsKeyPressed(KEY_LEFT))*.25f,
+                    float(IsKeyPressed(KEY_PAGE_UP)-IsKeyPressed(KEY_PAGE_DOWN))*.25f,float(IsKeyPressed(KEY_DOWN)-IsKeyPressed(KEY_UP))*.25f);
+                if (IsKeyPressed(KEY_R)) object.yaw=std::fmod(object.yaw+15,360.f);
+                if (object.position!=room.objects[selection].position || object.yaw!=room.objects[selection].yaw) {
+                    auto next=room; if (next.place(object,status,selection)) commit(std::move(next));
+                }
+                if (IsKeyPressed(KEY_DELETE)) { auto next=room; next.objects.erase(next.objects.begin()+selection); commit(std::move(next)); selection=-1; }
+            }
+            if (viewport && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                if(placing_exit){
+                    RayCollision closest{};closest.distance=1e9f;
+                    for(const auto& t:room.surface_mesh().baked().triangles(Vec3::sZero(),true)){
+                        if(t.decal || (t.points[1]-t.points[0]).Cross(t.points[2]-t.points[0]).GetY()<=0)continue;
+                        const auto hit=GetRayCollisionTriangle(ray,vector(t.points[0]),vector(t.points[1]),vector(t.points[2]));
+                        if(hit.hit && hit.distance<closest.distance)closest=hit;
+                    }
+                    if(closest.hit){auto next=room;next.exit_point=Vec3(closest.point.x,closest.point.y+.08f,closest.point.z);if(next.validate(status)){commit(std::move(next));placing_exit=false;}}
+                }
+                else if (placing && picked) { auto next=room; if (next.place(preview,status,selection)) { commit(std::move(next)); if (selection>=0) placing=false; } }
+                else {
+                    selection=-1; float distance=1e9f;
+                    for (int i=0;i<int(room.objects.size());++i) for (const auto& t:room.object_triangles(room.objects[i])) {
+                        if (t.decal) continue;
+                        const auto hit=GetRayCollisionTriangle(ray,vector(t.points[0]),vector(t.points[1]),vector(t.points[2]));
+                        if (hit.hit && hit.distance<distance) { distance=hit.distance; selection=i; }
+                    }
+                }
+            }
+        }
+        if (rebuild) { render_ready=renderer.build(room.triangles(false),render_error,false); if (!render_ready) status=render_error; rebuild=false; }
+        BeginDrawing(); ClearBackground({37,40,44,255}); BeginMode3D(camera);
+        renderer.draw(camera,light,lighting,settings); draw_entrance_marker(room.exit());
+        if (placing && picked && design>=0 && design<int(room.designs.size())) {
+            const auto p=preview.position;
+            const Matrix transform=MatrixMultiply(MatrixRotateY(object_yaw*PI/180),MatrixTranslate(p.GetX(),p.GetY(),p.GetZ()));
+            ghost.draw(camera,light,lighting,settings,&transform);
+            const bool okay=room.can_place(preview,status) && (selection>=0 || room.objects.size()<512);
+            DrawCubeWires(vector(p+Vec3(0,.05f,0)),.5f,.1f,.5f,okay ? GREEN : RED);
+        }
+        if (selection>=0) {
+            const auto& object=room.objects[selection]; const auto rotation=Quat::sRotation(Vec3::sAxisY(),object.yaw*PI/180);
+            const auto points=room.designs[object.design].points();
+            for (const auto& edge:room.designs[object.design].edges()) DrawLine3D(vector(object.position+rotation*points[edge[0]]),vector(object.position+rotation*points[edge[1]]),YELLOW);
+        }
+        EndMode3D();
+        ui::draw_panel({0,0,320,float(GetScreenHeight())});
+        text("INTERIOR CREATOR",16,16,22); text("Name",16,57,16);
+        const Rectangle name_field{16,80,288,34};
+        if (active && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) naming=hit(name_field);
+        if (naming) input(room.name,name_field); else { ui::draw_panel(name_field,true,WHITE); text(fit(room.name,18,270),24,87,18); }
+        bool add=button({16,132,288,36},"Choose Object / add",false,true,active);
+        const bool select=button({16,178,138,32},"Select",!placing,true,active);
+        const bool move=button({166,178,138,32},"Move",placing,selection>=0,active);
+        text("Exit and arrival",16,232,16);
+        if(button({16,260,288,34},placing_exit ? "Click a floor for the exit" : "Place exit",placing_exit,true,active)){placing_exit=!placing_exit;placing=false;selection=-1;}
+        text(TextFormat("Exit: %.1f, %.1f, %.1f",room.exit().GetX(),room.exit().GetY(),room.exit().GetZ()),16,310,14);
+        text("Arrival stays 2.4 m behind it.",16,338,14);
+        text(std::to_string(room.objects.size())+" / 512 objects",16,386,16);
+        text("R: rotate / Del: remove",16,406,14);
+        text("Arrows: nudge 0.25 m",16,428,14);
+        text("Page Up/Down: object height",16,450,14);
+        text("Ctrl+Z / Ctrl+Y: undo / redo",16,472,14);
+        const bool save=button({16,float(GetScreenHeight()-112),288,36},"Save and return",true,render_ready,active)
+            || (active && ctrl && IsKeyPressed(KEY_S));
+        const bool cancel=button({16,float(GetScreenHeight()-68),288,32},"Close",false,true,active);
+        ui::draw_panel({320,0,float(GetScreenWidth()-320),40});
+        text("RMB + WASD: fly / Q,E: vertical / Shift: fast / Wheel: dolly",334,12,14);
+        ui::draw_panel({320,float(GetScreenHeight()-36),float(GetScreenWidth()-320),36});
+        text(fit(status,15,GetScreenWidth()-348.f),334,float(GetScreenHeight()-27),15);
+        EndDrawing(); interactive=true;
+        if (!screenshot.empty() && ++frames>=3) { auto image=LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); break; }
+        if (select || (active && !naming && IsKeyPressed(KEY_ESCAPE) && (placing || placing_exit))) {placing=placing_exit=false;selection=-1;}
+        else if (cancel || close || (active && !naming && IsKeyPressed(KEY_ESCAPE))) {
+            if (leave_draft(room,original,save_room,status)) break;
+            interactive=false;
+        }
+        if (save && save_room()) break;
+        if (move && selection>=0) {
+            const auto& o=room.objects[selection]; design=o.design; object_yaw=o.yaw; elevation=o.position.GetY(); placing=true;
+            ghost.build(room.designs[design].triangles(),status,false);
+        }
+        if (add) {
+            const auto chosen=saved_picker([&]{auto library=saved_buildings(objects_directory,status);
+                library.erase(std::remove_if(library.begin(),library.end(),[](const auto& d){return d.type!=ObjectType::Object;}),library.end()); return library;},
+                "Interior furniture (Object designs only)","Choose object","",status);
+            if (chosen) {
+                auto found=std::find_if(room.designs.begin(),room.designs.end(),[&](const auto& d){return snapshot(d)==snapshot(*chosen);});
+                if (found==room.designs.end()) {
+                    if (room.designs.size()>=128) {status="Object design limit reached (128).";interactive=false;continue;}
+                    room.designs.push_back(*chosen); design=int(room.designs.size())-1;
+                } else design=int(found-room.designs.begin());
+                placing=ghost.build(chosen->triangles(),status,false); selection=-1; object_yaw=elevation=0;
+            }
+            interactive=false; naming=false;
+        }
+    }
+    EnableCursor(); return result;
+}
+
+std::optional<Interior> interior_builder(Interior room,const std::filesystem::path& objects_directory,const std::string& screenshot) {
+    if(room.id.empty())room.id=City::create("Interior").id;
+    if(!room.exit_point)room.exit_point=room.exit();
+    SetWindowTitle("Ambaretto - Interior Builder");
+    const auto edited=building_builder(room.surface_mesh(),objects_directory,screenshot,0,nullptr,&room);
+    SetWindowTitle("Ambaretto - Interiors");
+    if(edited)return room;
+    return {};
+}
+
+std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesystem::path& directory,const std::string& screenshot,int initial_tab,std::vector<BuildingMesh>* saved_designs,Interior* interior) {
     int tab = initial_tab==2 ? 1 : initial_tab==3 ? 2 : 0, mode = 0, decal = -1;
     int field = -1, scroll = 0, frames = 0, slider_drag = -1, handle = -1, part = 0, shape = 0, part_page = 0, grab_decal = -1;
     float tool_scroll = 0, decal_width = 1, decal_height = 1.5f, repeat_count = 6, repeat_spacing = 1.6f;
@@ -835,14 +1008,14 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
     std::array<std::vector<int>,3> selected{{{2},{},{4}}}; std::vector<int> moving;
     std::vector<BuildingMesh> undo, redo; std::optional<BuildingMesh> grab;
     Vector2 grab_start{}; bool keyboard_grab = false, decal_grab = false, slice = false, xray = false, interactive = false, decal_texture = false;
-    bool decal_move_valid = true, decal_has_moved = false;
+    bool decal_move_valid = true, decal_has_moved = false, placing_entrance=false;
     Vector2 decal_grab_start{};
     float yaw = 2.44f, pitch = .5f, zoom = 1, cut_fraction = .5f; int cut_axis = 1;
-    std::string status, buffer;
-    const auto align = [&](BuildingMesh& value) { const auto tiles = value.footprint(); return value.set_footprint(tiles[0],tiles[1],status,true); };
+    std::string status, buffer,entrance_label_id,entrance_label;
+    const auto align = [&](BuildingMesh& value) { if(interior)return value.validate(status);const auto tiles = value.footprint(); return value.set_footprint(tiles[0],tiles[1],status,true); };
     if (!align(mesh)) return {};
     auto textures = building_textures(building_texture_directory(),status);
-    RenderTexture2D preview{}; MenuBar menu(MenuMode::Creator);
+    RenderTexture2D preview{}; MenuBar menu(interior ? MenuMode::InteriorCreator : MenuMode::Creator);
     BuildingRenderer renderer; SceneLighting preview_lighting; GraphicsSettings preview_graphics;
     preview_graphics.apply_preset(GraphicsPreset::Low); preview_graphics.view_distance = 6000;
     const auto preview_daylight = DayNight().lighting();
@@ -851,7 +1024,7 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
     std::optional<BuildingMesh> result;
     const auto rebuild_preview = [&]() {
         if (!preview_dirty) return preview_valid;
-        triangles = mesh.triangles(); std::string error;
+        triangles = mesh.triangles(Vec3::sZero(),interior!=nullptr); std::string error;
         preview_valid = renderer.build(triangles,error,false,textures); preview_dirty = false;
         if (!preview_valid) status = error;
         else if (!renderer.warning().empty()) status = renderer.warning();
@@ -867,17 +1040,25 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
         decal_grab = false; preview_dirty = true; status = "Move cancelled";
     };
     std::string original=snapshot(mesh);
+    const auto interior_draft=[&]() {auto room=*interior;room.name=mesh.name;room.size=mesh.size;room.shell=mesh;return room;};
+    std::string original_interior=interior ? snapshot(interior_draft()) : "";
     const auto save_design=[&]() {
         if (!rebuild_preview()) return false;
-        if (!mesh.save(directory,status)) return false;
+        if(interior){
+            auto room=interior_draft();BuildingRenderer complete;
+            if(!room.validate(status) || !complete.build(room.triangles(),status,false) || !room.save(directory.parent_path()/"interiors",status))return false;
+            *interior=std::move(room);original_interior=snapshot(*interior);
+        }else if (!mesh.save(directory,status)) return false;
         if (saved_designs) {
             const auto found=std::find_if(saved_designs->begin(),saved_designs->end(),[&](const auto& d){return d.name==mesh.name;});
             if (found==saved_designs->end()) saved_designs->push_back(mesh); else *found=mesh;
         }
         original=snapshot(mesh); status="Design saved"; return true;
     };
-    const auto leave=[&]() {return leave_draft(mesh,original,save_design,status);};
+    const auto leave=[&]() {return interior ? leave_draft(interior_draft(),original_interior,save_design,status) : leave_draft(mesh,original,save_design,status);};
     while (true) {
+        bool choose_entrance=false,choose_furniture=false;
+        if(interior)SetWindowTitle("Ambaretto - Interior Builder");
         if (WindowShouldClose()) { if (grab) cancel_move(); if (leave()) break; interactive=false; continue; }
         const float height = float(GetScreenHeight());
         const Rectangle window{8,44,float(GetScreenWidth()-16),height-108}, view{414,84,float(GetScreenWidth()-438),height-244};
@@ -889,9 +1070,13 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
         const bool ctrl = IsKeyDown(KEY_LEFT_CONTROL)||IsKeyDown(KEY_RIGHT_CONTROL), shift = IsKeyDown(KEY_LEFT_SHIFT)||IsKeyDown(KEY_RIGHT_SHIFT);
         if (can_edit && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) slider_drag = -1;
         if (command==MenuCommand::CloseCreator || (can_edit && !grab && close_clicked(window))) { if (leave()) break; interactive=false; continue; }
-        if (can_edit && IsKeyPressed(KEY_ESCAPE) && !grab) { if (slice) slice = false; else if (place_decal || move_decal) place_decal = move_decal = false; else if (field>=0) field = -1; else if (tab==2 && decal>=0) { decal = -1; selected[2].clear(); status = "Selection cleared"; } else {if (leave()) break; interactive=false; continue;} }
-        if (command==MenuCommand::NewBuilding) {
-            if (leave()) { mesh={}; mesh.name="New object"; mesh.type=ObjectType::Object; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={{{2},{},{4}}}; tab=0; slice=false; preview_dirty=true; }
+        if (can_edit && IsKeyPressed(KEY_ESCAPE) && !grab) { if (slice) slice = false; else if(placing_entrance)placing_entrance=false; else if (place_decal || move_decal) place_decal = move_decal = false; else if (field>=0) field = -1; else if (tab==2 && decal>=0) { decal = -1; selected[2].clear(); status = "Selection cleared"; } else {if (leave()) break; interactive=false; continue;} }
+        if (command==MenuCommand::NewBuilding || (command==MenuCommand::NewInterior && interior)) {
+            if (leave()) {
+                if(interior){*interior=Interior{};interior->id=City::create("Interior").id;mesh=interior->surface_mesh();original_interior=snapshot(interior_draft());}
+                else{mesh={};mesh.name="New object";mesh.type=ObjectType::Object;}
+                align(mesh);original=snapshot(mesh);undo.clear();redo.clear();selected={{{2},{},{4}}};tab=0;slice=false;preview_dirty=true;
+            }
             interactive=false; continue;
         }
         if ((can_edit || command==MenuCommand::Undo || command==MenuCommand::Redo) && !grab && field<0) {
@@ -936,6 +1121,14 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
         const float radius = frame_size.Length(); const Vector3 target{0,frame_size.GetY()/2,0};
         Camera3D camera{{std::sin(yaw)*std::cos(pitch)*radius*2,target.y+std::sin(pitch)*radius*2,std::cos(yaw)*std::cos(pitch)*radius*2},
             target,{0,1,0},radius*1.45f*zoom,CAMERA_ORTHOGRAPHIC};
+        if(click && in_view && tab==5 && placing_entrance && mesh.entrance){
+            const auto ray=GetScreenToWorldRayEx({GetMousePosition().x-view.x,GetMousePosition().y-view.y},camera,int(view.width),int(view.height));
+            if(std::abs(ray.direction.y)>.0001f){
+                const float t=-ray.position.y/ray.direction.y;
+                if(t>0){auto next=mesh;next.entrance->offset=Vec3(ray.position.x+ray.direction.x*t,0,ray.position.z+ray.direction.z*t);
+                    if(commit(std::move(next)))placing_entrance=false;}
+            }
+        }
         const auto start_decal_move = [&](bool keyboard,bool keep_offset) {
             Vec3 center;
             if (!mesh.decal_center(decal,center)) { move_decal = false; status = "This decal needs a valid wall centre to move."; return; }
@@ -1080,8 +1273,10 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
             }
             rlEnableDepthMask(); rlEnableDepthTest();
         }
+        if(!interior && mesh.entrance){rlDrawRenderBatchActive();rlDisableDepthTest();draw_entrance_marker(mesh.entrance->offset);rlEnableDepthTest();}
+        if(interior)draw_entrance_marker(interior->exit());
         EndMode3D(); EndTextureMode();
-        BeginDrawing(); ui::draw_desktop(); ui::draw_window(window,"Object Builder"); ui::draw_window_close(window);
+        BeginDrawing(); ui::draw_desktop(); ui::draw_window(window,interior ? "Interior Builder / inside-facing spaces" : "Object Builder"); ui::draw_window_close(window);
         DrawTextureRec(preview.texture,{0,0,float(preview.texture.width),-float(preview.texture.height)},{view.x,view.y},WHITE); ui::draw_frame(view,true);
         if ((tab==0 || tab==3) && !slice && !vertices.empty()) { BeginScissorMode(int(view.x),int(view.y),int(view.width),int(view.height)); mesh_gizmo(pivot,camera,view,GetMousePosition(),true,grab ? handle : -1); EndScissorMode(); }
         text(std::to_string(tiles[0])+" x "+std::to_string(tiles[1])+" tiles",view.x+10,view.y+10,16,ui::highlight);
@@ -1102,9 +1297,12 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
         if (!grab && click && hit(name_box)) field = 0;
         if (field==0) { input(mesh.name,name_box); if (IsKeyPressed(KEY_ENTER) || (click && !hit(name_box))) field = -1; }
         else { ui::draw_panel(name_box,true,ui::highlight); text(fit(mesh.name,18,286),96,93); }
-        text("Type",20,135,16,accent);
-        if (control({84,130,145,24},"Object",mesh.type==ObjectType::Object) && mesh.type!=ObjectType::Object) {auto next=mesh;next.type=ObjectType::Object;commit(std::move(next));}
-        if (control({239,130,155,24},"Building",mesh.type==ObjectType::Building) && mesh.type!=ObjectType::Building) {auto next=mesh;next.type=ObjectType::Building;commit(std::move(next));}
+        if(interior)text("Interior shell / inside faces",20,135,16,accent);
+        else {
+            text("Type",20,135,16,accent);
+            if (control({84,130,145,24},"Object",mesh.type==ObjectType::Object) && mesh.type!=ObjectType::Object) {auto next=mesh;next.type=ObjectType::Object;next.entrance.reset();commit(std::move(next));}
+            if (control({239,130,155,24},"Building",mesh.type==ObjectType::Building) && mesh.type!=ObjectType::Building) {auto next=mesh;next.type=ObjectType::Building;commit(std::move(next));}
+        }
         int width = tiles[0], depth = tiles[1]; bool resized = false;
         const auto stepper = [&](const char* label,int& value,float y,int id) {
             text(label,20,y+5,17); const Rectangle box{150,y,152,30};
@@ -1213,6 +1411,25 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
                     if (changed) selected = {};
                 }
             }
+        } else if(tab==5 && !interior) {
+            scroll_tools(256);
+            text("Entrance belongs to this building design.",20,292-tool_scroll,14);
+            if(choose(20,324,370,mesh.entrance ? "Choose / change interior" : "Choose interior"))choose_entrance=true;
+            if(mesh.entrance){
+                if(entrance_label_id!=mesh.entrance->interior){
+                    entrance_label_id=mesh.entrance->interior;Interior linked;std::string issue;
+                    entrance_label=Interior::load(directory.parent_path()/"interiors"/(entrance_label_id+".interior"),linked,issue) ? linked.name : "Missing interior / choose another";
+                }
+                text(fit("Interior: "+entrance_label,14,360),20,360-tool_scroll,14);
+                float x=next.entrance->offset.GetX(),z=next.entrance->offset.GetZ();
+                changed|=number("Marker X m",x,390,61,-4096,4096);
+                changed|=number("Marker Z m",z,426,62,-4096,4096);
+                next.entrance->offset=Vec3(x,0,z);
+                if(choose(20,468,180,"Place in preview",placing_entrance))placing_entrance=!placing_entrance;
+                if(choose(210,468,180,"Remove entrance")){next.entrance.reset();next.entrance_configured=true;changed=true;placing_entrance=false;}
+                text("Position the marker in this building preview.",20,510-tool_scroll,14);
+            }
+            EndScissorMode();
         } else if (tab==3) {
             scroll_tools(part_page==0 ? 392.f : 530.f);
             if (choose(20,288,180,"Add shape",part_page==0)) part_page = 0;
@@ -1361,13 +1578,30 @@ std::optional<BuildingMesh> building_builder(BuildingMesh mesh,const std::filesy
             save_design();
         }
         const bool use = control({210,height-122,180,36},"Save and close",true) || command==MenuCommand::UseBuilding;
+        if(interior)choose_furniture=control({view.x,height-122,210,36},"Furniture / camera");
+        else if(mesh.type==ObjectType::Building && control({view.x,height-122,180,36},"Entrance",tab==5)){tab=5;field=-1;tool_scroll=0;}
         const bool cancel = control({view.x+view.width-142,height-122,142,36},"Close");
         text(fit(status,17,GetScreenWidth()-40.f),20,height-49,17,accent); menu.draw(menu_state);
-        text("OBJECT BUILDER",GetScreenWidth()-212.f,8,16,ink); EndDrawing(); interactive = true;
+        text(interior ? "INTERIOR BUILDER" : "OBJECT BUILDER",GetScreenWidth()-212.f,8,16,ink); EndDrawing(); interactive = true;
         if (!screenshot.empty() && ++frames>=3) { auto capture = LoadImageFromScreen(); ExportImage(capture,screenshot.c_str()); UnloadImage(capture); break; }
         if (cancel) { if (leave()) break; interactive=false; }
         if (use && save_design()) { result = mesh; break; }
-        if (command==MenuCommand::SavedBuildings) {
+        if(choose_entrance){
+            const auto room=saved_picker([&]{return saved_interiors(directory.parent_path()/"interiors",status);},"Choose interior for this building","Choose interior","",status,{}, {},
+                [&]{design_menu(DesignKind::Interior,directory.parent_path(),{},true);});
+            if(room){auto next=mesh;next.entrance=BuildingEntrance{room->id,mesh.entrance ? mesh.entrance->offset : Vec3(0,0,-mesh.size.GetZ()/2-1.5f)};next.entrance_configured=true;commit(std::move(next));}
+            interactive=false;continue;
+        }
+        if(choose_furniture && interior){
+            if(const auto room=furnish_interior(interior_draft(),directory,{})){*interior=*room;mesh=room->surface_mesh();preview_dirty=true;status="Furniture updated / save the interior to keep changes.";}
+            interactive=false;continue;
+        }
+        if(command==MenuCommand::Interiors && interior){
+            const auto loaded=saved_picker([&]{return saved_interiors(directory.parent_path()/"interiors",status);},"Saved interiors","Open interior",mesh.name,status,directory.parent_path()/"interiors");
+            if(loaded && leave()){*interior=*loaded;mesh=interior->surface_mesh();original=snapshot(mesh);original_interior=snapshot(interior_draft());undo.clear();redo.clear();selected={};tab=0;slice=false;preview_dirty=true;}
+            interactive=false;field=slider_drag=-1;
+        }
+        if (command==MenuCommand::SavedBuildings && !interior) {
             const auto loaded=saved_picker([&]{return saved_buildings(directory,status);},"Saved objects and buildings","Open design",mesh.name,status,directory);
             if (loaded && leave()) { mesh=*loaded; align(mesh); original=snapshot(mesh); undo.clear(); redo.clear(); selected={}; tab=0; slice=false; preview_dirty=true; }
             interactive=false; field=slider_drag=-1;
@@ -1627,7 +1861,7 @@ std::optional<CharacterDesign> character_builder(CharacterDesign design,const st
 bool main_menu(City& city,const std::filesystem::path& directory,ControllerMapping& controls,GraphicsSettings& graphics,const std::string& screenshot) {
     EnableCursor(); SetWindowTitle("Ambaretto - Main menu");
     const char* home[]={"Play", "Create / edit", "Settings", "Quit"};
-    const char* editors[]={"Cities", "Object Builder", "Cars", "Characters", "Back"};
+    const char* editors[]={"Cities", "Object Builder", "Cars", "Characters", "Interiors", "Back"};
     int selection=0,frames=0; bool interactive=false,editing=false;
     MenuBar menu(MenuMode::Main);
     const auto mapping_path=directory.parent_path()/"controller-mappings.ini";
@@ -1641,7 +1875,7 @@ bool main_menu(City& city,const std::filesystem::path& directory,ControllerMappi
         if (active && IsKeyPressed(KEY_UP)) selection=(selection+count-1)%count;
         int chosen=active && IsKeyPressed(KEY_ENTER) ? selection : -1;
         const float height=164.f+count*56;
-        const Rectangle r{(GetScreenWidth()-620)/2.f,(GetScreenHeight()-height)/2.f,620,height};
+        const Rectangle r{(GetScreenWidth()-620)/2.f,(GetScreenHeight()-(editing ? 444.f : height))/2.f,620,height};
         BeginDrawing(); ui::draw_desktop(); ui::draw_window(r,editing ? "Create / edit" : "Ambaretto / Main menu"); ui::draw_window_close(r);
         text(editing ? "Choose an editor" : "Play a city or create something new",r.x+24,r.y+48,19,accent);
         for (int i=0;i<count;++i) {
@@ -1656,7 +1890,7 @@ bool main_menu(City& city,const std::filesystem::path& directory,ControllerMappi
         if (!screenshot.empty() && ++frames>=3) {auto image=LoadImageFromScreen(); ExportImage(image,screenshot.c_str()); UnloadImage(image); return false;}
         if (command==MenuCommand::Controls || command==MenuCommand::About) {menu.show(command); interactive=false; continue;}
         if (command==MenuCommand::Quit || (!editing && (back || chosen==3))) return false;
-        if ((editing && (back || chosen==4)) || command==MenuCommand::Editors || (!editing && chosen==1)) {
+        if ((editing && (back || chosen==5)) || command==MenuCommand::Editors || (!editing && chosen==1)) {
             editing=command==MenuCommand::Editors || (!editing && chosen==1); selection=0;
         } else if (command==MenuCommand::Graphics || command==MenuCommand::Controllers) {
             settings_menu(controls,graphics,{},command);
@@ -1689,6 +1923,13 @@ void design_menu(DesignKind kind,const std::filesystem::path& root,const std::st
         const auto build=[&](CarDesign value){car_builder(std::move(value),root/"cars",screenshot);};
         if (create_new) build(design);
         else open_design_menu([&]{return saved_cars(root/"cars",error);},"Cars / Create or open",root/"cars",error,screenshot,build);
+    } else if (kind==DesignKind::Interior) {
+        SetWindowTitle("Ambaretto - Interiors");
+        for(const auto& city:saved_cities(root/"cities",error))for(const auto& room:city.interiors)
+            if(!std::filesystem::exists(root/"interiors"/(room.id+".interior")))room.save(root/"interiors",error);
+        const auto build=[&](Interior room){interior_builder(std::move(room),root/"buildings",screenshot);};
+        if(create_new)build({});
+        else open_design_menu([&]{return saved_interiors(root/"interiors",error);},"Interiors / Create or open",root/"interiors",error,screenshot,build);
     } else if (kind==DesignKind::Character) {
         SetWindowTitle("Ambaretto - Characters"); CharacterDesign design;
         const auto build=[&](CharacterDesign value){character_builder(std::move(value),root/"characters",screenshot);};
@@ -1947,9 +2188,13 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
     const auto cars = saved_cars(directory.parent_path()/"cars",library_error);
     City refreshed = city;
     const auto characters=saved_characters(characters_directory,library_error);
-    bool designs_changed=refreshed.update_player_character(characters);
+    for(const auto& room:city.interiors)if(!std::filesystem::exists(directory.parent_path()/"interiors"/(room.id+".interior")))room.save(directory.parent_path()/"interiors",library_error);
+    const auto interior_library=saved_interiors(directory.parent_path()/"interiors",library_error);
+    bool designs_changed=update_city_interiors(refreshed,interior_library,update_error);
+    designs_changed|=refreshed.update_player_character(characters);
     designs_changed|=refreshed.update_car_designs(cars,update_error)>0;
     for (const auto& design : designs) {
+        if(design.entrance)designs_changed|=update_city_interiors(refreshed,interior_library,update_error,design.entrance->interior);
         std::string error; const int count=refreshed.update_building_design(design,error);
         if (count<0) update_error+=design.name+": "+error+"; "; else designs_changed|=count>0;
     }
@@ -2019,10 +2264,13 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         }
         if (command==MenuCommand::RefreshDesigns) {
             City next=city; std::string errors, issue;
-            bool changed=next.update_player_character(saved_characters(characters_directory,status));
+            const auto interiors=saved_interiors(directory.parent_path()/"interiors",status);
+            bool changed=update_city_interiors(next,interiors,issue);
+            changed|=next.update_player_character(saved_characters(characters_directory,status));
             changed|=next.update_car_designs(saved_cars(directory.parent_path()/"cars",status),issue)>0;
             errors=issue;
             for (const auto& design : saved_buildings(buildings_directory,status)) {
+                if(design.entrance)changed|=update_city_interiors(next,interiors,issue,design.entrance->interior);
                 const int count=next.update_building_design(design,issue);
                 if (count<0) errors+=design.name+": "+issue+"; "; else changed|=count>0;
                 if (building_mesh && building_mesh->name==design.name) building_mesh=design;
@@ -2328,6 +2576,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         if (preview_renderer) preview_renderer->draw(camera,float(GetTime()),preview_day.lighting(),lighting,graphics);
         car_renderer.set_lighting(lighting,camera,preview_day.lighting(),graphics);
         draw_city(city,grid,car_renderer,camera);
+        draw_city_entrances(city,Vec3(camera.target.x,camera.target.y,camera.target.z),6000);
         if(live_building && placement_ready) {
             const auto p=live_building->base(City::level);
             const Matrix transform=MatrixMultiply(MatrixRotateY((live_building->yaw+live_building->rotation*90)*PI/180),MatrixTranslate(p.GetX(),p.GetY(),p.GetZ()));
@@ -2497,7 +2746,7 @@ EditorResult editor(City& city,const std::filesystem::path& directory,const std:
         EndDrawing();
         if (choose_building) {
             const auto chosen=saved_picker([&]{return saved_buildings(buildings_directory,status);},"Choose an object or building","Choose design",building_mesh ? building_mesh->name : "",status,buildings_directory);
-            if (chosen) {building_mesh=*chosen; choose_tool(3); status="Click the map to place "+chosen->name;}
+            if (chosen) {City next=city;if(update_city_interiors(next,saved_interiors(directory.parent_path()/"interiors",status),status,chosen->entrance ? chosen->entrance->interior : ""))commit(std::move(next));building_mesh=*chosen; choose_tool(3); status="Click the map to place "+chosen->name;}
             painting=dragging=false; first_frame=true; continue;
         }
         if (car_request) {

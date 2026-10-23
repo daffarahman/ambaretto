@@ -43,7 +43,7 @@ FetchContent_Declare(Jolt
 )
 FetchContent_MakeAvailable(Jolt)
 
-add_library(vehicle_physics src/vehicle.cpp src/environment.cpp src/city.cpp src/city_path.cpp src/freeform_city.cpp src/building_mesh.cpp src/car_design.cpp src/character_design.cpp src/player.cpp src/traffic.cpp src/pedestrians.cpp src/third_person_camera.cpp src/weapons.cpp src/police.cpp src/play_session.cpp src/race.cpp)
+add_library(vehicle_physics src/vehicle.cpp src/environment.cpp src/city.cpp src/city_path.cpp src/freeform_city.cpp src/building_mesh.cpp src/interior.cpp src/car_design.cpp src/character_design.cpp src/player.cpp src/traffic.cpp src/pedestrians.cpp src/third_person_camera.cpp src/weapons.cpp src/police.cpp src/play_session.cpp src/race.cpp)
 target_include_directories(vehicle_physics PUBLIC include)
 target_include_directories(vehicle_physics SYSTEM PUBLIC $<TARGET_PROPERTY:Jolt,INTERFACE_INCLUDE_DIRECTORIES>)
 target_link_libraries(vehicle_physics PUBLIC Jolt)
@@ -51,7 +51,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vehicle_physics PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_executable(Ambaretto src/main.cpp src/city_editor.cpp src/environment_renderer.cpp src/building_renderer.cpp src/car_renderer.cpp src/character_renderer.cpp src/tuning_panel.cpp src/ui_font.cpp src/controller_mapping.cpp src/menu_bar.cpp src/graphics_settings.cpp src/graphics_panel.cpp src/scene_lighting.cpp src/vehicle_audio.cpp src/hud_dials.cpp src/sky_renderer.cpp)
+add_executable(Ambaretto src/main.cpp src/city_editor.cpp src/interior_ui.cpp src/environment_renderer.cpp src/building_renderer.cpp src/car_renderer.cpp src/character_renderer.cpp src/tuning_panel.cpp src/ui_font.cpp src/controller_mapping.cpp src/menu_bar.cpp src/graphics_settings.cpp src/graphics_panel.cpp src/scene_lighting.cpp src/vehicle_audio.cpp src/hud_dials.cpp src/sky_renderer.cpp)
 target_link_libraries(Ambaretto PRIVATE vehicle_physics PkgConfig::RAYLIB PkgConfig::GLFW)
 # Keep runtime assets beside the executable, including after model/texture edits.
 add_custom_target(Ambaretto_assets ALL
@@ -67,6 +67,9 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(interior_tests tests/interior_tests.cpp)
+    target_link_libraries(interior_tests PRIVATE vehicle_physics)
+    add_test(NAME interiors COMMAND interior_tests)
     add_executable(race_tests tests/race_tests.cpp)
     target_link_libraries(race_tests PRIVATE vehicle_physics)
     add_test(NAME road_races COMMAND race_tests)

@@ -90,6 +90,11 @@ int main(int argc, char** argv) {
         const MenuCommand vehicle_actions[] = {MenuCommand::PlaceTrainer,MenuCommand::PlaceF18,MenuCommand::PlaceBoeing};
         for (int i = 0; i<int(std::size(vehicle_actions)); ++i) dispatch_object(3,i,vehicle_actions[i]);
         dispatch(4,4,MenuCommand::RotateObject);
+        for (auto mode:{MenuMode::Editor,MenuMode::PlayEditor}) {
+            MenuBar city_menu(mode);city_menu.open(4);input={};input.vertical=-1;city_menu.update(state,input);
+            input={};input.enter=true;
+            require(city_menu.update(state,input)==MenuCommand::RotateObject,"City Objects menu still contains interior editing entries");
+        }
         editor.open(4); input={}; input.horizontal=1; editor.update(state,input);
         input={}; input.vertical=-1; editor.update(state,input); input={}; input.enter=true;
         require(editor.update(state,input)==MenuCommand::TreesBrush,"Right arrow did not open Trees or Up did not wrap its children");
@@ -126,6 +131,8 @@ int main(int argc, char** argv) {
             require(bar.update({},accept)==expected,"Menu category dispatched the wrong action");
         };
         dispatch_menu(MenuMode::Creator,0,2,MenuCommand::SavedBuildings);
+        dispatch_menu(MenuMode::InteriorCreator,0,0,MenuCommand::NewInterior);
+        dispatch_menu(MenuMode::InteriorCreator,0,2,MenuCommand::Interiors);
         dispatch_menu(MenuMode::CarCreator,0,2,MenuCommand::SavedCars);
         dispatch_menu(MenuMode::CharacterCreator,0,2,MenuCommand::SavedCharacters);
         dispatch_menu(MenuMode::Main,0,0,MenuCommand::PlayCity);

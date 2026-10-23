@@ -80,6 +80,7 @@ public:
     void notify_player_kill();
     bool take_player_kill();
     float camera_fraction(const Vec3& origin, const Vec3& offset, JPH::BodyID ignore = {}) const;
+    void add_static_mesh(const std::vector<std::array<Vec3,3>>& triangles);
 private:
     friend class Car;
     friend class Character;

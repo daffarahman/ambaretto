@@ -860,7 +860,7 @@ int City::update_building_design(const BuildingMesh& mesh, std::string& error, i
         auto& building = next.buildings[i];
         if (i != replace && (!building.mesh || building.mesh->name != mesh.name)) continue;
         if (building.mesh && encoded(*building.mesh) == definition) continue;
-        building.mesh = mesh; ++changed;
+        building.mesh = mesh; if(mesh.entrance || mesh.entrance_configured)building.entrance.reset(); ++changed;
     }
     if (changed) {
         next.clear_trees();
@@ -1020,7 +1020,7 @@ bool City::validate(std::string& error) const {
         if (!race_names.insert(race.name).second) return fail(error,"Race names must be unique in this city.");
         if (!build_race_route(*this,race,route,error)) { error=race.name+": "+error; return false; }
     }
-    return true;
+    return validate_interiors(*this,error);
 }
 std::vector<std::vector<Vec3>> City::traffic_routes(float curb_inset) const {
     if (freeform) return path_traffic_routes(curb_inset);
@@ -1204,13 +1204,13 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
     const bool free_spawn=spawn && (spawn->GetX()!=center(cell(spawn->GetX(),spawn->GetZ())).GetX()
         || spawn->GetZ()!=center(cell(spawn->GetX(),spawn->GetZ())).GetZ());
     const bool typed_objects=std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh && b.mesh->type==ObjectType::Object;});
-    const int version = typed_objects ? 20 : freeform ? 19 : !races.empty() ? 18 : road_style!=RoadStyle{} ? 17 : free_spawn ? 16 : pedestrian_density!=100 ? 15 : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh.has_value();}) ? 14
+    const int version = !interiors.empty() ? 22 : typed_objects ? 20 : freeform ? 19 : !races.empty() ? 18 : road_style!=RoadStyle{} ? 17 : free_spawn ? 16 : pedestrian_density!=100 ? 15 : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.mesh.has_value();}) ? 14
         : player_character ? 13 : !ground_textures.empty() ? 12 : std::any_of(vehicles.begin(),vehicles.end(),[](const auto& v){return v.car.has_value();}) ? 11
         : std::any_of(buildings.begin(),buildings.end(),[](const auto& b){return b.rotation!=0;}) ? 9
         : 6;
     file << "AMBARETTO_CITY " << version << '\n' << id << '\n' << std::quoted(name) << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10);
     if (version>=20) file << int(freeform) << '\n';
-    if (freeform) write_paths(file,version>=20 ? 4 : 3);
+    if (freeform) write_paths(file,version>=22 ? 5 : version>=20 ? 4 : 3);
     else {
     for (auto t : tiles) file << char('0'+int(t));
     file << '\n' << buildings.size() << '\n';
@@ -1219,7 +1219,7 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
         if (version>=7) file << ' ' << int(b.mesh.has_value());
         if (version>=9) file << ' ' << b.rotation;
         file << '\n';
-        if (b.mesh) b.mesh->write(file,version>=20 ? 4 : 3);
+        if (b.mesh) b.mesh->write(file,version>=22 ? 5 : version>=20 ? 4 : 3);
     }
     file << vehicles.size() << '\n';
     for (const auto& v : vehicles) {
@@ -1253,6 +1253,7 @@ bool City::save(const std::filesystem::path& directory, std::string& error) cons
         }
     }
     }
+    if (version>=21) write_interiors(file,*this);
     file.close();
     if (!file) return fail(error,"Cannot finish saving. Your previous save is intact.");
     if (std::filesystem::file_size(temporary,ec)>64*1024*1024 || ec)
@@ -1269,7 +1270,7 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
     std::error_code ec;
     if (std::filesystem::file_size(path,ec) > 64*1024*1024 || ec) return fail(error,"City save is missing or too large.");
     std::ifstream file(path); City read; std::string magic, terrain; int version = 0;
-    if (!(file >> magic >> version >> read.id >> std::quoted(read.name)) || magic != "AMBARETTO_CITY" || version<1 || version>20)
+    if (!(file >> magic >> version >> read.id >> std::quoted(read.name)) || magic != "AMBARETTO_CITY" || version<1 || version>22)
         return fail(error,"Invalid or unsupported city save.");
     if (version>=20) {
         int freeform;
@@ -1277,7 +1278,8 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
         read.freeform=freeform!=0;
     }
     if (version==19 || read.freeform) {
-        if (!read_paths(file,read,error,version>=20 ? 4 : 3)) return false;
+        if (!read_paths(file,read,error,version>=22 ? 5 : version>=20 ? 4 : 3)) return false;
+        if (version>=21 && !read_interiors(file,read,error,version>=22 ? 2 : 1)) return false;
         std::string extra;
         if (file>>extra) return fail(error,"Unexpected city data.");
         if (path.stem().string()!=read.id) return fail(error,"City save identifier does not match its filename.");
@@ -1298,7 +1300,7 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
             int custom;
             if (!(file>>custom) || custom<0 || custom>1) return fail(error,"Invalid building mesh flag.");
             if (version>=9 && (!(file>>b.rotation) || b.rotation<0 || b.rotation>3)) return fail(error,"Invalid building rotation.");
-            if (custom) { b.mesh.emplace(); if (!BuildingMesh::read(file,*b.mesh,error,version>=20 ? 4 : version>=14 ? 3 : version>=8 ? 2 : 1)) return false; }
+            if (custom) { b.mesh.emplace(); if (!BuildingMesh::read(file,*b.mesh,error,version>=22 ? 5 : version>=20 ? 4 : version>=14 ? 3 : version>=8 ? 2 : 1)) return false; }
         }
         read.buildings.push_back(std::move(b));
     }
@@ -1445,6 +1447,7 @@ bool City::load(const std::filesystem::path& path, City& city, std::string& erro
             || std::abs(t.base.GetX())>=extent || std::abs(t.base.GetZ())>=extent) return fail(error,"Invalid tree position.");
         t.base.SetY(read.height(t.base.GetX(),t.base.GetZ()));
     }
+    if (version>=21 && !read_interiors(file,read,error,version>=22 ? 2 : 1)) return false;
     std::string extra; if (file >> extra) return fail(error,"Unexpected city data.");
     if (path.stem().string() != read.id) return fail(error,"City save identifier does not match its filename.");
     if (!read.validate(error)) {

@@ -18,6 +18,7 @@
 #include "minimap.hpp"
 #include "hud_dials.hpp"
 #include "play_session.hpp"
+#include "interior_ui.hpp"
 #include "race.hpp"
 #include <string>
 #include <raylib.h>
@@ -669,6 +670,8 @@ int main(int argc, char** argv) {
         auto cars = ambaretto::saved_cars(cities_directory.parent_path()/"cars",car_error);
         selected_city.update_car_designs(cars,car_update_error);
         try {
+        std::string interior_error;
+        ambaretto::update_city_interiors(selected_city,ambaretto::saved_interiors(cities_directory.parent_path()/"interiors",interior_error),interior_error);
         const ambaretto::Environment environment(selected_city);
         ambaretto::EnvironmentRenderer scenery(environment);
         ambaretto::TuningPanel tuning_panel;
@@ -792,6 +795,8 @@ int main(int argc, char** argv) {
         };
         bool cities_requested = false;
         bool first_game_frame = true;
+        bool entrance_ready = true;
+        float exterior_fade = 0;
         while (!cities_requested && !WindowShouldClose()) {
             const float elapsed = GetFrameTime(), frame = std::min(elapsed, 0.1f);
             shot_flash = std::max(0.f, shot_flash - frame);
@@ -1001,6 +1006,26 @@ int main(int argc, char** argv) {
                 if (progress_save_time >= 30) { save_progress(); progress_save_time = 0; }
             }
             if (active && screenshot.empty()) {
+                const ambaretto::CityBuilding* entrance=nullptr;
+                if (scene->player.on_foot() && scene->player.character().alive() && !scene->player.character().ragdolling()
+                    && !scene->police.arrested()) for (const auto& building:selected_city.buildings)
+                    if (ambaretto::building_entrance(building) && ambaretto::near_interior_marker(scene->player.position(),ambaretto::entrance_position(selected_city,building))) { entrance=&building; break; }
+                if (!entrance) entrance_ready=true;
+                if (entrance && entrance_ready) {
+                    const auto found=std::find_if(selected_city.interiors.begin(),selected_city.interiors.end(),[&](const auto& room){return room.id==ambaretto::building_entrance(*entrance)->interior;});
+                    entrance_ready=false;
+                    if (found!=selected_city.interiors.end()) {
+                        const float volume=GetMasterVolume(); SetMasterVolume(0);
+                        try { ambaretto::visit_interior(*found,scene->player.character(),controls,graphics); notice="Left "+found->name; }
+                        catch (const std::exception& error) { notice=error.what(); }
+                        SetMasterVolume(volume);
+                        SetWindowTitle(("Ambaretto - "+selected_city.name).c_str());
+                        notice_time=4; exterior_fade=1; discard_mouse=true; jump_pending=fire_pending=false;
+                        accumulator=0; suppress_fire=true; weapon_wheel=false; snap_camera(); first_game_frame=true;
+                        captured=IsWindowFocused(); if (captured) DisableCursor(); else EnableCursor();
+                        continue;
+                    }
+                }
                 const bool armed = scene->player.on_foot() && scene->player.weapons().selected() != ambaretto::WeaponType::Unarmed;
                 const bool reload_pressed = controls.pressed(Action::Reload) && scene->player.can_shoot() && armed && !weapon_wheel;
                 if (reload_pressed) scene->player.weapons().reload();
@@ -1344,6 +1369,7 @@ int main(int argc, char** argv) {
                         ambaretto::Race::checkpoint_radius,ambaretto::Race::checkpoint_radius,48,{255,203,0,128});
                     rlDrawRenderBatchActive(); rlEnableDepthMask();
                 }
+                ambaretto::draw_city_entrances(selected_city,scene->player.position(),100);
                 EndMode3D();
                 if (kill_flash > 0) DrawRectangle(0, ambaretto::menu_height, GetScreenWidth(), GetScreenHeight() - ambaretto::menu_height,
                     {150, 150, 150, static_cast<unsigned char>(110 * kill_flash / .18f)});
@@ -1449,6 +1475,10 @@ int main(int argc, char** argv) {
             }
             ambaretto::MenuState menu_state; menu_state.race=scene->player.driving() && !scene->race;
             menu.draw(controls, mapping_path,menu_state);
+            if (exterior_fade>0) {
+                exterior_fade=std::max(0.f,exterior_fade-frame/.25f);
+                DrawRectangle(0,0,GetScreenWidth(),GetScreenHeight(),Fade(BLACK,exterior_fade));
+            }
             EndDrawing();
             first_game_frame = false; // Consume the key that returned from an editor or menu.
             if (!screenshot.empty() && ++rendered_frames >= 90) {

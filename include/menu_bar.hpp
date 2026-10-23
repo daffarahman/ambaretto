@@ -18,9 +18,10 @@ enum class MenuCommand {
     Editors, SavedCars, SavedCharacters, DuplicateCity, CitySettings, EditMap, Restart, PanView, PlainBuilding, RoadEditor,
     Races, NewRace, StartRace,
     ObjectSingle, ObjectBrush, ObjectBrushSmaller, ObjectBrushLarger, ObjectSparse, ObjectMedium, ObjectDense,
-    TreesSingle, TreesBrush
+    TreesSingle, TreesBrush,
+    NewInterior, Interiors
 };
-enum class MenuMode { Game, Editor, Cities, Creator, CarCreator, CharacterCreator, Main, PlayEditor };
+enum class MenuMode { Game, Editor, Cities, Creator, CarCreator, CharacterCreator, Main, PlayEditor, InteriorCreator };
 struct MenuState {
     bool undo = false, redo = false, play = true, selection = false, building_selection = false, top = false, grid = true;
     int tool = -1, vehicle = 0, density = 2;

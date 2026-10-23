@@ -1,6 +1,7 @@
 #pragma once
 #include "vehicle.hpp"
 #include "building_mesh.hpp"
+#include "interior.hpp"
 #include "character_design.hpp"
 #include "city_path.hpp"
 #include <array>
@@ -32,8 +33,9 @@ struct CityBuilding {
     int rotation = 0;
     std::optional<Vec3> position;
     float yaw = 0; // Degrees, continuous in the freeform editor.
+    std::optional<BuildingEntrance> entrance;
     CityCell footprint() const { if (!mesh) return {size,size}; const auto tiles = mesh->footprint(); return rotation%2 ? CityCell{tiles[1],tiles[0]} : CityCell{tiles[0],tiles[1]}; }
-    BuildingMesh shape() const { BuildingMesh result = mesh.value_or(BuildingMesh{}); if (!mesh) result.size = Vec3(size*11.2f,float(height),size*11.2f); return result; }
+    BuildingMesh shape() const { BuildingMesh result = mesh.value_or(BuildingMesh{}); if (!mesh) result.size = Vec3(size*11.2f,float(height),size*11.2f); if (entrance && !result.entrance && !result.entrance_configured) {result.entrance=entrance;result.type=ObjectType::Building;} return result; }
     Vec3 base(float ground) const;
     std::vector<Vec3> points(float ground) const;
     std::vector<BuildingTriangle> triangles(float ground) const;
@@ -105,6 +107,7 @@ struct City {
     // Stroke axes: 1 = north/south, 2 = east/west, 3 = crossing or bend.
     std::array<unsigned char, width * width> road_axes{};
     std::vector<CityBuilding> buildings;
+    std::vector<Interior> interiors;
     std::vector<CityVehicle> vehicles;
     std::vector<Tree> trees;
     std::vector<RaceMap> races;
@@ -201,7 +204,7 @@ struct City {
     static City create(std::string name);
     bool generate_terrain(int tiles_x, int tiles_z, std::uint32_t seed, std::string& error, TerrainSettings settings = {});
 };
-enum class DesignKind { Building, Car, Character };
+enum class DesignKind { Building, Car, Character, Interior };
 bool edit_current_city(City& city, const std::filesystem::path& directory, bool car_only = false, bool create_race = false);
 // -1 returns, -2 opens the map editor to create a race.
 int choose_race(const City& city, bool editing = false);
@@ -215,5 +218,6 @@ bool city_menu(City& selected, const std::filesystem::path& directory, Controlle
                bool preview_editor = false, MenuCommand initial_settings = {});
 std::optional<BuildingMesh> building_builder(BuildingMesh mesh, const std::filesystem::path& directory,
                                            const std::string& screenshot = {}, int initial_tab = 0,
-                                           std::vector<BuildingMesh>* saved_designs = nullptr);
+                                           std::vector<BuildingMesh>* saved_designs = nullptr, Interior* interior = nullptr);
+std::optional<Interior> interior_builder(Interior room, const std::filesystem::path& objects_directory, const std::string& screenshot = {});
 } // namespace ambaretto

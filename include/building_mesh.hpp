@@ -3,6 +3,7 @@
 #include <array>
 #include <filesystem>
 #include <iosfwd>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,10 @@ struct BuildingTriangle {
     bool repeat = false;
     int decal_index = -1;
 };
+struct BuildingEntrance {
+    std::string interior;
+    Vec3 offset = Vec3::sZero();
+};
 struct BuildingMesh {
     std::string name = "New building", texture;
     ObjectType type = ObjectType::Building;
@@ -52,13 +57,15 @@ struct BuildingMesh {
     std::vector<BuildingFace> faces{{{0,3,2,1}},{{4,5,6,7}},{{0,4,7,3}},{{1,2,6,5}},{{3,7,6,2}},{{0,1,5,4}}};
     std::vector<BuildingDecal> decals;
     std::vector<std::string> materials;
+    std::optional<BuildingEntrance> entrance;
+    bool entrance_configured = false; // Distinguishes removal from older designs with city-local entrances.
     static constexpr int max_vertices = 4096, max_faces = 8192, max_tiles = 128;
     static constexpr float tile_size = 11.2f, max_height = 120.f;
     std::array<int,2> footprint() const;
     bool set_footprint(int width,int depth,std::string& error,bool preserve_geometry = false);
     std::vector<Vec3> points(Vec3 base = Vec3::sZero()) const;
     std::vector<std::array<int,2>> edges() const;
-    std::vector<BuildingTriangle> triangles(Vec3 base = Vec3::sZero()) const;
+    std::vector<BuildingTriangle> triangles(Vec3 base = Vec3::sZero(), bool inward = false) const;
     bool fit_bounds(std::string& error);
     bool move_vertices(const std::vector<int>& selection,Vec3 delta,std::string& error);
     int add_vertex(Vec3 position,std::string& error);
@@ -90,8 +97,8 @@ struct BuildingMesh {
     int duplicate_decal(int decal,BuildingUV offset,std::string& error);
     bool repeat_decal(int decal,int count,float spacing_m,bool vertical,std::string& error);
     bool validate(std::string& error) const;
-    void write(std::ostream& stream, int version = 4) const;
-    static bool read(std::istream& stream, BuildingMesh& mesh, std::string& error,int version = 4);
+    void write(std::ostream& stream, int version = 5) const;
+    static bool read(std::istream& stream, BuildingMesh& mesh, std::string& error,int version = 5);
     bool save(const std::filesystem::path& directory, std::string& error) const;
     static bool load(const std::filesystem::path& path, BuildingMesh& mesh, std::string& error);
 };

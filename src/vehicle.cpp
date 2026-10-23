@@ -174,6 +174,19 @@ PhysicsWorld::PhysicsWorld(bool with_ridges) {
 
 PhysicsWorld::~PhysicsWorld() = default;
 
+void PhysicsWorld::add_static_mesh(const std::vector<std::array<Vec3,3>>& triangles) {
+    JPH::TriangleList faces;
+    for (const auto& t:triangles) {
+        const auto point=[](Vec3 p){return JPH::Float3(p.GetX(),p.GetY(),p.GetZ());};
+        faces.emplace_back(point(t[0]),point(t[1]),point(t[2]));
+    }
+    const auto shape=JPH::MeshShapeSettings(faces).Create();
+    if (shape.HasError()) throw std::runtime_error(shape.GetError().c_str());
+    JPH::BodyCreationSettings settings(shape.Get(),Vec3::sZero(),Quat::sIdentity(),JPH::EMotionType::Static,obstacle_layer);
+    settings.mFriction=.8f;
+    impl_->add_body(settings);
+}
+
 PhysicsWorld::PhysicsWorld(const Environment& environment) {
     initialize_jolt();
     impl_ = std::make_unique<Impl>();
