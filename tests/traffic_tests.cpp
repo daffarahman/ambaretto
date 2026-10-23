@@ -65,7 +65,7 @@ void roads_and_driving() {
             require(car.rotate(Vec3::sAxisY()).GetY() > .5f, "traffic overturned on its route");
             if (traffic.cars()[i].npc && car.simulated()) ++physical;
         }
-        require(physical <= 48, "new highway traffic exceeded its physical simulation budget");
+        require(physical <= Traffic::physical_limit, "new highway traffic exceeded its physical simulation budget");
     }
     std::cout << "Road samples: " << road_samples << '/' << total_samples << "; travel:";
     for (std::size_t i = 0; i < 8; ++i) std::cout << ' ' << traveled[i];
@@ -169,8 +169,9 @@ void braking_and_theft() {
 void isolate(Traffic& traffic, std::size_t keep = 0) {
     for (std::size_t i = 0; i < traffic.cars().size(); ++i) {
         if (i == keep) continue;
-        traffic.steal(*traffic.cars()[i].car);
         traffic.cars()[i].car->set_simulated(false);
+        traffic.steal(*traffic.cars()[i].car);
+        traffic.cars()[i].car->reset({8000,-10,8000});
     }
     traffic.cars()[keep].car->set_simulated(true);
 }

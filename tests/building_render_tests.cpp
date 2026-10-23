@@ -64,11 +64,15 @@ void camera_culling(RenderTexture2D target) {
         if (z < 0) { std::swap(triangle.points[1],triangle.points[2]); std::swap(triangle.uv[1],triangle.uv[2]); }
         triangles.push_back(std::move(triangle));
     }
+    for (auto triangle : quad("trim.png",false,0,2)) {
+        for (auto& point : triangle.points) point = Vec3(point.GetX()+350,point.GetZ()+2,20);
+        triangles.push_back(std::move(triangle));
+    }
     BuildingRenderer renderer; std::string error;
     require(renderer.build(triangles,error),error);
     Camera3D camera{{20,2,0},{20,2,-1},{0,1,0},60,CAMERA_PERSPECTIVE};
     MeshUploadBudget budget;
-    require(renderer.update_streaming(camera.position,100,budget) && renderer.streaming_stats().resident_chunks == 2,
+    require(renderer.update_streaming(camera.position,100,budget) && renderer.streaming_stats().resident_chunks == 3,
         "Camera fixture did not preload both sides of the player");
     GraphicsSettings settings; settings.shadows = 0; settings.local_lights = false;
     const Daylight daylight = DayNight().lighting(); SceneLighting lighting;
@@ -81,13 +85,14 @@ void camera_culling(RenderTexture2D target) {
     require(renderer.stats().color_draws == 1 && back.r > back.b*2 && back.g > back.b*2,
         "Turning the camera lost a cached building or submitted the building behind it");
     camera.target = {21,2,0}; image = render(renderer,target,camera,daylight,lighting,settings); UnloadImage(image);
-    require(renderer.stats().color_draws == 0 && renderer.streaming_stats().resident_chunks == 2,
+    require(renderer.stats().color_draws == 0 && renderer.streaming_stats().resident_chunks == 3,
         "Looking away submitted off-screen buildings or evicted the camera-turn cache");
     settings.shadows = 1;
-    require(lighting.begin_shadow({20,0,0},daylight,settings),"Camera fixture could not render shadows");
-    renderer.draw_shadow({20,0,0},90); lighting.end_shadow();
-    require(renderer.stats().shadow_draws == 2,"Camera visibility removed off-screen shadow casters");
-    std::cout << "Camera culling: 1/2 building draws facing either wall, 0/2 looking away, both cached and casting shadows\n";
+    auto overhead = daylight; overhead.sun_direction = {0,1,0};
+    require(lighting.begin_shadow({20,0,0},overhead,settings),"Camera fixture could not render shadows");
+    renderer.draw_shadow({20,0,0},600); lighting.end_shadow();
+    require(renderer.stats().shadow_draws == 2,"Shadow culling lost a local caster or submitted a building outside the light volume");
+    std::cout << "Camera culling: one visible wall, none looking away; shadow culling: 2/3 cached chunks\n";
 }
 void building_preview_and_benchmark(RenderTexture2D target,const std::filesystem::path& output) {
     std::string error; BuildingMesh sample; sample.name = "Three part benchmark";
@@ -151,6 +156,7 @@ void building_preview_and_benchmark(RenderTexture2D target,const std::filesystem
     require(stats.gpu_geometry_bytes<=BuildingRenderer::geometry_budget && stats.gpu_texture_bytes<=BuildingRenderer::texture_budget,
         "Benchmark exceeded the eight MiB geometry or texture budget");
     require(stats.array_pages==1 && stats.meshes<=4,"Benchmark used more than four spatial meshes for one texture page");
+    settings.view_distance = 1000;
     const Camera3D camera{{360,250,-100},{128,6,128},{0,1,0},310,CAMERA_ORTHOGRAPHIC};
     for (;;) { MeshUploadBudget budget; if (renderer.update_streaming(camera.position,settings.view_distance,budget)) break; }
     require(renderer.streaming_stats().resident_geometry_bytes==stats.gpu_geometry_bytes,"Building streaming did not upload the visible payload");

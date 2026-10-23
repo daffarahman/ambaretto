@@ -435,9 +435,11 @@ void BuildingRenderer::draw(const Camera3D& camera,const Daylight& daylight,cons
 void BuildingRenderer::draw_shadow(Vector3 focus,float distance) {
     state_->stats.shadow_draws = 0;
     if (!state_->textures) return;
+    const ViewFrustum frustum;
     rlDrawRenderBatchActive();
     int bound = -1;
-    for (const auto& chunk : state_->chunks) if (mesh_resident(chunk.model) && nearby(chunk.center,chunk.radius,focus,distance)) {
+    for (const auto& chunk : state_->chunks) if (mesh_resident(chunk.model) && nearby(chunk.center,chunk.radius,focus,distance)
+        && frustum.visible(chunk.bounds)) {
         if (bound!=chunk.page) { state_->textures->bind(chunk.page); bound = chunk.page; }
         auto material = chunk.model.materials[0]; material.shader = state_->textures->depth;
         DrawMesh(chunk.model.meshes[0],material,chunk.model.transform); ++state_->stats.shadow_draws;

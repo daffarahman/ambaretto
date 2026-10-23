@@ -571,8 +571,8 @@ void traffic_streaming(const Environment& map, PhysicsWorld& world, Car& starter
             ++active;
             if (flat(vehicle.car->position() - p).Length() < 650) ++local;
         }
-        require(active <= 48 && local >= 5, "traffic failed to stream densely around a distant district");
-        require(stolen.simulated() && !traffic.is_npc(&stolen), "traveling despawned or reclaimed a stolen car");
+        require(active <= Traffic::physical_limit && local >= 5, "traffic failed to stream densely around a distant district");
+        require(!traffic.is_npc(&stolen), "traveling reclaimed a stolen car");
     }
     require((traffic.cars().back().car->position() - far_start).Length() > 10, "distant traffic stopped advancing");
     std::cout << traffic.cars().size() << " traffic cars stream across Miami Beach and the Keys; ownership retained.\n";

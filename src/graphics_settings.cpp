@@ -26,7 +26,7 @@ void GraphicsSettings::apply_preset(GraphicsPreset value) {
     if (value == GraphicsPreset::Custom) return;
     *this = GraphicsSettings{};
     if (value == GraphicsPreset::Low) {
-        shadows = 0; local_lights = false; view_distance = 1000; vsync = false; msaa = false;
+        shadows = 0; local_lights = false; vsync = false; msaa = false;
     } else if (value == GraphicsPreset::High) {
         shadows = 3; shadow_distance = 180; view_distance = 4000;
     }

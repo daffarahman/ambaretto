@@ -151,6 +151,12 @@ struct PhysicsWorld::Impl {
         bodies.push_back(id);
         return id;
     }
+    void destroy_body(JPH::BodyID id) {
+        auto& interface = system.GetBodyInterface();
+        if (interface.IsAdded(id)) interface.RemoveBody(id);
+        interface.DestroyBody(id);
+        bodies.erase(std::remove(bodies.begin(),bodies.end(),id),bodies.end());
+    }
 };
 
 PhysicsWorld::PhysicsWorld(bool with_ridges) {
@@ -475,9 +481,7 @@ Plane::Plane(PhysicsWorld& world, PlaneType type) : world_(world), type_(type) {
     world_.impl_->planes.push_back(this);
 }
 Plane::~Plane() {
-    auto& physics = world_.impl_->system.GetBodyInterface();
-    physics.SetUserData(body_, 0);
-    if (simulated_) physics.RemoveBody(body_);
+    world_.impl_->destroy_body(body_);
     auto& planes = world_.impl_->planes;
     planes.erase(std::remove(planes.begin(), planes.end(), this), planes.end());
 }
@@ -1444,8 +1448,7 @@ Car::Car(PhysicsWorld& world, CarType type) : world_(world), body_(world.create_
 }
 
 Car::~Car() {
-    set_simulated(false);
-    world_.impl_->system.GetBodyInterface().SetUserData(body_, 0);
+    world_.impl_->destroy_body(body_);
     auto& cars = world_.impl_->cars;
     cars.erase(std::remove(cars.begin(), cars.end(), this), cars.end());
 }

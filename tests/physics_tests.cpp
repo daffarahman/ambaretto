@@ -1,5 +1,6 @@
 #include "vehicle.hpp"
 #include "environment.hpp"
+#include "plane.hpp"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -163,6 +164,14 @@ void test_ground_queries_and_chassis_collision() {
 }
 
 void test_world_reset_lifetime() {
+    {
+        ambaretto::PhysicsWorld world(false);
+        for (int i = 0; i < 512; ++i) {
+            ambaretto::Car car(world); ambaretto::Plane plane(world);
+            require(car.body_id().GetIndex() <= 2 && plane.body_id().GetIndex() <= 2,
+                "Destroyed vehicles retained physics bodies instead of reusing their slots");
+        }
+    }
     struct TestScene {
         ambaretto::PhysicsWorld world{false};
         ambaretto::Car car{world};

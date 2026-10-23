@@ -1420,6 +1420,7 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Dayligh
     }
 }
 void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float distance) {
+    const ViewFrustum frustum;
     const auto draw = [&](Model& model) {
         for (int i = 0; i < model.meshCount; ++i) {
             Material material = model.materials[model.meshMaterial[i]];
@@ -1429,8 +1430,8 @@ void EnvironmentRenderer::draw_shadow(Shader shader, const Vector3& focus, float
     };
     rlDrawRenderBatchActive();
     rlDisableBackfaceCulling();
-    for (auto& part : city_chunks_) if (nearby(part, focus, distance)) draw(part.model);
-    for (auto& part : tree_chunks_) if (nearby(part, focus, distance)) draw(part.model);
+    for (auto& part : city_chunks_) if (nearby(part, focus, distance) && frustum.visible(part.bounds)) draw(part.model);
+    for (auto& part : tree_chunks_) if (nearby(part, focus, distance) && frustum.visible(part.bounds)) draw(part.model);
     if (signs_.meshes) draw(signs_);
     custom_buildings_.draw_shadow(focus,distance);
     rlDrawRenderBatchActive();

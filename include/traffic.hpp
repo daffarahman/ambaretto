@@ -32,9 +32,12 @@ struct TrafficCar {
 
 // Nearby traffic uses the player's dynamic chassis and suspension. Distant
 // cars advance on routes with their bodies removed from the physics world.
-// Claimed cars stay physical. Inputs precede the shared PhysicsWorld step.
+// The controlled car stays physical; parked cars and wrecks suspend outside the pool.
+// Inputs precede the shared PhysicsWorld step.
 class Traffic {
 public:
+    static constexpr std::size_t physical_limit = 24;
+    static constexpr float simulation_distance = 220, retain_distance = 260;
     Traffic(PhysicsWorld& world, const Environment& environment, const std::vector<CarDesign>* designs = nullptr, const std::vector<CharacterDesign>* characters = nullptr);
     const std::vector<TrafficCar>& cars() const { return cars_; }
     bool is_npc(const Car* car) const;
@@ -53,7 +56,7 @@ private:
     RouteLocation locate(const std::vector<Vec3>& route, Vec3 position, std::size_t hint = std::size_t(-1)) const;
     Vec3 ahead(const std::vector<Vec3>& route, RouteLocation location, float distance) const;
     RouteLocation advance(const std::vector<Vec3>& route, RouteLocation location, float distance) const;
-    void stream(Vec3 player_position, const Car* starter, const Plane* plane);
+    void stream(Vec3 player_position, const Car* starter, const Plane* plane, const Car* controlled = nullptr);
     bool space_available(Vec3 position, const Car& ignore, const Car& starter_car,
                          const Plane* plane, Vec3 player_position) const;
     PhysicsWorld& world_;

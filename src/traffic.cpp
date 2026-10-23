@@ -118,7 +118,7 @@ Traffic::Traffic(PhysicsWorld& world, const Environment& environment,const std::
             }
         }
         for (const auto& node : city.road_network()) if (node.edges.size()>=3) intersections_.push_back({node.center(),node.half_size()});
-        // ponytail: at most 200 NPCs, with the existing 48-car physics pool; spatial route indexing can raise this later.
+        // shortcut: at most 200 routed NPCs; use spatial route indexing before raising the pool.
         int remaining = 200;
         for (std::size_t r = 0; ambient && r < routes_.size(); ++r) {
             const auto& route = routes_[r]; float length = 0;
@@ -277,36 +277,43 @@ Traffic::RouteLocation Traffic::advance(const std::vector<Vec3>& route, RouteLoc
 Vec3 Traffic::ahead(const std::vector<Vec3>& route, RouteLocation location, float distance) const {
     return advance(route, location, distance).point;
 }
-void Traffic::stream(Vec3 player_position, const Car* starter, const Plane* plane) {
+void Traffic::stream(Vec3 player_position, const Car* starter, const Plane* plane, const Car* controlled) {
     std::vector<std::pair<float, std::size_t>> nearby;
-    for (std::size_t i = 0; i < cars_.size(); ++i) if (cars_[i].npc && !cars_[i].car->destroyed()) {
-        const float distance = flat(cars_[i].car->position() - player_position).LengthSq();
-        if (distance < 700 * 700) nearby.push_back({distance, i});
+    std::vector<bool> selected(cars_.size(), false);
+    for (std::size_t i = 0; i < cars_.size(); ++i) {
+        const auto& vehicle = cars_[i]; const auto& car = *vehicle.car;
+        if (&car == controlled || vehicle.racing) { selected[i] = true; continue; }
+        const float distance = flat(car.position() - player_position).LengthSq();
+        const float range = car.simulated() ? retain_distance : simulation_distance;
+        if (distance < range * range) nearby.push_back({distance * (car.simulated() ? .81f : 1.f), i});
     }
     std::sort(nearby.begin(), nearby.end());
-    std::vector<bool> selected(cars_.size(), false);
-    for (std::size_t i = 0; i < std::min<std::size_t>(48, nearby.size()); ++i) selected[nearby[i].second] = true;
+    for (std::size_t i = 0; i < std::min(physical_limit, nearby.size()); ++i) selected[nearby[i].second] = true;
+    // Remove old bodies before waking replacements, including parked cars and wrecks.
     for (std::size_t i = 0; i < cars_.size(); ++i) {
         auto& vehicle = cars_[i]; Car& car = *vehicle.car;
-        if (!vehicle.npc || car.destroyed() || selected[i] == car.simulated()) continue;
-        if (selected[i]) {
-            const Vec3 position = car.position();
-            // Never create a chassis inside an occupied lane or pedestrian.
-            if ((position - player_position).LengthSq() < 3 * 3) continue;
-            if (starter && (position - starter->position()).LengthSq() < 6 * 6) continue;
-            if (plane && (position - plane->position()).LengthSq() < 12 * 12) continue;
-            bool occupied = false;
-            for (const auto& other : cars_) if (other.car.get() != &car && other.car->simulated()
-                && (position - other.car->position()).LengthSq() < 6 * 6) { occupied = true; break; }
-            if (police_) for (const auto& unit : police_->units()) if (unit.active && (position - unit.car->position()).LengthSq() < 6 * 6) occupied = true;
-            if (occupied) continue;
-            car.set_simulated(true); vehicle.plan_time = 0; vehicle.stuck_time = 0; vehicle.turning_back = false;
-        } else {
+        if (selected[i] || !car.simulated()) continue;
+        if (vehicle.npc && !car.destroyed()) {
             const auto location = locate(routes_[vehicle.route], car.position()-Vec3(0,car.ride_height(),0),environment_.city() ? vehicle.segment : std::size_t(-1));
             vehicle.point = location.point; vehicle.segment = location.segment;
-            car.set_simulated(false);
-            clear_driver(vehicle);
         }
+        car.set_simulated(false);
+        clear_driver(vehicle);
+    }
+    for (std::size_t i = 0; i < cars_.size(); ++i) {
+        auto& vehicle = cars_[i]; Car& car = *vehicle.car;
+        if (!selected[i] || car.simulated()) continue;
+        const Vec3 position = car.position();
+        // Never create a chassis inside an occupied lane or pedestrian.
+        if ((position - player_position).LengthSq() < 3 * 3) continue;
+        if (starter && (position - starter->position()).LengthSq() < 6 * 6) continue;
+        if (plane && (position - plane->position()).LengthSq() < 12 * 12) continue;
+        bool occupied = false;
+        for (const auto& other : cars_) if (other.car.get() != &car && other.car->simulated()
+            && (position - other.car->position()).LengthSq() < 6 * 6) { occupied = true; break; }
+        if (police_) for (const auto& unit : police_->units()) if (unit.active && (position - unit.car->position()).LengthSq() < 6 * 6) occupied = true;
+        if (occupied) continue;
+        car.set_simulated(true); vehicle.plan_time = 0; vehicle.stuck_time = 0; vehicle.turning_back = false;
     }
 }
 bool Traffic::space_available(Vec3 position, const Car& ignore, const Car& starter_car,
@@ -328,7 +335,13 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
     }
     stream_time_ -= dt;
     const bool sync = stream_time_ <= 0;
-    if (sync) { stream(player_position, &starter_car, plane); stream_time_ = .5f; }
+    if (sync) { stream(player_position, &starter_car, plane, controlled); stream_time_ = .5f; }
+    // Positions do not change during planning, so release junctions once per tick.
+    for (auto it = junctions_.begin(); it != junctions_.end();) {
+        const auto& junction = intersections_[it->first]; const Vec3 delta = it->second->position()-junction.center;
+        if (!is_npc(it->second) || !it->second->simulated() || it->second->destroyed() || std::abs(delta.GetX())>junction.half.GetX()+3 || std::abs(delta.GetZ())>junction.half.GetZ()+3) it = junctions_.erase(it);
+        else ++it;
+    }
     for (auto& vehicle : cars_) {
         Car& car = *vehicle.car;
         vehicle.horn_time = std::max(0.0f, vehicle.horn_time - dt);
@@ -379,15 +392,11 @@ void Traffic::step(Car* controlled, const Car& starter_car, const Plane* plane,
         const float cruise_speed = desired_speed;
         if (environment_.city()) {
             // Give one car the junction until its rear has cleared it.
-            for (auto it = junctions_.begin(); it != junctions_.end();) {
-                const auto& junction = intersections_[it->first]; const Vec3 delta = it->second->position()-junction.center;
-                if (!is_npc(it->second) || !it->second->simulated() || it->second->destroyed() || std::abs(delta.GetX())>junction.half.GetX()+3 || std::abs(delta.GetZ())>junction.half.GetZ()+3) it = junctions_.erase(it);
-                else ++it;
-            }
             for (float distance : {0.f,6.f,12.f}) {
                 int key = -1;
+                const Vec3 probe = ahead(route,location,distance);
                 for (std::size_t j = 0; j < intersections_.size(); ++j) {
-                    const Vec3 delta = ahead(route,location,distance)-intersections_[j].center;
+                    const Vec3 delta = probe-intersections_[j].center;
                     if (std::abs(delta.GetX())<=intersections_[j].half.GetX() && std::abs(delta.GetZ())<=intersections_[j].half.GetZ()) { key = int(j); break; }
                 }
                 if (key<0) continue;

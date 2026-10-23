@@ -19,7 +19,7 @@ int main() {
         require(settings.preset() == GraphicsPreset::Balanced && settings.shadow_resolution() == 1024 && settings.msaa && settings.view_distance == 100, "default preset changed");
         settings.apply_preset(GraphicsPreset::Low);
         require(settings.preset() == GraphicsPreset::Low && settings.shadows == 0 && !settings.local_lights &&
-            settings.view_distance == 1000 && !settings.vsync && !settings.msaa, "Low preset does not reduce GPU work");
+            settings.view_distance == 100 && !settings.vsync && !settings.msaa, "Low preset does not reduce GPU work");
         settings.apply_preset(GraphicsPreset::High);
         require(settings.preset() == GraphicsPreset::High && settings.shadow_resolution() == 2048 &&
             settings.shadow_distance == 180 && settings.view_distance == 4000 && settings.msaa, "High preset is incomplete");
