@@ -21,6 +21,8 @@ public:
     void draw_sky(const Camera3D& camera, const Daylight& light, float time, const GraphicsSettings& settings);
     void draw(const Camera3D& camera, float time, const Daylight& light, const SceneLighting& lighting, const GraphicsSettings& settings);
     void draw_shadow(Shader shader, const Vector3& focus, float distance);
+    bool update_streaming(const Camera3D& camera, const GraphicsSettings& settings);
+    MeshStreamingStats streaming_stats() const;
     const std::vector<SceneLight>& lights() const { return local_lights_; }
     Shader object_shader() const { return land_shader_; }
     const BuildingRenderStats& building_stats() const { return custom_buildings_.stats(); }
@@ -35,12 +37,15 @@ private:
     void load_trees(const Environment& environment);
     void load_map(const Environment& environment);
     void draw_map(Matrix transform) const;
-    struct Chunk { Model model{}; Vector3 center{}; float radius = 0; };
+    void load_streaming();
+    struct Chunk { Model model{}; Vector3 center{}; float radius = 0; BoundingBox bounds{}; };
     static Chunk chunk(Model model);
     static bool nearby(const Chunk& chunk, const Vector3& focus, float distance);
     std::vector<Chunk> city_chunks_, tree_chunks_, ground_chunks_;
+    std::array<std::vector<Chunk>,5> surface_chunks_;
+    MeshStreaming streaming_;
     std::vector<SceneLight> local_lights_;
-    Model terrain_{}, grass_{}, sand_{}, roads_{}, sidewalks_{}, ocean_{}, trees_{}, signs_{}, lights_{}, glows_{}, map_{};
+    Model ocean_{}, trees_{}, signs_{}, lights_{}, glows_{}, map_{};
     Texture2D soil_texture_{}, grass_texture_{}, sand_texture_{}, asphalt_texture_{}, tree_texture_{}, sign_texture_{}, water_depth_{};
     Texture2D road_texture_{}, sidewalk_texture_{};
     std::string road_warning_;

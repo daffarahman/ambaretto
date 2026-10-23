@@ -73,6 +73,7 @@ Image render_city(ambaretto::EnvironmentRenderer& scenery, RenderTexture2D textu
     ambaretto::DayNight clock; clock.set_time(time);
     ambaretto::SceneLighting lighting;
     ambaretto::GraphicsSettings settings; settings.shadows = 0; settings.local_lights = false;
+    while (!scenery.update_streaming(camera,settings)) {}
     BeginTextureMode(texture); ClearBackground(BLACK); BeginMode3D(camera);
     scenery.draw(camera, 0, clock.lighting(), lighting, settings);
     EndMode3D(); EndTextureMode();
@@ -478,6 +479,21 @@ int main(int argc, char** argv) {
         const Vec3 civilian_position = player + Vec3(35, 0, 15), plane_position = player + Vec3(-40, 4, 15);
         civilian.reset(civilian_position); plane.reset(plane_position);
         const Camera3D camera{{0, 6, 114}, {0, 4, 105}, {0, 1, 0}, 60, CAMERA_PERSPECTIVE};
+        GraphicsSettings stream_settings; stream_settings.shadows = 0; stream_settings.view_distance = 100;
+        const auto source = scenery.streaming_stats();
+        require(source.resident_chunks == 0 && source.chunks > 0,"World scenery uploaded all chunks during construction");
+        while (!scenery.update_streaming(camera,stream_settings)) {}
+        const auto nearby = scenery.streaming_stats();
+        require(nearby.resident_chunks > 0 && nearby.resident_geometry_bytes < source.cpu_geometry_bytes,
+            "World streaming did not limit GPU residency to the nearby region");
+        auto away = camera; away.position = {50000,1000,50000}; away.target = {50000,0,50000};
+        require(scenery.update_streaming(away,stream_settings) && scenery.streaming_stats().resident_chunks == 0,
+            "World travel retained distant terrain, buildings or trees");
+        while (!scenery.update_streaming(camera,stream_settings)) {}
+        require(scenery.streaming_stats().resident_geometry_bytes == nearby.resident_geometry_bytes,
+            "Returning to a region changed its resident mesh payload");
+        std::cout << "World streaming: " << source.cpu_geometry_bytes << " total geometry bytes, "
+            << nearby.resident_geometry_bytes << " nearby GPU bytes (" << nearby.resident_chunks << '/' << source.chunks << " chunks)\n";
         const Rectangle viewport{0, 0, 640, 480};
         WorldMapView view; view.center = {player.GetX(), player.GetZ()}; view.scale = 1;
         const MinimapView mini(480, player, heading, camera);

@@ -35,7 +35,13 @@ std::vector<BuildingTriangle> quad(const std::string& texture,bool decal,float y
 }
 void cutout_shadows(RenderTexture2D target,const std::filesystem::path& output) {
     std::string error; BuildingRenderer caster,receiver;
-    require(caster.build(quad("window.png",true,4,2),error,false),error);
+    require(caster.build(quad("window.png",true,4,2),error),error);
+    for (Vector3 focus : {Vector3{0,0,0},Vector3{10000,0,10000},Vector3{0,0,0}}) {
+        MeshUploadBudget budget;
+        require(caster.update_streaming(focus,90,budget),"Cutout caster failed to stream after travel");
+        require(caster.streaming_stats().resident_chunks == (focus.x ? 0 : caster.stats().meshes),
+            "Cutout caster did not evict or reload its spatial meshes");
+    }
     require(receiver.build(quad("",false,0,5),error,false),error);
     GraphicsSettings settings; settings.apply_preset(GraphicsPreset::Low); settings.shadows = 1; settings.soft_shadows = false;
     Daylight daylight = DayNight().lighting(); daylight.day = 1; daylight.sun_direction = {0,1,0};
@@ -43,13 +49,45 @@ void cutout_shadows(RenderTexture2D target,const std::filesystem::path& output) 
     SceneLighting lighting;
     require(lighting.begin_shadow({0,0,0},daylight,settings),"Shadow framebuffer could not be created");
     caster.draw_shadow({0,0,0},90); lighting.end_shadow();
-    require(caster.stats().shadow_draws==1,"Cutout shadow caster did not use one array mesh");
+    require(caster.stats().shadow_draws==caster.stats().meshes,"Streamed cutout caster lost a shadow mesh");
     const Camera3D camera{{0,20,0},{0,0,0},{0,0,-1},12,CAMERA_ORTHOGRAPHIC};
     Image shadowed = render(receiver,target,camera,daylight,lighting,settings);
     const auto centre = pixel(shadowed,camera,Vec3(0,0,0)), edge = pixel(shadowed,camera,Vec3(1.7f,0,0));
     require(brightness(edge)>brightness(centre)+100,"Transparent decal borders cast an opaque shadow or opaque texels lost their shadow");
     require(ExportImage(shadowed,(output/"building-editor-cutout-shadow.png").string().c_str()),"Shadow preview export failed");
     UnloadImage(shadowed);
+}
+void camera_culling(RenderTexture2D target) {
+    std::vector<BuildingTriangle> triangles;
+    for (float z : {-20.f,20.f}) for (auto triangle : quad(z < 0 ? "base.png" : "trim.png",false,0,2)) {
+        for (auto& point : triangle.points) point = Vec3(point.GetX()+20,point.GetZ()+2,z);
+        if (z < 0) { std::swap(triangle.points[1],triangle.points[2]); std::swap(triangle.uv[1],triangle.uv[2]); }
+        triangles.push_back(std::move(triangle));
+    }
+    BuildingRenderer renderer; std::string error;
+    require(renderer.build(triangles,error),error);
+    Camera3D camera{{20,2,0},{20,2,-1},{0,1,0},60,CAMERA_PERSPECTIVE};
+    MeshUploadBudget budget;
+    require(renderer.update_streaming(camera.position,100,budget) && renderer.streaming_stats().resident_chunks == 2,
+        "Camera fixture did not preload both sides of the player");
+    GraphicsSettings settings; settings.shadows = 0; settings.local_lights = false;
+    const Daylight daylight = DayNight().lighting(); SceneLighting lighting;
+    auto image = render(renderer,target,camera,daylight,lighting,settings);
+    const auto front = pixel(image,camera,Vec3(20,2,-20)); UnloadImage(image);
+    require(renderer.stats().color_draws == 1 && front.r > front.g*2,"Front view submitted the hidden building or lost its visible wall");
+    camera.target = {20,2,1};
+    image = render(renderer,target,camera,daylight,lighting,settings);
+    const auto back = pixel(image,camera,Vec3(20,2,20)); UnloadImage(image);
+    require(renderer.stats().color_draws == 1 && back.r > back.b*2 && back.g > back.b*2,
+        "Turning the camera lost a cached building or submitted the building behind it");
+    camera.target = {21,2,0}; image = render(renderer,target,camera,daylight,lighting,settings); UnloadImage(image);
+    require(renderer.stats().color_draws == 0 && renderer.streaming_stats().resident_chunks == 2,
+        "Looking away submitted off-screen buildings or evicted the camera-turn cache");
+    settings.shadows = 1;
+    require(lighting.begin_shadow({20,0,0},daylight,settings),"Camera fixture could not render shadows");
+    renderer.draw_shadow({20,0,0},90); lighting.end_shadow();
+    require(renderer.stats().shadow_draws == 2,"Camera visibility removed off-screen shadow casters");
+    std::cout << "Camera culling: 1/2 building draws facing either wall, 0/2 looking away, both cached and casting shadows\n";
 }
 void building_preview_and_benchmark(RenderTexture2D target,const std::filesystem::path& output) {
     std::string error; BuildingMesh sample; sample.name = "Three part benchmark";
@@ -105,6 +143,7 @@ void building_preview_and_benchmark(RenderTexture2D target,const std::filesystem
         copies.push_back(std::move(triangle));
     }
     BuildingRenderer renderer; require(renderer.build(copies,error),error);
+    require(renderer.streaming_stats().resident_chunks==0,"Spatial building bake uploaded distant geometry eagerly");
     const auto stats = renderer.stats();
     require(stats.gpu_texture_bytes==one.gpu_texture_bytes,"A hundred building copies duplicated texture storage");
     require(stats.emitted_triangles==one.emitted_triangles*100 && stats.gpu_geometry_bytes==one.gpu_geometry_bytes*100,
@@ -113,6 +152,8 @@ void building_preview_and_benchmark(RenderTexture2D target,const std::filesystem
         "Benchmark exceeded the eight MiB geometry or texture budget");
     require(stats.array_pages==1 && stats.meshes<=4,"Benchmark used more than four spatial meshes for one texture page");
     const Camera3D camera{{360,250,-100},{128,6,128},{0,1,0},310,CAMERA_ORTHOGRAPHIC};
+    for (;;) { MeshUploadBudget budget; if (renderer.update_streaming(camera.position,settings.view_distance,budget)) break; }
+    require(renderer.streaming_stats().resident_geometry_bytes==stats.gpu_geometry_bytes,"Building streaming did not upload the visible payload");
     using Finish = void (*)();
     const auto finish = reinterpret_cast<Finish>(rlGetProcAddress("glFinish"));
     require(finish!=nullptr,"Synchronized benchmark needs glFinish");
@@ -172,7 +213,7 @@ int main() {
         std::filesystem::current_path(root);
         const auto target = LoadRenderTexture(1280,720);
         require(IsRenderTextureValid(target),"Building preview framebuffer could not be created");
-        try { building_preview_and_benchmark(target,output); cutout_shadows(target,output); }
+        try { building_preview_and_benchmark(target,output); cutout_shadows(target,output); camera_culling(target); }
         catch (...) { UnloadRenderTexture(target); throw; }
         UnloadRenderTexture(target);
         std::cout << "Building texture arrays, tiling, surface decals, cutout shadows and bounded bake checks passed\n";

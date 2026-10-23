@@ -20,6 +20,7 @@
 #include "play_session.hpp"
 #include "interior_ui.hpp"
 #include "race.hpp"
+#include "view_frustum.hpp"
 #include <string>
 #include <raylib.h>
 #include <rlgl.h>
@@ -368,6 +369,11 @@ void draw_weapon_wheel(ambaretto::WeaponType selection, Vector2 cursor) {
 }
 
 void draw_plane(const ambaretto::Plane& plane, bool occupied) {
+    const float radius = std::hypot(plane.specs().span,plane.specs().length)/2
+        + plane.specs().body_radius + plane.parking_height();
+    const auto center = render_vector(plane.position());
+    const Vector3 half{radius,radius,radius};
+    if (!ambaretto::ViewFrustum().visible({Vector3Subtract(center,half),Vector3Add(center,half)})) return;
     const auto basis = plane.rotation();
     const auto tint = [&](Color color) { return plane.destroyed() ? Color{18, 18, 18, 255} : color; };
     occupied &= !plane.destroyed();
@@ -744,6 +750,7 @@ int main(int argc, char** argv) {
             camera.position = render_vector(orbit.desired_position(focus(), tuning_open || scene->player.driving(), !tuning_open && scene->player.flying(), scene->player.plane().camera_scale()));
         };
         snap_camera();
+        while (!scenery.update_streaming(camera,graphics)) {}
         ambaretto::WorldMapView world_map;
         float min_x = ambaretto::Environment::extent, min_z = min_x, max_x = -min_x, max_z = -min_x;
         for (const auto& island : environment.land_islands()) {
@@ -1223,6 +1230,7 @@ int main(int argc, char** argv) {
             const auto daylight = day_night.lighting();
             ClearBackground(BLACK);
             if (!map_open) {
+                scenery.update_streaming(view,graphics);
                 std::array<ambaretto::SceneLight, ambaretto::SceneLighting::max_lights> nearby_lights{};
                 int light_count = 0;
                 if (graphics.local_lights && daylight.night > .01f) {

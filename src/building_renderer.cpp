@@ -1,4 +1,5 @@
 #include "building_renderer.hpp"
+#include "view_frustum.hpp"
 #include <rlgl.h>
 #include <raymath.h>
 #include <algorithm>
@@ -321,7 +322,7 @@ struct Geometry {
             colors.insert(colors.end(),{tint.r,tint.g,tint.b,tint.a});
         }
     }
-    Model upload() const {
+    Model upload(bool resident) const {
         Mesh mesh{}; mesh.vertexCount = int(positions.size()/3); mesh.triangleCount = mesh.vertexCount/3;
         const auto copy = [](const std::vector<float>& source) {
             auto* data = static_cast<float*>(MemAlloc(unsigned(source.size()*sizeof(float))));
@@ -334,7 +335,8 @@ struct Geometry {
         if (!mesh.vertices || !mesh.normals || !mesh.texcoords || !mesh.texcoords2 || !mesh.colors) {
             UnloadMesh(mesh); return {};
         }
-        UploadMesh(&mesh,false); return LoadModelFromMesh(mesh);
+        if (resident) UploadMesh(&mesh,false);
+        return LoadModelFromMesh(mesh);
     }
 };
 bool nearby(Vector3 center,float radius,Vector3 focus,float distance) {
@@ -343,9 +345,10 @@ bool nearby(Vector3 center,float radius,Vector3 focus,float distance) {
 }
 } // namespace
 struct BuildingRenderer::State {
-    struct Chunk { Model model{}; int page = 0; Vector3 center{}; float radius = 0; };
+    struct Chunk { Model model{}; int page = 0; Vector3 center{}; float radius = 0; BoundingBox bounds{}; };
     std::shared_ptr<TextureBank> textures;
     std::vector<Chunk> chunks;
+    MeshStreaming streaming;
     BuildingRenderStats stats;
     ~State() { for (auto& chunk : chunks) UnloadModel(chunk.model); }
 };
@@ -356,6 +359,11 @@ std::filesystem::path building_texture_directory() {
 BuildingRenderer::BuildingRenderer() : state_(std::make_unique<State>()) {}
 BuildingRenderer::~BuildingRenderer() = default;
 const BuildingRenderStats& BuildingRenderer::stats() const { return state_->stats; }
+bool BuildingRenderer::update_streaming(Vector3 focus,float distance,MeshUploadBudget& budget) {
+    return state_->streaming.update(focus,distance,budget);
+}
+MeshStreamingStats BuildingRenderer::streaming_stats() const { return state_->streaming.stats(); }
+void BuildingRenderer::add_to_stream(MeshStreaming& streaming) const { streaming.include(state_->streaming); }
 const std::string& BuildingRenderer::warning() const {
     static const std::string empty;
     return state_->textures ? state_->textures->warning : empty;
@@ -389,17 +397,18 @@ bool BuildingRenderer::build(const std::vector<BuildingTriangle>& triangles,std:
     }
     for (int i = 0; i<16 && next->textures->gl.error()!=0; ++i) {}
     for (const auto& group : groups) {
-        auto model = group.second.upload();
+        auto model = group.second.upload(!spatial_chunks);
         const auto gpu_error = next->textures->gl.error();
-        if (!model.meshes || !model.meshes[0].vaoId || !model.materials || gpu_error) {
+        if (!model.meshes || (!spatial_chunks && !model.meshes[0].vaoId) || !model.materials || gpu_error) {
             if (model.meshes || model.materials) UnloadModel(model);
             error = "GPU could not upload the building mesh (OpenGL error "+std::to_string(gpu_error)+")."; return false;
         }
         model.materials[0].shader = next->textures->shader;
         const auto bounds = GetModelBoundingBox(model);
         const auto center = Vector3Scale(Vector3Add(bounds.min,bounds.max),.5f);
-        next->chunks.push_back({model,std::get<0>(group.first),center,std::hypot(bounds.max.x-center.x,bounds.max.z-center.z)});
+        next->chunks.push_back({model,std::get<0>(group.first),center,std::hypot(bounds.max.x-center.x,bounds.max.z-center.z),bounds});
     }
+    if (spatial_chunks) for (auto& chunk : next->chunks) next->streaming.add(chunk.model);
     next->stats.cpu_geometry_bytes = next->stats.gpu_geometry_bytes;
     next->stats.gpu_texture_bytes = next->textures->bytes;
     next->stats.array_pages = next->textures->pages.size(); next->stats.meshes = next->chunks.size();
@@ -409,10 +418,13 @@ bool BuildingRenderer::build(const std::vector<BuildingTriangle>& triangles,std:
 void BuildingRenderer::draw(const Camera3D& camera,const Daylight& daylight,const SceneLighting& lighting,const GraphicsSettings& settings,const Matrix* transform) {
     state_->stats.color_draws = 0;
     if (!state_->textures) return;
+    const ViewFrustum frustum;
     lighting.apply(state_->textures->shader,camera,daylight,settings);
     rlDrawRenderBatchActive();
     int bound = -1;
-    for (const auto& chunk : state_->chunks) if (nearby(transform ? Vector3Transform(chunk.center,*transform) : chunk.center,chunk.radius,camera.position,settings.view_distance)) {
+    for (const auto& chunk : state_->chunks) if (mesh_resident(chunk.model)
+        && nearby(transform ? Vector3Transform(chunk.center,*transform) : chunk.center,chunk.radius,camera.position,settings.view_distance)
+        && frustum.visible(chunk.bounds,transform)) {
         if (bound!=chunk.page) { state_->textures->bind(chunk.page); bound = chunk.page; }
         auto model=chunk.model;
         if(transform)model.transform=*transform;
@@ -425,7 +437,7 @@ void BuildingRenderer::draw_shadow(Vector3 focus,float distance) {
     if (!state_->textures) return;
     rlDrawRenderBatchActive();
     int bound = -1;
-    for (const auto& chunk : state_->chunks) if (nearby(chunk.center,chunk.radius,focus,distance)) {
+    for (const auto& chunk : state_->chunks) if (mesh_resident(chunk.model) && nearby(chunk.center,chunk.radius,focus,distance)) {
         if (bound!=chunk.page) { state_->textures->bind(chunk.page); bound = chunk.page; }
         auto material = chunk.model.materials[0]; material.shader = state_->textures->depth;
         DrawMesh(chunk.model.meshes[0],material,chunk.model.transform); ++state_->stats.shadow_draws;

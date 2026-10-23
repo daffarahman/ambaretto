@@ -1,4 +1,5 @@
 #include "car_renderer.hpp"
+#include "view_frustum.hpp"
 #include <raymath.h>
 #include <rlgl.h>
 #include <algorithm>
@@ -221,7 +222,7 @@ bool CarRenderer::body(const CarDesign& design,Vec3 position,Quat rotation,const
     transform = MatrixMultiply(transform,MatrixTranslate(design.offset[0],design.height/2-.15f+design.offset[1],design.offset[2]));
     transform = MatrixMultiply(transform,QuaternionToMatrix({rotation.GetX(),rotation.GetY(),rotation.GetZ(),rotation.GetW()}));
     transform = MatrixMultiply(transform,MatrixTranslate(position.GetX(),position.GetY(),position.GetZ()));
-    draw_model(source->model,transform,camera,override_shader,intact); return true;
+    draw_model(*source,transform,camera,override_shader,intact); return true;
 }
 bool CarRenderer::tire(const CarDesign& design,Vec3 position,Quat rotation,const Camera3D& camera,Shader override_shader,bool intact) const {
     const auto* source = asset(design.wheel,"wheels"); if (!source) return false;
@@ -231,7 +232,7 @@ bool CarRenderer::tire(const CarDesign& design,Vec3 position,Quat rotation,const
     transform = MatrixMultiply(transform,MatrixScale(scale,scale,scale));
     transform = MatrixMultiply(transform,QuaternionToMatrix({rotation.GetX(),rotation.GetY(),rotation.GetZ(),rotation.GetW()}));
     transform = MatrixMultiply(transform,MatrixTranslate(position.GetX(),position.GetY(),position.GetZ()));
-    draw_model(source->model,transform,camera,override_shader,intact); return true;
+    draw_model(*source,transform,camera,override_shader,intact); return true;
 }
 bool CarRenderer::draw_body(const Car& car,const Camera3D& camera,Shader override_shader) const {
     return car.design() && body(*car.design(),car.position(),car.rotation(),camera,override_shader,!car.destroyed());
@@ -258,9 +259,12 @@ bool CarRenderer::model_bounds(const std::string& folder, const std::string& nam
     center=source->center; size=source->size; return true;
 }
 void CarRenderer::draw_imported(const std::string& folder, const std::string& name, const Matrix& transform, const Camera3D& camera, Shader override_shader, bool mirrored) const {
-    if (const auto* source=asset(name,folder)) draw_model(source->model,transform,camera,override_shader,true,mirrored);
+    if (const auto* source=asset(name,folder)) draw_model(*source,transform,camera,override_shader,true,mirrored);
 }
-void CarRenderer::draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Shader override_shader, bool intact, bool mirrored) const {
+void CarRenderer::draw_model(const Asset& source, const Matrix& transform, const Camera3D& camera, Shader override_shader, bool intact, bool mirrored) const {
+    const auto half = Vector3Scale(source.size,.5f);
+    if (!ViewFrustum().visible({Vector3Subtract(source.center,half),Vector3Add(source.center,half)},&transform)) return;
+    const auto& model = source.model;
     if (!override_shader.id) SetShaderValue(shader_, camera_location_, &camera.position, SHADER_UNIFORM_VEC3);
     const int mirror=mirrored ? 1 : 0;
     if (!override_shader.id) SetShaderValue(shader_,mirrored_location_,&mirror,SHADER_UNIFORM_INT);

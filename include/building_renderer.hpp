@@ -1,6 +1,7 @@
 #pragma once
 #include "building_mesh.hpp"
 #include "scene_lighting.hpp"
+#include "mesh_streaming.hpp"
 #include <cstddef>
 #include <memory>
 
@@ -23,6 +24,9 @@ public:
                bool spatial_chunks = true, const std::vector<std::string>& thumbnail_textures = {});
     void draw(const Camera3D& camera, const Daylight& daylight, const SceneLighting& lighting, const GraphicsSettings& settings, const Matrix* transform = nullptr);
     void draw_shadow(Vector3 focus, float distance);
+    bool update_streaming(Vector3 focus, float distance, MeshUploadBudget& budget);
+    MeshStreamingStats streaming_stats() const;
+    void add_to_stream(MeshStreaming& streaming) const;
     bool thumbnail(const std::string& filename, Rectangle destination);
     const BuildingRenderStats& stats() const;
     const std::string& warning() const;

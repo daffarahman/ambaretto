@@ -26,7 +26,7 @@ private:
     const Asset* asset(const std::string& name, const std::string& folder) const;
     bool body(const CarDesign& design, Vec3 position, Quat rotation, const Camera3D& camera, Shader override_shader = {}, bool intact = true) const;
     bool tire(const CarDesign& design, Vec3 position, Quat rotation, const Camera3D& camera, Shader override_shader = {}, bool intact = true) const;
-    void draw_model(const Model& model, const Matrix& transform, const Camera3D& camera, Shader override_shader = {}, bool intact = true, bool mirrored = false) const;
+    void draw_model(const Asset& source, const Matrix& transform, const Camera3D& camera, Shader override_shader = {}, bool intact = true, bool mirrored = false) const;
     mutable std::map<std::string, Asset> assets_;
     Shader shader_{}, damage_shader_{};
     int camera_location_ = -1, emission_location_ = -1;

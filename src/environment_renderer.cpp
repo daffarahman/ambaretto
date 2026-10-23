@@ -4,6 +4,7 @@
 #include "race.hpp"
 #include "airport.hpp"
 #include "minimap.hpp"
+#include "view_frustum.hpp"
 #include <rlgl.h>
 #include <raymath.h>
 #include <algorithm>
@@ -135,7 +136,7 @@ struct MeshBuilder {
             }
         }
     }
-    Model upload() const {
+    Model upload(bool resident = true) const {
         if (positions.empty()) return {};
         Mesh mesh{};
         mesh.vertexCount = int(positions.size() / 3);
@@ -148,7 +149,7 @@ struct MeshBuilder {
         std::memcpy(mesh.normals, normals.data(), normals.size() * sizeof(float));
         std::memcpy(mesh.colors, colors.data(), colors.size());
         std::memcpy(mesh.texcoords, texcoords.data(), texcoords.size() * sizeof(float));
-        UploadMesh(&mesh, false);
+        if (resident) UploadMesh(&mesh, false);
         return LoadModelFromMesh(mesh);
     }
     std::vector<Model> upload_chunks() const {
@@ -164,7 +165,7 @@ struct MeshBuilder {
             mesh.colors.insert(mesh.colors.end(), colors.begin() + vertex * 4, colors.begin() + vertex * 4 + 12);
         }
         std::vector<Model> models;
-        for (const auto& part : cells) models.push_back(part.second.upload());
+        for (const auto& part : cells) models.push_back(part.second.upload(false));
         return models;
     }
 };
@@ -213,7 +214,6 @@ Mesh batch_tree_mesh(const Mesh& source, const std::vector<Tree>& trees, const V
                 mesh.colors[destination * 4 + channel] = source.colors ? source.colors[index * 4 + channel] : 255;
         }
     }
-    UploadMesh(&mesh, false);
     return mesh;
 }
 Color surface_color(Surface s) {
@@ -391,16 +391,16 @@ Texture2D load_building_texture(const std::string& filename) {
 EnvironmentRenderer::Chunk EnvironmentRenderer::chunk(Model model) {
     const auto box = GetModelBoundingBox(model);
     const Vector3 center = Vector3Scale(Vector3Add(box.min, box.max), .5f);
-    return {model, center, std::hypot(box.max.x - center.x, box.max.z - center.z)};
+    return {model, center, std::hypot(box.max.x - center.x, box.max.z - center.z), box};
 }
 bool EnvironmentRenderer::nearby(const Chunk& part, const Vector3& focus, float distance) {
     const float range = distance + part.radius;
     const float dx = part.center.x - focus.x, dz = part.center.z - focus.z;
-    return dx * dx + dz * dz <= range * range;
+    return mesh_resident(part.model) && dx * dx + dz * dz <= range * range;
 }
 EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     environment_ = &env;
-    if (env.city()) { load_city(env); return; }
+    if (env.city()) { load_city(env); load_streaming(); return; }
     MeshBuilder ground, grass, sand, roads, city, water, signs, lights, glows;
     constexpr Color concrete{203, 211, 208, 255};
     const auto add_light = [&](Vec3 position, Color color, float radius) {
@@ -846,7 +846,6 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
         city.box(p + Vec3(0, 3, 0), Vec3(.18f, 6, .18f), concrete);
     }
     water.quad({-20000,0,-20000},{-20000,0,20000},{20000,0,20000},{20000,0,-20000},WHITE);
-    terrain_ = ground.upload(); grass_ = grass.upload(); sand_ = sand.upload(); roads_ = roads.upload();
     for (Model model : city.upload_chunks()) city_chunks_.push_back(chunk(model));
     ocean_ = water.upload(); signs_ = signs.upload();
     lights_ = lights.upload(); glows_ = glows.upload();
@@ -855,11 +854,14 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     light_shader_ = LoadShaderFromMemory(land_vertex, light_fragment);
     if (lights_.materials) lights_.materials[0].shader = light_shader_;
     if (glows_.materials) glows_.materials[0].shader = light_shader_;
-    for (Model* model : {&terrain_, &grass_, &sand_, &roads_})
-        if (model->materials) model->materials[0].shader = land_shader_;
+    const std::array<const MeshBuilder*,4> surfaces{{&ground,&grass,&sand,&roads}};
+    for (std::size_t i = 0; i < surfaces.size(); ++i) for (auto model : surfaces[i]->upload_chunks()) {
+        model.materials[0].shader = land_shader_;
+        const auto texture = i == 3 ? asphalt_texture_ : soil_texture_;
+        if (texture.id) SetMaterialTexture(&model.materials[0],MATERIAL_MAP_DIFFUSE,texture);
+        surface_chunks_[i].push_back(chunk(model));
+    }
     for (auto& part : city_chunks_) part.model.materials[0].shader = land_shader_;
-    if (terrain_.materials && soil_texture_.id) SetMaterialTexture(&terrain_.materials[0], MATERIAL_MAP_DIFFUSE, soil_texture_);
-    if (roads_.materials && asphalt_texture_.id) SetMaterialTexture(&roads_.materials[0], MATERIAL_MAP_DIFFUSE, asphalt_texture_);
     land_camera_ = GetShaderLocation(land_shader_, "cameraPosition");
     load_trees(env);
     if (!tree_shader_.id) {
@@ -872,6 +874,7 @@ EnvironmentRenderer::EnvironmentRenderer(const Environment& env) {
     }
     sign_emission_ = GetShaderLocation(tree_shader_, "emissiveStrength");
     load_map(env);
+    load_streaming();
 }
 
 void EnvironmentRenderer::load_city(const Environment& env) {
@@ -1102,7 +1105,7 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     }
     water.quad({-Environment::extent,0,-Environment::extent},{-Environment::extent,0,Environment::extent},
         {Environment::extent,0,Environment::extent},{Environment::extent,0,-Environment::extent},WHITE);
-    terrain_ = ground.upload(); grass_ = grass.upload(); sand_ = sand.upload(); roads_ = roads.upload(); sidewalks_ = sidewalks.upload(); ocean_ = water.upload();
+    ocean_ = water.upload();
     for (Model model : buildings.upload_chunks()) city_chunks_.push_back(chunk(model));
     for (Model model : markings.upload_chunks()) city_chunks_.push_back(chunk(model));
     land_shader_ = LoadShaderFromMemory(land_vertex,land_fragment.c_str());
@@ -1110,7 +1113,14 @@ void EnvironmentRenderer::load_city(const Environment& env) {
     land_shore_blend_=GetShaderLocation(land_shader_,"shoreBlend");
     load_water(env);
     light_shader_ = LoadShaderFromMemory(land_vertex,light_fragment);
-    for (Model* model : {&terrain_,&grass_,&sand_,&roads_,&sidewalks_}) if (model->materials) model->materials[0].shader = land_shader_;
+    const std::array<const MeshBuilder*,5> surfaces{{&ground,&grass,&sand,&roads,&sidewalks}};
+    const std::array<Texture2D,5> textures{{soil_texture_,grass_texture_,sand_texture_,road_texture_,sidewalk_texture_}};
+    for (std::size_t i = 0; i < surfaces.size(); ++i) for (auto model : surfaces[i]->upload_chunks()) {
+        model.materials[0].shader = land_shader_;
+        if (textures[i].id) SetMaterialTexture(&model.materials[0],MATERIAL_MAP_DIFFUSE,textures[i]);
+        if (i == 0 && city.freeform && sand_texture_.id) SetMaterialTexture(&model.materials[0],MATERIAL_MAP_SPECULAR,sand_texture_);
+        surface_chunks_[i].push_back(chunk(model));
+    }
     for (const auto& batch : painted) for (auto model : batch.second.upload_chunks()) {
         model.materials[0].shader = land_shader_;
         const auto texture = ground_textures_.at(batch.first);
@@ -1119,12 +1129,6 @@ void EnvironmentRenderer::load_city(const Environment& env) {
         ground_chunks_.push_back(chunk(model));
     }
     for (auto& part : city_chunks_) part.model.materials[0].shader = land_shader_;
-    if (terrain_.materials && soil_texture_.id) SetMaterialTexture(&terrain_.materials[0],MATERIAL_MAP_DIFFUSE,soil_texture_);
-    if (terrain_.materials && city.freeform && sand_texture_.id) SetMaterialTexture(&terrain_.materials[0],MATERIAL_MAP_SPECULAR,sand_texture_);
-    if (grass_.materials && grass_texture_.id) SetMaterialTexture(&grass_.materials[0],MATERIAL_MAP_DIFFUSE,grass_texture_);
-    if (sand_.materials && sand_texture_.id) SetMaterialTexture(&sand_.materials[0],MATERIAL_MAP_DIFFUSE,sand_texture_);
-    if (roads_.materials && road_texture_.id) SetMaterialTexture(&roads_.materials[0],MATERIAL_MAP_DIFFUSE,road_texture_);
-    if (sidewalks_.materials && sidewalk_texture_.id) SetMaterialTexture(&sidewalks_.materials[0],MATERIAL_MAP_DIFFUSE,sidewalk_texture_);
     land_camera_ = GetShaderLocation(land_shader_,"cameraPosition");
     load_trees(env);
     if (!tree_shader_.id) {
@@ -1314,14 +1318,29 @@ void EnvironmentRenderer::load_trees(const Environment& env) {
     TraceLog(LOG_INFO, "SCENE: %i city chunks, %i tree chunks, %i local lamps", int(city_chunks_.size()), int(tree_chunks_.size()), int(local_lights_.size()));
 }
 
+void EnvironmentRenderer::load_streaming() {
+    for (auto& surface : surface_chunks_) for (auto& part : surface) streaming_.add(part.model);
+    for (auto* chunks : {&ground_chunks_, &city_chunks_, &tree_chunks_})
+        for (auto& part : *chunks) streaming_.add(part.model);
+    custom_buildings_.add_to_stream(streaming_);
+}
+bool EnvironmentRenderer::update_streaming(const Camera3D& camera,const GraphicsSettings& settings) {
+    const float shadow_range = settings.shadows ? settings.shadow_distance*3+250
+        + std::hypot(camera.target.x-camera.position.x,camera.target.z-camera.position.z) : 0;
+    const float distance = std::max(settings.view_distance,shadow_range);
+    MeshUploadBudget budget;
+    return streaming_.update(camera.position,distance,budget);
+}
+MeshStreamingStats EnvironmentRenderer::streaming_stats() const {
+    return streaming_.stats();
+}
 EnvironmentRenderer::~EnvironmentRenderer() {
-    UnloadModel(terrain_); UnloadModel(ocean_);
-    UnloadModel(grass_); UnloadModel(sand_);
-    UnloadModel(roads_); UnloadModel(sidewalks_); UnloadModel(signs_);
+    UnloadModel(ocean_); UnloadModel(signs_);
     UnloadModel(lights_); UnloadModel(glows_);
     for (auto& part : city_chunks_) UnloadModel(part.model);
     for (auto& part : tree_chunks_) UnloadModel(part.model);
     for (auto& part : ground_chunks_) UnloadModel(part.model);
+    for (auto& surface : surface_chunks_) for (auto& part : surface) UnloadModel(part.model);
     if (trees_.meshes || trees_.materials) UnloadModel(trees_);
     if (tree_texture_.id != 0 && tree_texture_.id != rlGetTextureIdDefault()) UnloadTexture(tree_texture_);
     if (soil_texture_.id != 0) UnloadTexture(soil_texture_);
@@ -1342,6 +1361,10 @@ void EnvironmentRenderer::draw_sky(const Camera3D& camera, const Daylight& light
     sky_.draw(camera, light, time, settings);
 }
 void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Daylight& light, const SceneLighting& lighting, const GraphicsSettings& settings) {
+    const ViewFrustum frustum;
+    const auto visible = [&](const Chunk& part) {
+        return nearby(part,camera.position,settings.view_distance) && frustum.visible(part.bounds);
+    };
     for (Shader shader : {land_shader_, water_shader_, tree_shader_}) lighting.apply(shader, camera, light, settings);
     SetShaderValue(land_shader_, land_camera_, &camera.position, SHADER_UNIFORM_VEC3);
     SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
@@ -1359,16 +1382,15 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Dayligh
     if (depth_bias) { enable(polygon_offset_fill); offset(-1, -1); }
     const float shore_blend=environment_->city() && environment_->city()->freeform && sand_texture_.id ? 1.f : 0.f, no_shore_blend=0;
     SetShaderValue(land_shader_,land_shore_blend_,&shore_blend,SHADER_UNIFORM_FLOAT);
-    DrawModel(terrain_, {0, 0, 0}, 1, WHITE);
-    DrawModel(grass_, {0, 0, 0}, 1, WHITE);
-    DrawModel(sand_, {0, 0, 0}, 1, WHITE);
-    for (const auto& part : ground_chunks_) if (nearby(part,camera.position,settings.view_distance)) DrawModel(part.model,{0,0,0},1,WHITE);
+    for (int i = 0; i < 3; ++i) for (const auto& part : surface_chunks_[i])
+        if (visible(part)) DrawModel(part.model,{0,0,0},1,WHITE);
+    for (const auto& part : ground_chunks_) if (visible(part)) DrawModel(part.model,{0,0,0},1,WHITE);
     SetShaderValue(land_shader_,land_shore_blend_,&no_shore_blend,SHADER_UNIFORM_FLOAT);
     if (depth_bias) offset(-1, -2);
-    DrawModel(roads_, {0, 0, 0}, 1, WHITE);
-    DrawModel(sidewalks_, {0, 0, 0}, 1, WHITE);
+    for (int i = 3; i < 5; ++i) for (const auto& part : surface_chunks_[i])
+        if (visible(part)) DrawModel(part.model,{0,0,0},1,WHITE);
     if (depth_bias) offset(-1, -3);
-    for (const auto& part : city_chunks_) if (nearby(part, camera.position, settings.view_distance)) DrawModel(part.model, {0, 0, 0}, 1, WHITE);
+    for (const auto& part : city_chunks_) if (visible(part)) DrawModel(part.model, {0, 0, 0}, 1, WHITE);
     custom_buildings_.draw(camera,light,lighting,settings);
     rlDrawRenderBatchActive();
     if (depth_bias) disable(polygon_offset_fill);
@@ -1382,7 +1404,7 @@ void EnvironmentRenderer::draw(const Camera3D& camera, float time, const Dayligh
         SetShaderValue(tree_shader_, tree_camera_, &camera.position, SHADER_UNIFORM_VEC3);
         rlDrawRenderBatchActive();
         rlDisableBackfaceCulling();
-        for (const auto& part : tree_chunks_) if (nearby(part, camera.position, settings.view_distance)) DrawModel(part.model, {0, 0, 0}, 1, WHITE);
+        for (const auto& part : tree_chunks_) if (visible(part)) DrawModel(part.model, {0, 0, 0}, 1, WHITE);
         rlDrawRenderBatchActive();
         rlEnableBackfaceCulling();
     }

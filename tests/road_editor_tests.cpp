@@ -73,6 +73,7 @@ void persistence(const std::filesystem::path& root) {
 Image render(const City& city,RenderTexture2D target,Camera3D camera) {
     Environment environment(city); EnvironmentRenderer renderer(environment);
     DayNight day; day.set_time("12:00"); SceneLighting lighting; GraphicsSettings settings; settings.shadows=0; settings.local_lights=false; settings.view_distance=6000;
+    while (!renderer.update_streaming(camera,settings)) {}
     BeginTextureMode(target); ClearBackground(BLACK); BeginMode3D(camera);
     renderer.draw(camera,0,day.lighting(),lighting,settings); EndMode3D(); EndTextureMode();
     Image result=LoadImageFromTexture(target.texture); ImageFlipVertical(&result); return result;
