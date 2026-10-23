@@ -1532,6 +1532,7 @@ int main(int argc, char** argv) {
     }
     EnableCursor();
     if (IsAudioDeviceReady()) CloseAudioDevice();
+    ambaretto::release_controllers();
     CloseWindow();
     return result;
 }

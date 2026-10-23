@@ -28,7 +28,7 @@ struct Binding {
     int direction = 1;
     bool operator==(const Binding& b) const { return kind == b.kind && code == b.code && direction == b.direction; }
 };
-// Include GLFW's raw USB joysticks, which may have no standardized gamepad mapping.
+// Include raw USB joysticks, which may have no standardized SDL gamepad mapping.
 struct ControllerState {
     std::array<bool, 512> keys{};
     std::array<bool, 8> mouse{};
@@ -43,6 +43,8 @@ struct ControllerState {
     std::array<Pad, 16> pads{};
 };
 ControllerState read_controllers();
+// Release retained SDL device handles before closing the window or SDL subsystems.
+void release_controllers();
 float axis_amount(int axis, int direction, float raw, float deadzone, bool joystick = false);
 std::string binding_label(Binding binding);
 class BindingCapture {

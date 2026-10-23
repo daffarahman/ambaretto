@@ -1,10 +1,10 @@
 #include "controller_mapping.hpp"
 #include <raylib.h>
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -56,35 +56,82 @@ bool valid(Binding b) {
     return b.kind == BindingKind::Axis && b.code >= 0 && b.code < 8 &&
         (b.direction == 1 || (b.direction == -1 && b.code != 4 && b.code != 5));
 }
+struct ControllerDevice {
+    SDL_JoystickID id = 0;
+    SDL_Gamepad* gamepad = nullptr;
+    SDL_Joystick* joystick = nullptr;
+};
+std::array<ControllerDevice, 16> controller_devices{};
+void close_controller(ControllerDevice& device) {
+    if (device.gamepad) SDL_CloseGamepad(device.gamepad);
+    else if (device.joystick) SDL_CloseJoystick(device.joystick);
+    device = {};
+}
+}
+void release_controllers() {
+    for (auto& device : controller_devices) close_controller(device);
 }
 ControllerState read_controllers() {
     ControllerState input;
     for (int key = 1; key < 512; ++key) input.keys[key] = IsKeyDown(key);
     for (int b = 0; b < 8; ++b) input.mouse[b] = IsMouseButtonDown(b);
+    if (!SDL_WasInit(SDL_INIT_JOYSTICK)) return input;
+    int count = 0;
+    const std::unique_ptr<SDL_JoystickID, decltype(&SDL_free)> devices(SDL_GetJoysticks(&count), SDL_free);
+    if (!devices) return input;
+    for (auto& device : controller_devices) if (device.id && std::find(devices.get(), devices.get() + count, device.id) == devices.get() + count)
+        close_controller(device);
+    for (int index = 0; index < count; ++index) {
+        const auto id = devices.get()[index];
+        if (std::any_of(controller_devices.begin(), controller_devices.end(), [id](const auto& device) { return device.id == id; })) continue;
+        const auto slot = std::find_if(controller_devices.begin(), controller_devices.end(), [](const auto& device) { return !device.id; });
+        if (slot == controller_devices.end()) break;
+        auto* gamepad = SDL_IsGamepad(id) ? SDL_OpenGamepad(id) : nullptr;
+        auto* joystick = gamepad ? SDL_GetGamepadJoystick(gamepad) : SDL_OpenJoystick(id);
+        if (joystick) *slot = {id, gamepad, joystick};
+        else if (gamepad) SDL_CloseGamepad(gamepad);
+    }
+    // Poll after opening: SDL's gamepad mapping initialization resets trigger state.
+    SDL_UpdateJoysticks();
+    const auto normalized = [](Sint16 value) { return value / (value < 0 ? 32768.0f : 32767.0f); };
     for (int pad = 0; pad < int(input.pads.size()); ++pad) {
         auto& p = input.pads[pad];
-        if (!(p.connected = glfwJoystickPresent(pad) == GLFW_TRUE)) continue;
-        const char* name = glfwGetJoystickName(pad);
+        const auto& device = controller_devices[pad];
+        auto* gamepad = device.gamepad;
+        auto* joystick = device.joystick;
+        if (!joystick || !SDL_JoystickConnected(joystick)) continue;
+        p.connected = true;
+        const char* name = SDL_GetJoystickName(joystick);
         p.name = name ? name : "Unnamed controller";
-        p.raw = !glfwJoystickIsGamepad(pad) || pad >= 4;
+        p.raw = !gamepad;
         if (!p.raw) {
-            p.axis_count = std::clamp(GetGamepadAxisCount(pad), 0, 8);
-            for (int button = 1; button < 18; ++button) p.buttons[button] = IsGamepadButtonDown(pad, button);
-            for (int axis = 0; axis < p.axis_count; ++axis) p.axes[axis] = GetGamepadAxisMovement(pad, axis);
+            // Persisted bindings use raylib's button and axis numbers, independent of SDL device order.
+            constexpr SDL_GamepadButton buttons[] = {
+                SDL_GAMEPAD_BUTTON_INVALID, SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_BUTTON_DPAD_RIGHT,
+                SDL_GAMEPAD_BUTTON_DPAD_DOWN, SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_BUTTON_NORTH,
+                SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_WEST,
+                SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, SDL_GAMEPAD_BUTTON_INVALID, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,
+                SDL_GAMEPAD_BUTTON_INVALID, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_GUIDE,
+                SDL_GAMEPAD_BUTTON_START, SDL_GAMEPAD_BUTTON_LEFT_STICK, SDL_GAMEPAD_BUTTON_RIGHT_STICK
+            };
+            constexpr SDL_GamepadAxis axes[] = {SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY,
+                SDL_GAMEPAD_AXIS_RIGHTX, SDL_GAMEPAD_AXIS_RIGHTY, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER};
+            p.axis_count = int(std::size(axes));
+            for (int button = 1; button < int(std::size(buttons)); ++button)
+                if (buttons[button] != SDL_GAMEPAD_BUTTON_INVALID) p.buttons[button] = SDL_GetGamepadButton(gamepad, buttons[button]);
+            for (int axis = 0; axis < p.axis_count; ++axis) {
+                const auto value = SDL_GetGamepadAxis(gamepad, axes[axis]);
+                p.axes[axis] = axis < 4 ? normalized(value) : value / 32767.0f * 2 - 1;
+            }
+            p.buttons[GAMEPAD_BUTTON_LEFT_TRIGGER_2] = p.axes[GAMEPAD_AXIS_LEFT_TRIGGER] > .1f;
+            p.buttons[GAMEPAD_BUTTON_RIGHT_TRIGGER_2] = p.axes[GAMEPAD_AXIS_RIGHT_TRIGGER] > .1f;
         } else {
-            int count = 0;
-            const auto* buttons = glfwGetJoystickButtons(pad, &count);
-            if (buttons) for (int b = 0; b < std::min(count, 64); ++b) p.buttons[b] = buttons[b] == GLFW_PRESS;
-            const auto* axes = glfwGetJoystickAxes(pad, &count);
-            if (axes) {
-                p.axis_count = std::clamp(count, 0, 16);
-                std::copy_n(axes, p.axis_count, p.axes.begin());
-            }
-            const auto* hats = glfwGetJoystickHats(pad, &count);
-            if (hats) {
-                p.hat_count = std::clamp(count, 0, 4);
-                std::copy_n(hats, p.hat_count, p.hats.begin());
-            }
+            for (int b = 0; b < std::clamp(SDL_GetNumJoystickButtons(joystick), 0, 64); ++b)
+                p.buttons[b] = SDL_GetJoystickButton(joystick, b);
+            p.axis_count = std::clamp(SDL_GetNumJoystickAxes(joystick), 0, 16);
+            for (int axis = 0; axis < p.axis_count; ++axis) p.axes[axis] = normalized(SDL_GetJoystickAxis(joystick, axis));
+            p.hat_count = std::clamp(SDL_GetNumJoystickHats(joystick), 0, 4);
+            for (int hat = 0; hat < p.hat_count; ++hat) p.hats[hat] = SDL_GetJoystickHat(joystick, hat);
         }
     }
     return input;

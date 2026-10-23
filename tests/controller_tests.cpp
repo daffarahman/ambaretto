@@ -1,5 +1,7 @@
 #include "controller_mapping.hpp"
 #include <raylib.h>
+#include <SDL3/SDL.h>
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -7,12 +9,88 @@
 
 namespace {
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void check_sdl_controllers() {
+    using namespace ambaretto;
+    require(SDL_Init(SDL_INIT_GAMEPAD), SDL_GetError());
+    struct Session { ~Session() { release_controllers(); SDL_Quit(); } } session;
+    struct VirtualJoystick {
+        SDL_JoystickID id = 0;
+        SDL_Joystick* handle = nullptr;
+        ~VirtualJoystick() {
+            if (handle) SDL_CloseJoystick(handle);
+            if (id) SDL_DetachVirtualJoystick(id);
+        }
+    } raw, gamepad;
+    const auto find_pad = [](const ControllerState& input, const char* name) -> const ControllerState::Pad& {
+        const auto found = std::find_if(input.pads.begin(), input.pads.end(), [&](const auto& pad) { return pad.connected && pad.name == name; });
+        require(found != input.pads.end(), "SDL virtual controller was not enumerated");
+        return *found;
+    };
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.name = "Ambaretto raw USB regression";
+    desc.naxes = 16; desc.nbuttons = 64; desc.nhats = 4;
+    raw.id = SDL_AttachVirtualJoystick(&desc);
+    require(raw.id != 0, SDL_GetError());
+    raw.handle = SDL_OpenJoystick(raw.id);
+    require(raw.handle != nullptr, SDL_GetError());
+    require(!SDL_IsGamepad(raw.id), "raw regression controller acquired a standardized mapping");
+    require(SDL_SetJoystickVirtualAxis(raw.handle, 0, SDL_JOYSTICK_AXIS_MIN) &&
+        SDL_SetJoystickVirtualAxis(raw.handle, 1, SDL_JOYSTICK_AXIS_MAX) &&
+        SDL_SetJoystickVirtualAxis(raw.handle, 4, -16384) &&
+        SDL_SetJoystickVirtualButton(raw.handle, 0, true) && SDL_SetJoystickVirtualButton(raw.handle, 63, true) &&
+        SDL_SetJoystickVirtualHat(raw.handle, 0, SDL_HAT_RIGHTUP) && SDL_SetJoystickVirtualHat(raw.handle, 3, SDL_HAT_LEFTDOWN), SDL_GetError());
+    auto input = read_controllers();
+    const auto& usb = find_pad(input, desc.name);
+    require(usb.raw && usb.axis_count == 16 && usb.hat_count == 4 && usb.buttons[0] && usb.buttons[63] &&
+        usb.axes[0] == -1 && usb.axes[1] == 1 && usb.axes[4] == -.5f &&
+        usb.hats[0] == 3 && usb.hats[3] == 12, "SDL raw USB buttons, signed axes or diagonal hats changed");
+    SDL_CloseJoystick(raw.handle); raw.handle = nullptr;
+    require(SDL_GetJoystickFromID(raw.id) != nullptr, "controller sampling did not retain its own raw USB handle");
+    input = read_controllers();
+    require(find_pad(input, desc.name).buttons[63], "raw USB state was lost between controller samples");
+
+    SDL_INIT_INTERFACE(&desc);
+    desc.name = "Ambaretto standardized regression";
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.naxes = SDL_GAMEPAD_AXIS_COUNT; desc.nbuttons = 15;
+    desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
+    desc.button_mask = (1u << 15) - 1;
+    gamepad.id = SDL_AttachVirtualJoystick(&desc);
+    require(gamepad.id != 0, SDL_GetError());
+    gamepad.handle = SDL_OpenJoystick(gamepad.id);
+    require(gamepad.handle != nullptr && SDL_IsGamepad(gamepad.id), SDL_GetError());
+    require(SDL_SetJoystickVirtualAxis(gamepad.handle, SDL_GAMEPAD_AXIS_LEFTY, SDL_JOYSTICK_AXIS_MIN) &&
+        SDL_SetJoystickVirtualAxis(gamepad.handle, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_JOYSTICK_AXIS_MIN) &&
+        SDL_SetJoystickVirtualAxis(gamepad.handle, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, SDL_JOYSTICK_AXIS_MAX) &&
+        SDL_SetJoystickVirtualButton(gamepad.handle, SDL_GAMEPAD_BUTTON_SOUTH, true) &&
+        SDL_SetJoystickVirtualButton(gamepad.handle, SDL_GAMEPAD_BUTTON_DPAD_RIGHT, true) &&
+        SDL_SetJoystickVirtualButton(gamepad.handle, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, true), SDL_GetError());
+    input = read_controllers();
+    const auto& pad = find_pad(input, desc.name);
+    require(!pad.raw && pad.axis_count == 6 && pad.axes[GAMEPAD_AXIS_LEFT_Y] == -1 &&
+        pad.axes[GAMEPAD_AXIS_LEFT_TRIGGER] == -1 && pad.axes[GAMEPAD_AXIS_RIGHT_TRIGGER] == 1 &&
+        pad.buttons[GAMEPAD_BUTTON_RIGHT_FACE_DOWN] && pad.buttons[GAMEPAD_BUTTON_LEFT_FACE_RIGHT] &&
+        pad.buttons[GAMEPAD_BUTTON_LEFT_TRIGGER_1] && !pad.buttons[GAMEPAD_BUTTON_LEFT_TRIGGER_2] &&
+        pad.buttons[GAMEPAD_BUTTON_RIGHT_TRIGGER_2], "SDL gamepad did not preserve existing button and trigger codes");
+    const auto gamepad_slot = &pad - input.pads.data();
+    require(SDL_DetachVirtualJoystick(raw.id), SDL_GetError()); raw.id = 0;
+    input = read_controllers();
+    require(std::none_of(input.pads.begin(), input.pads.end(), [](const auto& p) {
+        return p.connected && p.name == "Ambaretto raw USB regression";
+    }), "SDL unplug retained raw joystick state");
+    require(find_pad(input, desc.name).buttons[GAMEPAD_BUTTON_RIGHT_FACE_DOWN], "SDL hotplug changed the remaining gamepad's bindings");
+    require(&find_pad(input, desc.name) - input.pads.data() == gamepad_slot, "SDL hotplug shifted a connected controller's capture slot");
+}
 }
 int main() {
     using namespace ambaretto;
     const auto folder = std::filesystem::temp_directory_path() / "ambaretto-controller-check";
     const auto path = folder / "controls.ini";
     try {
+        check_sdl_controllers();
+        check_sdl_controllers(); // Reinitialization must not reuse handles closed by SDL_Quit.
+        for (const auto& pad : read_controllers().pads) require(!pad.connected, "controller read reused devices after SDL_Quit");
         std::filesystem::create_directories(folder);
         ControllerMapping separate;
         separate.bindings[int(Action::FootForward)].clear();

@@ -1,16 +1,17 @@
 # Ambaretto
 
-A C++ city builder and sandbox game. Draw islands and water with Bezier pens, build curved roads, place buildings freely, create characters and vehicles, then explore on foot, by car, or by aircraft. Built with [raylib](https://www.raylib.com/) and [Jolt Physics](https://github.com/jrouwe/JoltPhysics).
+A C++ city builder and sandbox game. Draw islands and water with Bezier pens, build curved roads, place buildings freely, create characters and vehicles, then explore on foot, by car, or by aircraft. Built with [SDL3](https://libsdl.org/), [raylib](https://www.raylib.com/), and [Jolt Physics](https://github.com/jrouwe/JoltPhysics).
 
 See the [full guide](docs/GUIDE.md) for editor instructions, controls, save formats, architecture, and tests.
 
 ## Requirements
 
-- A C++17 compiler, CMake **3.24 or newer**, Ninja, Git, and pkg-config.
-- raylib **6.0** and GLFW **3.4 or newer**, sharing the same GLFW library. The steps below install these.
+- C and C++17 compilers, CMake **3.25 or newer**, Ninja, and Git.
 - A desktop session and an OpenGL **3.3** capable graphics driver.
 - On x86-64, the default game/physics build uses SSE2; AVX, FMA, F16C, and SSE4 are not required.
-- Internet access for the first setup: CMake downloads and builds Jolt **5.4.0** automatically. No separate Jolt installation is needed.
+- Internet access for the first setup: CMake downloads and builds pinned static SDL **3.2.30**, raylib **6.0**, and Jolt **5.4.0** libraries automatically. No preinstalled SDL, raylib, GLFW, or Jolt libraries are needed.
+
+SDL3 manages the window, OpenGL context, events, and input through raylib's SDL backend. Raylib/rlgl still draws the 2D interface and 3D scene with OpenGL 3.3; the game and raylib use the same SDL3 instance. See [portability](docs/GUIDE.md#code-and-physics) for the remaining Android work.
 
 Build commands use two parallel jobs to limit memory use. Use `--parallel 1` if your computer runs out of RAM.
 
@@ -22,13 +23,11 @@ Install [MSYS2](https://www.msys2.org/), then open **MSYS2 UCRT64** from the Sta
 pacman -Syu
 ```
 
-If asked to close the terminal, reopen UCRT64 and run the update again. Install the compiler and libraries, including the [MSYS2 raylib package](https://packages.msys2.org/packages/mingw-w64-ucrt-x86_64-raylib):
+If asked to close the terminal, reopen UCRT64 and run the update again. Install the compiler and build tools:
 
 ```bash
 pacman -S --needed git mingw-w64-ucrt-x86_64-gcc \
-  mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja \
-  mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-raylib \
-  mingw-w64-ucrt-x86_64-glfw
+  mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
 ```
 
 Download, compile, and run:
@@ -45,7 +44,7 @@ Run from UCRT64 so the required DLLs are on `PATH`. For PowerShell, add your MSY
 
 ## Linux
 
-Install the tools and graphics/audio development libraries for your distribution, then follow [Compile on Linux or macOS](#compile-on-linux-or-macos). These commands cover common Linux families and their derivatives; use a supported release with CMake 3.24 or newer. The graphics/audio packages follow the [raylib Linux dependency guide](https://github.com/raysan5/raylib/wiki/Working-on-GNU-Linux).
+Install the tools and graphics/audio development libraries for your distribution, then follow [Compile on Linux or macOS](#compile-on-linux-or-macos). These commands cover common Linux families and their derivatives; use a supported release with CMake 3.25 or newer. SDL detects available system features at configure time; pkg-config helps discover the development libraries. See the [SDL Linux dependency guide](https://github.com/libsdl-org/SDL/blob/release-3.2.30/docs/README-linux.md) for optional audio, controller, and Wayland support.
 
 | Distributions | Install dependencies |
 | --- | --- |
@@ -94,7 +93,7 @@ distrobox create --name ambaretto-dev --image ubuntu:24.04
 distrobox enter ambaretto-dev
 ```
 
-Run the Ubuntu dependency command and the compilation steps inside the container, and launch the game there. The Linux build below uses X11; a Wayland desktop needs XWayland installed through its distribution.
+Run the Ubuntu dependency command and the compilation steps inside the container, and launch the game there. The packages above cover X11; a Wayland desktop can use XWayland or the additional development packages in SDL's guide.
 
 ## macOS
 
@@ -107,7 +106,7 @@ xcode-select --install
 Install [Homebrew](https://brew.sh/) using its website's instructions, including the `brew shellenv` step, then install the build tools:
 
 ```bash
-brew install git cmake ninja pkgconf
+brew install git cmake ninja
 ```
 
 Continue with the shared compilation steps below in Terminal. Use the native toolchain on either Intel or Apple Silicon.
@@ -121,47 +120,21 @@ git clone https://github.com/daffarahman/ambaretto.git
 cd ambaretto
 ```
 
-Build [GLFW 3.4](https://www.glfw.org/docs/3.4/compile_guide.html) and [raylib 6.0](https://github.com/raysan5/raylib/blob/6.0/CMakeOptions.txt) once. Both libraries stay inside `build/deps/install`, with no system-wide installation. Building them together ensures the game and raylib use the same GLFW for controller input.
+CMake builds the pinned dependencies inside the build directory. Compile and run the game from the project directory:
 
 ```bash
-mkdir -p build/deps
-git clone --depth 1 --branch 3.4 https://github.com/glfw/glfw.git build/deps/glfw
-cmake -S build/deps/glfw -B build/deps/glfw-build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
-  -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF \
-  -DGLFW_BUILD_WAYLAND=OFF -DCMAKE_INSTALL_LIBDIR=lib \
-  -DCMAKE_INSTALL_PREFIX="$PWD/build/deps/install"
-cmake --build build/deps/glfw-build --parallel 2
-cmake --install build/deps/glfw-build
-
-git clone --depth 1 --branch 6.0 https://github.com/raysan5/raylib.git build/deps/raylib
-cmake -S build/deps/raylib -B build/deps/raylib-build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DBUILD_EXAMPLES=OFF \
-  -DUSE_EXTERNAL_GLFW=ON -DCMAKE_INSTALL_LIBDIR=lib \
-  -DCMAKE_PREFIX_PATH="$PWD/build/deps/install" \
-  -DCMAKE_INSTALL_PREFIX="$PWD/build/deps/install" \
-  -DCMAKE_INSTALL_RPATH="$PWD/build/deps/install/lib"
-cmake --build build/deps/raylib-build --parallel 2
-cmake --install build/deps/raylib-build
-```
-
-Compile and run the game from the project directory:
-
-```bash
-export PKG_CONFIG_PATH="$PWD/build/deps/install/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 cmake --build build/release --target Ambaretto --parallel 2
 ./build/release/Ambaretto
 ```
 
-After changing game code, repeat only the game build command. When configuring from a new terminal, set `PKG_CONFIG_PATH` again. Keep the dependency installation in place; moving the checkout requires reconfiguring its library paths.
+After changing game code, repeat only the game build command. No separate dependency installation or library path setup is needed.
 
 ### Illegal instruction on Linux
 
 Older builds left some of Jolt's CPU extensions enabled even with AVX disabled. A CPU without those extensions can exit with `Illegal instruction (core dumped)`, as described in [Jolt's build guide](https://github.com/jrouwe/JoltPhysics/blob/v5.4.0/Build/README.md#illegal-instruction-error). The current CMake configuration disables all optional x86 extensions. Reconfigure and rebuild from the project directory; these explicit options also fix older checkouts:
 
 ```bash
-export PKG_CONFIG_PATH="$PWD/build/deps/install/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
   -DUSE_SSE4_1=OFF -DUSE_SSE4_2=OFF \
   -DUSE_AVX=OFF -DUSE_AVX2=OFF -DUSE_AVX512=OFF \

@@ -129,6 +129,8 @@ std::string contents(const std::filesystem::path& path) {std::ifstream file(path
 }
 extern "C" void __real_InitWindow(int,int,const char*);
 extern "C" void __wrap_InitWindow(int w,int h,const char* name) {++window_count; SetConfigFlags(FLAG_WINDOW_HIDDEN|FLAG_WINDOW_RESIZABLE); __real_InitWindow(w,h,name);}
+extern "C" void __real_CloseWindow();
+extern "C" void __wrap_CloseWindow() {ambaretto::release_controllers(); __real_CloseWindow();}
 extern "C" bool __wrap_IsWindowFocused() {return focused;}
 extern "C" bool __real_WindowShouldClose();
 extern "C" bool __wrap_WindowShouldClose() {return should_close || __real_WindowShouldClose();}
